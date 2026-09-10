@@ -40,14 +40,36 @@ impl Fleet {
         Fleet { cmd, fleet, demo, lock: Mutex::new(()) }
     }
 
+    /// `copal fleet <verb> --fleet NAME [the verb's own args]`.
+    ///
+    /// THE POSITION IS NOT COSMETIC, and it is wrong in two different ways if
+    /// guessed. `copal-fleet.sh` dispatches on its first word, so an option
+    /// before the verb is read AS the verb -- "no fleet verb called
+    /// '--fleet'". And `cmd_run` ends its option loop with `_verb="$*"`,
+    /// swallowing everything after the verb word so that it can pass arbitrary
+    /// arguments through to the node -- so an option after the verb's own
+    /// arguments is silently eaten and the CLI reports "no fleet named".
+    ///
+    /// The one position that works everywhere is immediately after the verb
+    /// word and before the verb's arguments. Neither mistake was reachable
+    /// until this was pointed at the real CLI.
     fn argv(&self, tail: &[String]) -> Vec<String> {
         let mut v = self.cmd.clone();
+        if tail.is_empty() {
+            return v;
+        }
+        v.push(tail[0].clone());
         if !self.fleet.is_empty() {
             v.push("--fleet".into());
             v.push(self.fleet.clone());
         }
-        v.extend_from_slice(tail);
+        v.extend_from_slice(&tail[1..]);
         v
+    }
+
+    #[cfg(test)]
+    pub fn argv_for_test(&self, tail: &[String]) -> Vec<String> {
+        self.argv(tail)
     }
 
     /// Run the CLI with a deadline.
@@ -133,6 +155,30 @@ impl Fleet {
         }
     }
 
+    /// A verb, aimed at each node in turn.
+    ///
+    /// The CLI selects with `--node ID`, one id at a time, so a selection of
+    /// eight is eight runs. They are deliberately sequential: eight ssh
+    /// sessions opened at once from a Pi is a worse morning than eight opened
+    /// in a row, and the operator gets a result per node either way.
+    ///
+    /// A node that fails does not stop the ones after it. "Six of eight got
+    /// the memo" is the normal case and the console has to be able to say so.
+    pub fn verb_each(&self, plan: &crate::verbs::Plan, nodes: &[String]) -> Vec<NodeResult> {
+        if !plan.per_node {
+            let (code, output) = self.verb(&plan.argv);
+            return vec![NodeResult { node: "fleet".to_string(), code, output }];
+        }
+        nodes
+            .iter()
+            .map(|n| {
+                let argv = crate::verbs::aimed_at(plan, n);
+                let (code, output) = self.verb(&argv);
+                NodeResult { node: n.clone(), code, output }
+            })
+            .collect()
+    }
+
     /// A verb. Returns the exit code and whatever it said, both of which the
     /// operator sees -- "I told eight machines to shut down" and "eight
     /// machines shut down" are different claims.
@@ -159,9 +205,45 @@ impl Fleet {
                 ),
             ),
             Err(e) => (126, format!("could not run the verb: {}", e)),
-            Ok((code, out, err)) => (code, truncate(&format!("{}{}", out, err).trim(), 4000)),
+            Ok((code, out, err)) => (
+                code,
+                truncate(&strip_ansi(format!("{}{}", out, err).trim()), 4000),
+            ),
         }
     }
+}
+
+/// One node's answer to one verb.
+pub struct NodeResult {
+    pub node: String,
+    pub code: i32,
+    pub output: String,
+}
+
+/// Drop ANSI colour from CLI output.
+///
+/// `copal-fleet.sh` colours its errors for a terminal, and a browser renders
+/// `ESC[31m` as literal rubbish in front of the sentence the operator needs to
+/// read. The text is the message; the colour was for somewhere else.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            // A CSI sequence ends at the first byte in @-~.
+            for c in chars.by_ref() {
+                if ('\u{40}'..='\u{7e}').contains(&c) {
+                    break;
+                }
+            }
+        }
+    }
+    out
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -292,6 +374,47 @@ pub fn demo_doc() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_verb_comes_before_the_fleet_flag() {
+        let f = Fleet::new(
+            vec!["copal".into(), "fleet".into()],
+            "museum".into(),
+            false,
+        );
+        assert_eq!(
+            f.argv_for_test(&["state".into(), "--json".into()]),
+            ["copal", "fleet", "state", "--fleet", "museum", "--json"]
+        );
+        // `run` is the case that proves the position: its own arguments must
+        // stay together after the options, or cmd_run swallows them.
+        assert_eq!(
+            f.argv_for_test(&[
+                "run".into(),
+                "snapshot".into(),
+                "restore".into(),
+                "--node".into(),
+                "museum-01".into()
+            ]),
+            [
+                "copal", "fleet", "run", "--fleet", "museum", "snapshot",
+                "restore", "--node", "museum-01"
+            ]
+        );
+        // With no fleet named, nothing is appended at all.
+        let g = Fleet::new(vec!["copal".into(), "fleet".into()], String::new(), false);
+        assert_eq!(
+            g.argv_for_test(&["state".into()]),
+            ["copal", "fleet", "state"]
+        );
+    }
+
+    #[test]
+    fn colour_meant_for_a_terminal_does_not_reach_the_browser() {
+        assert_eq!(strip_ansi("\u{1b}[31merror:\u{1b}[0m no fleet named"), "error: no fleet named");
+        assert_eq!(strip_ansi("plain"), "plain");
+        assert_eq!(strip_ansi("\u{1b}[1;32mok\u{1b}[0m"), "ok");
+    }
 
     #[test]
     fn the_fixture_is_valid_json() {

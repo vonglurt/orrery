@@ -177,8 +177,15 @@ function statusOf(n){
 
 function drawHeader(){
   const c = doc.counts || {};
-  el("count").textContent = `${c.on_bus ?? c.announced ?? 0} of ${c.declared ?? nodesOf().length} up`;
   const live = doc._live;
+  // WITH THE BUS OFF, "up" IS UNKNOWABLE. A beacon proves a machine announced
+  // itself, not that it is running, and on_bus is legitimately 0 in that state
+  // -- so preferring it reads "0 of 0 up" while three tiles sit on the wall.
+  // The degradation suite made the TUI adopt exactly this distinction: no node
+  // is called live when nothing can prove it, they are called announced.
+  el("count").textContent = live
+    ? `${c.on_bus ?? 0} of ${c.declared || nodesOf().length} up`
+    : `${c.announced ?? nodesOf().length} announced`;
   el("bus").textContent = live ? "live" : doc._picture;
   el("bus").className = "bus " + (live ? "live" : "polled");
   el("why").textContent = live ? "" : "— " + (doc._why || "");
@@ -244,7 +251,13 @@ function tile(n){
   const right = document.createElement("span");
   if(st === "down"){ right.textContent = "last seen " + (n.last_seen || "—"); }
   else if(n.agent === "silent"){ right.textContent = "agent silent"; right.className = "warnt"; }
-  else { right.textContent = "agent " + (n.heard_s ?? 0) + "s"; }
+  // Never heard from is not "heard from 0s ago". `agent 0s` on a node whose
+  // agent has never spoken is the same false precision as a null temperature
+  // rendered as a reading.
+  else if(n.agent === "unknown" || n.agent == null || n.heard_s == null){
+    right.textContent = "agent unknown";
+  }
+  else { right.textContent = "agent " + n.heard_s + "s"; }
   f.appendChild(left); f.appendChild(right); d.appendChild(f);
   return d;
 }
@@ -280,7 +293,9 @@ const VERBS = [
   {k:"r", id:"run",      label:"Run",      write:true,  multi:true},
   {k:"p", id:"power",    label:"Power",    write:true,  multi:true},
   {k:"k", id:"snapshot", label:"Snapshot", write:true,  multi:true},
-  {k:"m", id:"message",  label:"Message",  write:true,  multi:true},
+  // Message is deliberately absent. `copal fleet notify` means "tell me when
+  // all eight are up" and refuses anything else, so there is no banner verb to
+  // call -- and a button that cannot work is worse than one that is not there.
   {k:"o", id:"observe",  label:"Observe",  write:false, multi:false},
   {k:"c", id:"control",  label:"Control",  write:true,  multi:false},
   {k:"e", id:"exchange", label:"Exchange", write:true,  multi:false},
@@ -361,9 +376,6 @@ function act(v){
       <p>A Pi that is off cannot be woken over the network. "on" only works
          where the fleet file declares a switched supply.</p>`,
                () => post("power", el("a").value));
-  if(v.id === "message")
-    return ask("Message", `<p>Banner on ${scope}</p><input id="a" placeholder="please stand back">`,
-               () => post("message", el("a").value));
   const list = v.id === "scene" ? Object.keys(doc.scenes || {}) : [];
   const opts = (list.length ? list : ["wake","show","reset","rest","sleep"])
       .map(s => `<option>${s}</option>`).join("");

@@ -320,19 +320,57 @@ fn verb(console: &Console, req: &Request) -> Response {
         Err(e) => return err(400, &e.to_string()),
     };
     let arg = parsed.get("arg").and_then(|a| a.as_str());
-    let argv = match verbs::build_argv(verb, &nodes, arg) {
-        Ok(a) => a,
+    let plan = match verbs::build_argv(verb, arg) {
+        Ok(p) => p,
         Err(e) => return err(400, &e.to_string()),
     };
 
-    let (code, out) = console.fleet.verb(&argv);
+    let results = console.fleet.verb_each(&plan, &nodes);
+    // The worst code wins, because "I told eight machines to shut down" and
+    // "eight machines shut down" are different claims and the second one is
+    // only true when every result says so.
+    let worst = results.iter().map(|r| r.code).max().unwrap_or(0);
+
+    // A per-node column in text, which is what §IV-C asks Run to produce and
+    // what the page renders as-is.
+    let mut summary = String::new();
+    for r in &results {
+        summary.push_str(&format!(
+            "{:<12} {}\n",
+            r.node,
+            if r.code == 0 { "ok".to_string() } else { format!("exit {}", r.code) }
+        ));
+        for line in r.output.lines() {
+            summary.push_str(&format!("             {}\n", line));
+        }
+    }
+
+    let rows: Vec<String> = results
+        .iter()
+        .map(|r| {
+            format!(
+                "{{\"node\":{},\"code\":{},\"output\":{}}}",
+                json::Value::quote(&r.node),
+                r.code,
+                json::Value::quote(&r.output)
+            )
+        })
+        .collect();
+
+    let ran = if plan.per_node {
+        format!("copal fleet {} --node <each of {}>", plan.argv.join(" "), nodes.len())
+    } else {
+        format!("copal fleet {}", plan.argv.join(" "))
+    };
+
     Response::json(
         200,
         format!(
-            "{{\"code\":{},\"output\":{},\"ran\":{}}}",
-            code,
-            json::Value::quote(&out),
-            json::Value::quote(&format!("copal fleet {}", argv.join(" ")))
+            "{{\"code\":{},\"output\":{},\"ran\":{},\"results\":[{}]}}",
+            worst,
+            json::Value::quote(summary.trim_end()),
+            json::Value::quote(&ran),
+            rows.join(",")
         ),
     )
 }
@@ -392,10 +430,19 @@ mod tests {
         let res = verb(&c, &post(r#"{"verb":"scene","nodes":["museum-01","museum-03"],"arg":"show"}"#, Some("t")));
         assert_eq!(res.code, 200);
         let v = json::parse(&String::from_utf8(res.body).unwrap()).unwrap();
+        // Two nodes is two runs, and the report says so per node.
         assert_eq!(
             v.get("ran").unwrap().as_str(),
-            Some("copal fleet scene show --nodes museum-01,museum-03")
+            Some("copal fleet scene show --node <each of 2>")
         );
+        let rows = v.get("results").unwrap().as_array().unwrap();
+        assert_eq!(rows.len(), 2, "a two-node selection did not produce two results");
+        assert_eq!(rows[0].get("node").unwrap().as_str(), Some("museum-01"));
+        assert_eq!(rows[1].get("node").unwrap().as_str(), Some("museum-03"));
+        for r in rows {
+            let out = r.get("output").unwrap().as_str().unwrap();
+            assert!(out.contains("--node"), "the node was not aimed at: {}", out);
+        }
     }
 
     #[test]
