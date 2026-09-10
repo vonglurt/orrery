@@ -1,0 +1,26 @@
+[package]
+name = "orrery"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "The Copal fleet's web console -- the wall, the seat, and the verbs, served by the warden"
+license = "MIT"
+authors = ["Paul Richeson"]
+
+# NO DEPENDENCIES, AND THAT IS THE DESIGN.
+#
+# `copal-build` compiles the checkouts in ~/code on the node itself, and a
+# fleet node is on a LAN that invariant 6 says never reaches the internet. A
+# dependency is therefore a crate fetch that fails on the one machine this is
+# meant to run on. The HTTP this needs is a subset small enough to write --
+# GET, POST, one content type, no keep-alive negotiation, no TLS (the fleet is
+# a LAN and the operator posture is a token, not a certificate) -- so it is
+# written here rather than imported.
+[dependencies]
+
+[profile.release]
+opt-level = "s"   # a Zero 2 has 512 MB and this is not the exhibit
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

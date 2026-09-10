@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__FLEET__ · copal fleet</title>
+<style>
+:root{
+  --base:#fce2ab; --panel:#f7d79a; --ink:#121212; --dim:#6b5836;
+  --line:#c4a870; --accent:#87704f; --up:#4a7c4e; --warn:#b06a24;
+  --alarm:#ff723e; --tile:#fff2d4;
+}
+:root:not([data-theme=light]){ }
+@media (prefers-color-scheme:dark){ :root:not([data-theme=light]){
+  --base:#181818; --panel:#121212; --ink:#d0daed; --dim:#87704f;
+  --line:#2a2a2a; --accent:#fccf8a; --up:#8fbf7a; --warn:#fccf8a;
+  --alarm:#ff723e; --tile:#1f1f1f;
+}}
+:root[data-theme=dark]{
+  --base:#181818; --panel:#121212; --ink:#d0daed; --dim:#87704f;
+  --line:#2a2a2a; --accent:#fccf8a; --up:#8fbf7a; --warn:#fccf8a;
+  --alarm:#ff723e; --tile:#1f1f1f;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--base);color:var(--ink);
+  font:14px/1.45 ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+header{position:sticky;top:0;z-index:5;background:var(--panel);
+  border-bottom:1px solid var(--line);padding:10px 16px}
+.hrow{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline}
+.name{font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.count{color:var(--dim)}
+.chip{border:1px solid var(--line);border-radius:2px;padding:1px 7px;
+  font-size:12px;color:var(--dim);background:transparent;cursor:pointer}
+.chip[aria-pressed=true]{border-color:var(--accent);color:var(--ink)}
+.bus{font-size:12px}
+.bus.live{color:var(--up)} .bus.polled{color:var(--warn)}
+.why{color:var(--dim);font-size:12px}
+main{padding:16px}
+.wall{display:grid;gap:12px;
+  grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
+.tile{background:var(--tile);border:1px solid var(--line);border-radius:3px;
+  padding:8px;cursor:pointer;position:relative}
+.tile[aria-selected=true]{outline:2px solid var(--accent);outline-offset:-2px}
+.tile[aria-selected=true]::before{content:"";position:absolute;left:0;top:0;
+  bottom:0;width:4px;background:var(--accent)}
+.tile.down{opacity:.62}
+.t-top{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--dim)}
+.dot.up{background:var(--up)} .dot.warn{background:var(--warn)}
+.dot.down{background:transparent;border:1px solid var(--dim)}
+.t-id{font-weight:600} .t-role{color:var(--accent);font-size:11px}
+.screen{aspect-ratio:16/9;max-width:100%;background:var(--panel);
+  border:1px solid var(--line);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:6px;overflow:hidden}
+/* No thumbnail yet (W5). A 16:9 void IS a placeholder shaped like the missing
+   thing, which is the substitution the lab report refuses -- so the tile
+   collapses to a band carrying the readings that are real. When a thumbnail
+   arrives the box takes its proper shape and nothing else changes. */
+.screen.band{aspect-ratio:auto;min-height:0;padding:10px 6px}
+.screen img{width:100%;height:100%;object-fit:cover;display:block}
+.scene{font-size:12px;color:var(--dim)}
+.bar{width:82%;height:8px;border:1px solid var(--line);background:transparent}
+.bar > i{display:block;height:100%;background:var(--accent)}
+.t-foot{display:flex;justify-content:space-between;font-size:12px;
+  color:var(--dim);margin-top:6px}
+.t-foot .warnt{color:var(--warn)}
+.note{margin:14px 0;padding:8px 12px;border-left:3px solid var(--warn);
+  color:var(--dim);font-size:13px}
+.note.alarm{border-color:var(--alarm);color:var(--ink)}
+footer{position:sticky;bottom:0;background:var(--panel);
+  border-top:1px solid var(--line);padding:10px 16px;
+  display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.sel{color:var(--dim);font-size:12px;margin-right:auto}
+button.verb{font:inherit;font-size:13px;background:transparent;color:var(--ink);
+  border:1px solid var(--line);border-radius:2px;padding:4px 10px;cursor:pointer}
+button.verb:hover:not(:disabled){border-color:var(--accent)}
+button.verb:disabled{color:var(--dim);cursor:not-allowed;opacity:.65}
+button.verb kbd{color:var(--accent);font:inherit}
+dialog{background:var(--tile);color:var(--ink);border:1px solid var(--accent);
+  border-radius:3px;padding:0;max-width:min(560px,94vw);width:100%}
+dialog::backdrop{background:#000a}
+.dlg{padding:14px 16px}
+.dlg h2{margin:0 0 8px;font-size:15px;letter-spacing:.08em;text-transform:uppercase}
+.dlg p{margin:6px 0;color:var(--dim);font-size:13px}
+.dlg pre{white-space:pre-wrap;max-height:40vh;overflow:auto;
+  background:var(--panel);border:1px solid var(--line);padding:8px;font-size:12px}
+.dlg input,.dlg select{font:inherit;width:100%;padding:5px;margin:4px 0 10px;
+  background:var(--panel);color:var(--ink);border:1px solid var(--line)}
+.row{display:flex;gap:8px;justify-content:flex-end}
+/* the seat */
+.seat{display:grid;gap:14px;grid-template-columns:minmax(0,1fr) 260px}
+@media (max-width:760px){ .seat{grid-template-columns:1fr} }
+.seat .stage{background:var(--panel);border:1px solid var(--line);
+  aspect-ratio:16/9;max-width:100%;width:100%;display:flex;
+  align-items:center;justify-content:center;color:var(--dim);
+  text-align:center;padding:16px}
+.facts{font-size:13px}
+.facts div{display:flex;justify-content:space-between;gap:10px;
+  padding:3px 0;border-bottom:1px dotted var(--line)}
+.facts span:first-child{color:var(--dim)}
+.absent{color:var(--dim);font-style:italic}
+.back{background:transparent;border:1px solid var(--line);color:var(--ink);
+  font:inherit;padding:3px 9px;cursor:pointer;border-radius:2px}
+table.log{width:100%;border-collapse:collapse;font-size:12px}
+.hide{display:none!important}
+</style></head><body>
+<header>
+  <div class="hrow">
+    <span class="name">Copal Fleet · __FLEET__</span>
+    <span class="count" id="count">—</span>
+    <span class="bus" id="bus">—</span>
+    <span class="why" id="why"></span>
+    <span style="margin-left:auto"><button class="back" id="theme">◐</button></span>
+  </div>
+  <div class="hrow" id="filters" style="margin-top:6px"></div>
+</header>
+
+<main>
+  <div id="wallview">
+    <div class="wall" id="wall"></div>
+    <div id="notes"></div>
+  </div>
+
+  <div id="seatview" class="hide">
+    <p><button class="back" id="back">← back to the wall</button>
+       <span class="scene" id="seatname"></span></p>
+    <div class="seat">
+      <div>
+        <div style="margin-bottom:8px" id="seatverbs"></div>
+        <div class="stage" id="stage"></div>
+      </div>
+      <div class="facts" id="facts"></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <span class="sel" id="sel">none selected</span>
+  <span id="verbs"></span>
+</footer>
+
+<dialog id="dlg"><form method="dialog" class="dlg" id="dlgform">
+  <h2 id="dlgtitle"></h2><div id="dlgbody"></div>
+  <div class="row"><button class="verb" value="cancel">Cancel</button>
+  <button class="verb" id="dlgok" value="ok">Do it</button></div>
+</form></dialog>
+
+<script>
+const OPERATOR = __OPERATOR__;
+let doc = null, sel = new Set(), tag = "all", seat = null, timer = null;
+
+const el = (id) => document.getElementById(id);
+// Number(null) is 0 and isFinite(0) is true, so a node that reported no
+// temperature renders as a real reading unless the absence is checked first.
+// "not reported" and "45" are different claims and the wall must not blur them.
+const num = (v) => (v === null || v === undefined || v === "" || isNaN(Number(v)))
+  ? null : Number(v);
+const nodesOf = () => (doc && doc.nodes) || [];
+const shown = () => nodesOf().filter(n => tag === "all" || (n.tags||[]).includes(tag));
+
+async function load(){
+  try{
+    const r = await fetch("api/state", {cache:"no-store"});
+    const j = await r.json();
+    if(j.error){ fail(j.error); return; }
+    doc = j; draw();
+  }catch(e){ fail(String(e)); }
+}
+function fail(msg){
+  el("bus").textContent = "console error"; el("bus").className = "bus polled";
+  el("why").textContent = msg;
+}
+
+function statusOf(n){
+  if(!n.announced) return "down";
+  if(n.agent === "silent" || n.status === "warn") return "warn";
+  return n.status === "up" ? "up" : "warn";
+}
+
+function drawHeader(){
+  const c = doc.counts || {};
+  el("count").textContent = `${c.on_bus ?? c.announced ?? 0} of ${c.declared ?? nodesOf().length} up`;
+  const live = doc._live;
+  el("bus").textContent = live ? "live" : doc._picture;
+  el("bus").className = "bus " + (live ? "live" : "polled");
+  el("why").textContent = live ? "" : "— " + (doc._why || "");
+  const tags = new Set(); nodesOf().forEach(n => (n.tags||[]).forEach(t => tags.add(t)));
+  const f = el("filters"); f.innerHTML = "";
+  ["all", ...[...tags].sort()].forEach(t => {
+    const b = document.createElement("button");
+    b.className = "chip"; b.textContent = t;
+    b.setAttribute("aria-pressed", String(t === tag));
+    b.onclick = () => { tag = t; draw(); };
+    f.appendChild(b);
+  });
+  if(doc.warden){
+    const s = document.createElement("span");
+    s.className = "why"; s.style.marginLeft = "auto";
+    s.textContent = "warden " + doc.warden;
+    f.appendChild(s);
+  }
+}
+
+function tile(n){
+  const st = statusOf(n);
+  const d = document.createElement("div");
+  d.className = "tile" + (st === "down" ? " down" : "");
+  d.setAttribute("aria-selected", String(sel.has(n.id)));
+  d.onclick = (e) => {
+    if(e.detail === 2){ openSeat(n.id); return; }
+    sel.has(n.id) ? sel.delete(n.id) : sel.add(n.id); draw();
+  };
+  const top = document.createElement("div"); top.className = "t-top";
+  top.innerHTML = `<i class="dot ${st}"></i><span class="t-id"></span>` +
+    (n.role === "warden" ? `<span class="t-role">warden</span>` : "");
+  top.querySelector(".t-id").textContent = n.id;
+  d.appendChild(top);
+
+  // The screen. A thumbnail if W5 is publishing one; otherwise the honest
+  // substitute the TUI already makes -- a real reading in the space, never a
+  // placeholder shaped like the missing thing.
+  const s = document.createElement("div");
+  s.className = "screen" + (n.thumb ? "" : " band");
+  if(n.thumb){
+    const img = document.createElement("img");
+    img.src = n.thumb; img.alt = n.id + " screen"; img.loading = "lazy";
+    s.appendChild(img);
+  } else if(st === "down"){
+    const p = document.createElement("div"); p.className = "scene";
+    p.textContent = "not announced"; s.appendChild(p);
+  } else {
+    const p = document.createElement("div"); p.className = "scene";
+    p.textContent = n.scene || "no scene";
+    const b = document.createElement("div"); b.className = "bar";
+    const i = document.createElement("i");
+    const t = num(n.temp_c);
+    i.style.width = t === null ? "0" : Math.max(3, Math.min(100, (t-30)/50*100)) + "%";
+    b.appendChild(i); s.appendChild(p); s.appendChild(b);
+  }
+  d.appendChild(s);
+
+  const f = document.createElement("div"); f.className = "t-foot";
+  const left = document.createElement("span");
+  const tc = num(n.temp_c);
+  left.textContent = tc === null ? "—" : tc + "°C";
+  const right = document.createElement("span");
+  if(st === "down"){ right.textContent = "last seen " + (n.last_seen || "—"); }
+  else if(n.agent === "silent"){ right.textContent = "agent silent"; right.className = "warnt"; }
+  else { right.textContent = "agent " + (n.heard_s ?? 0) + "s"; }
+  f.appendChild(left); f.appendChild(right); d.appendChild(f);
+  return d;
+}
+
+function drawNotes(){
+  const box = el("notes"); box.innerHTML = "";
+  const str = doc.strangers || [];
+  if(str.length){
+    const p = document.createElement("div"); p.className = "note";
+    p.textContent = `! ${str.length} stranger(s) on this network: ` +
+      str.map(s => `${s.address} (${s.id})`).join(", ") + " — seen, never contacted";
+    box.appendChild(p);
+  }
+  const quiet = nodesOf().filter(n => n.announced && !n.on_bus).map(n => n.id);
+  if(quiet.length && doc._live){
+    const p = document.createElement("div"); p.className = "note";
+    p.textContent = "! announced but not on the bus: " + quiet.join(", ");
+    box.appendChild(p);
+  }
+  const missing = nodesOf().filter(n => n.declared && !n.announced).map(n => n.id);
+  if(missing.length){
+    const p = document.createElement("div"); p.className = "note alarm";
+    p.textContent = "! declared but never announced: " + missing.join(", ") +
+      " — a Pi cannot be woken by Wake-on-LAN; this one needs a human.";
+    box.appendChild(p);
+  }
+}
+
+// Verbs. Read verbs are always live; write verbs exist only in the operator
+// posture, and Control/Exchange refuse a multi-selection by design.
+const VERBS = [
+  {k:"S", id:"scene",    label:"Scene",    write:true,  multi:true},
+  {k:"r", id:"run",      label:"Run",      write:true,  multi:true},
+  {k:"p", id:"power",    label:"Power",    write:true,  multi:true},
+  {k:"k", id:"snapshot", label:"Snapshot", write:true,  multi:true},
+  {k:"m", id:"message",  label:"Message",  write:true,  multi:true},
+  {k:"o", id:"observe",  label:"Observe",  write:false, multi:false},
+  {k:"c", id:"control",  label:"Control",  write:true,  multi:false},
+  {k:"e", id:"exchange", label:"Exchange", write:true,  multi:false},
+];
+
+function drawVerbs(){
+  const box = el("verbs"); box.innerHTML = "";
+  el("sel").textContent = sel.size ? `${sel.size} selected` : "none selected";
+  VERBS.forEach(v => {
+    const b = document.createElement("button");
+    b.className = "verb";
+    b.innerHTML = `<kbd>${v.k}</kbd> ${v.label}`;
+    b.disabled = !allowed(v);
+    b.title = why(v);
+    b.onclick = () => act(v);
+    box.appendChild(b);
+  });
+}
+function allowed(v){
+  if(v.write && !OPERATOR) return false;
+  if(!sel.size) return false;
+  if(!v.multi && sel.size !== 1) return false;
+  return true;
+}
+function why(v){
+  if(v.write && !OPERATOR) return "gallery posture: read-only";
+  if(!sel.size) return "select a node first";
+  if(!v.multi && sel.size !== 1)
+    return v.id === "control"
+      ? "Control on a selection is refused: use Scene or Run, which are declarative and report per node"
+      : v.label + " works on one node";
+  return "";
+}
+
+function ask(title, bodyHTML, onok){
+  el("dlgtitle").textContent = title;
+  el("dlgbody").innerHTML = bodyHTML;
+  const d = el("dlg");
+  el("dlgform").onsubmit = null;
+  d.onclose = () => { if(d.returnValue === "ok") onok(); };
+  d.showModal();
+}
+function tell(title, text){
+  el("dlgtitle").textContent = title;
+  const pre = document.createElement("pre"); pre.textContent = text;
+  el("dlgbody").innerHTML = ""; el("dlgbody").appendChild(pre);
+  const d = el("dlg"); d.onclose = null; d.showModal();
+}
+
+async function post(verb, arg){
+  const targets = [...sel];
+  const r = await fetch("api/verb", {
+    method:"POST", headers:{"content-type":"application/json"},
+    body: JSON.stringify({verb, arg, nodes: targets})
+  });
+  const j = await r.json().catch(() => ({error:"unreadable reply"}));
+  tell(`${verb} · ${targets.length} node(s)`, j.output || j.error || "(no output)");
+  load();
+}
+
+function act(v){
+  const targets = [...sel];
+  const one = targets[0];
+  if(v.id === "observe" || v.id === "control"){
+    const n = nodesOf().find(x => x.id === one);
+    openSeat(one, v.id);
+    return;
+  }
+  if(v.id === "exchange"){ openSeat(one, "exchange"); return; }
+  const scope = `${targets.length} node(s): ${targets.join(", ")}`;
+  if(v.id === "snapshot")
+    return ask("Snapshot restore", `<p>Restore the stage-11 home snapshot on ${scope}.</p>`,
+               () => post("snapshot", null));
+  if(v.id === "power")
+    return ask("Power", `<p>${scope}</p><select id="a">
+      <option value="off">off</option><option value="reboot">reboot</option>
+      <option value="on">on</option></select>
+      <p>A Pi that is off cannot be woken over the network. "on" only works
+         where the fleet file declares a switched supply.</p>`,
+               () => post("power", el("a").value));
+  if(v.id === "message")
+    return ask("Message", `<p>Banner on ${scope}</p><input id="a" placeholder="please stand back">`,
+               () => post("message", el("a").value));
+  const list = v.id === "scene" ? Object.keys(doc.scenes || {}) : [];
+  const opts = (list.length ? list : ["wake","show","reset","rest","sleep"])
+      .map(s => `<option>${s}</option>`).join("");
+  return ask(v.label, `<p>${scope}</p>` + (v.id === "scene"
+      ? `<select id="a">${opts}</select>`
+      : `<input id="a" placeholder="verb">`),
+             () => post(v.id, el("a").value));
+}
+
+// ---- the seat -------------------------------------------------------------
+// Esc is always the way back and it never asks. The one rule the interface
+// must not break is that the operator cannot get stuck inside a machine.
+
+const plain = (v) => String(v);
+const uptime = (m) => {
+  const d = Math.floor(m/1440), h = Math.floor((m%1440)/60), mm = m%60;
+  return d ? `${d}d ${h}h` : (h ? `${h}h ${String(mm).padStart(2,"0")}m` : `${mm}m`);
+};
+const FACTS = [
+  ["status","status",plain], ["build","build",plain],
+  ["alpine","alpine",plain], ["arch","arch",plain],
+  ["address","address",plain], ["role","role",plain],
+  ["scene","scene",plain], ["job","job",plain],
+  ["temp_c","temp", v => v + "°C"],
+  ["ram_mb","ram", v => v + " MB"],
+  ["uptime_min","uptime", uptime],
+  ["cert_days","cert", v => v + " days left"],
+  ["apk_pending","apk", v => v === 0 ? "up to date" : v + " pending"],
+];
+
+function openSeat(id, mode){
+  seat = {id, mode: mode || "observe"}; draw();
+}
+function closeSeat(){ seat = null; draw(); }
+
+function drawSeat(){
+  const n = nodesOf().find(x => x.id === seat.id);
+  el("wallview").classList.add("hide"); el("seatview").classList.remove("hide");
+  if(!n){ el("stage").textContent = "that node is no longer in the fleet"; return; }
+  el("seatname").textContent = `${n.id} · ${seat.mode}`;
+  const stage = el("stage"); stage.innerHTML = "";
+  if(seat.mode === "exchange"){
+    stage.textContent = "Exchange is a two-pane SFTP browser over the session " +
+      "the certificate already authorises. L6 — not built.";
+  } else if(n.vnc){
+    const a = document.createElement("a");
+    a.href = n.vnc; a.textContent = `open ${seat.mode} on ${n.id} (${n.vnc})`;
+    stage.appendChild(a);
+  } else {
+    stage.textContent = seat.mode === "control"
+      ? "Control needs wayvnc (Wayland) or x11vnc (X11) running on this node. " +
+        "The console does not proxy pixels — it hands you the node's own server."
+      : "No screen published. The wall's thumbnails are W5 and the live " +
+        "session is L6; neither is built, so this space stays honest.";
+  }
+  const f = el("facts"); f.innerHTML = "";
+  FACTS.forEach(([k, label, fmt]) => {
+    const row = document.createElement("div");
+    const a = document.createElement("span"); a.textContent = label;
+    const b = document.createElement("span");
+    const v = n[k];
+    // Three absences, kept apart, exactly as the TUI's seat panel keeps them.
+    if(v === undefined){ b.textContent = "not collected"; b.className = "absent"; }
+    else if(v === null){ b.textContent = "not reported"; b.className = "absent"; }
+    else b.textContent = fmt(v);
+    row.appendChild(a); row.appendChild(b); f.appendChild(row);
+  });
+  const sv = el("seatverbs"); sv.innerHTML = "";
+  [["observe","Observe"],["control","Control"],["exchange","Exchange"]].forEach(([m,lab]) => {
+    const b = document.createElement("button"); b.className = "verb";
+    b.textContent = lab;
+    b.disabled = (m !== "observe") && !OPERATOR;
+    b.onclick = () => { seat.mode = m; draw(); };
+    sv.appendChild(b);
+  });
+}
+
+function draw(){
+  if(!doc) return;
+  drawHeader();
+  if(seat){ drawSeat(); }
+  else {
+    el("seatview").classList.add("hide"); el("wallview").classList.remove("hide");
+    const w = el("wall"); w.innerHTML = "";
+    shown().forEach(n => w.appendChild(tile(n)));
+    drawNotes();
+  }
+  drawVerbs();
+}
+
+document.addEventListener("keydown", (e) => {
+  if(el("dlg").open) return;
+  if(e.key === "Escape"){ if(seat) closeSeat(); return; }
+  if(e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if(e.key === "a"){ shown().forEach(n => sel.add(n.id)); draw(); return; }
+  if(e.key === "A"){ sel.clear(); draw(); return; }
+  const v = VERBS.find(v => v.k === e.key);
+  if(v && allowed(v)) act(v);
+});
+el("back").onclick = closeSeat;
+el("theme").onclick = () => {
+  const r = document.documentElement;
+  const cur = r.getAttribute("data-theme");
+  r.setAttribute("data-theme", cur === "dark" ? "light" : "dark");
+};
+
+load(); timer = setInterval(load, 5000);
+</script></body></html>
