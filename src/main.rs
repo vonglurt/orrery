@@ -32,6 +32,9 @@
 mod fleet;
 mod http;
 mod json;
+mod paint;
+mod rfb;
+mod seat;
 mod verbs;
 
 use std::net::{TcpListener, TcpStream};
@@ -64,6 +67,8 @@ fn main() {
     let mut operator = String::new();
     let mut demo = false;
     let mut quiet = false;
+    let mut seat = String::new();
+    let mut seat_opts = seat::Opts::default();
 
     let mut i = 0;
     while i < args.len() {
@@ -78,6 +83,25 @@ fn main() {
             "--fleet" => { fleet_name = need(i, "--fleet"); i += 2 }
             "--fleet-cmd" => { fleet_cmd = need(i, "--fleet-cmd"); i += 2 }
             "--operator" => { operator = need(i, "--operator"); i += 2 }
+            "--seat" => { seat = need(i, "--seat"); i += 2 }
+            "--vnc-port" => {
+                let v = need(i, "--vnc-port");
+                seat_opts.port = match v.parse() {
+                    Ok(p) => p,
+                    Err(_) => { eprintln!("orrery: --vnc-port takes a number"); std::process::exit(2) }
+                };
+                i += 2
+            }
+            "--fps" => {
+                let v = need(i, "--fps");
+                seat_opts.fps = match v.parse::<u32>() {
+                    Ok(f) if f >= 1 && f <= 60 => f,
+                    _ => { eprintln!("orrery: --fps takes 1 to 60"); std::process::exit(2) }
+                };
+                i += 2
+            }
+            "--sixel" => { seat_opts.paint = Some(paint::Mode::Sixel); i += 1 }
+            "--half-block" => { seat_opts.paint = Some(paint::Mode::HalfBlock); i += 1 }
             "--demo" => { demo = true; i += 1 }
             "--quiet" => { quiet = true; i += 1 }
             other => {
@@ -100,6 +124,18 @@ fn main() {
     if !demo && !on_path(&cmd[0]) {
         eprintln!("orrery: {} is not on PATH -- try --demo", cmd[0]);
         std::process::exit(2);
+    }
+
+    // --seat is a different program wearing the same binary: no listener, no
+    // routes, one node. It shares the read model and nothing else, which is
+    // the whole reason it lives here rather than in a second crate.
+    if !seat.is_empty() {
+        let fleet = Fleet::new(cmd, fleet_name, demo);
+        if let Err(e) = seat::run(&fleet, &seat, seat_opts) {
+            eprintln!("orrery: {}", e);
+            std::process::exit(1);
+        }
+        return;
     }
 
     let console = Arc::new(Console {
@@ -163,7 +199,18 @@ fn usage() {
     --operator TOKEN     enable the write verbs; without it the console is
                          the read-mostly face §12 describes
     --demo               serve the lab report's museum from a fixture
-    --quiet              do not log requests"
+    --quiet              do not log requests
+
+  the seat -- one node, full screen, in this terminal
+
+    --seat NODE          Observe and Control that node over VNC, instead of
+                         serving the wall. No listener is opened.
+    --vnc-port N         default 5900
+    --fps N              frames to ask the node for, 1-60; default 6, because
+                         frame rate is the axis III-B found expensive
+    --sixel              force real pixels (iTerm2, kitty, foot, mlterm)
+    --half-block         force the portable renderer, which is the default
+                         anywhere sixel was not detected"
     );
 }
 
