@@ -1,1 +1,7 @@
 target/
+
+# macOS metadata. This tree reaches the guest through the UTM share, and the
+# Mac writes a ._NAME beside every NAME it copies onto a filesystem with no
+# resource forks -- eleven of them at the last count, none of them ours.
+._*
+.DS_Store
