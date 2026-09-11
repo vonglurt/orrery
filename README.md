@@ -55,7 +55,7 @@ Measured on `saskatchewan` (Alpine 3.24, aarch64, cargo 1.96.1):
 | Clean release build, offline | 4.5 s |
 | Binary | 453 KB |
 | Resident, serving | **1.1 MB** — against 22 MB for the Python prototype |
-| Tests | 80 passing |
+| Tests | 80 passing, and 104 on Linux where the Wayland tests run |
 
 That last row is the argument on a Zero 2 with 512 MB that is also being the
 exhibit.
@@ -105,6 +105,38 @@ compressed encoding wants zlib and a LAN carrying one session does not need it.
 refused before a socket is opened. §12's rule is about how the console *learns*
 things, and it is intact — what the seat adds is looking at one of them.
 
+## The native window
+
+Phase 1 of the console the fleet will actually run: a Wayland client, written
+by hand, that owns a window.
+
+```sh
+./target/release/orrery --gui
+```
+
+It opens, paints, follows a resize and exits when closed. That is all it does
+yet — `draw.rs` and the wall arrive in later phases.
+
+**Zero crates, and one honest exception.** Wayland hands a client its pixel
+buffer by passing a *file descriptor* over the socket with `SCM_RIGHTS`, and
+the buffer wants `memfd_create` and `mmap`. `std` has neither, so `src/sys.rs`
+declares nine functions from the system libc with `unsafe extern "C"`. Nothing
+is fetched and nothing is vendored, so the rule's actual reason — a crate fetch
+that fails on a node with no internet — is untouched. But this is the first
+`unsafe` in the program, and it is here rather than spread about.
+
+There is no `wayland-scanner` and no generated code: `src/wl.rs` carries the
+wire format and the opcodes of the eleven interfaces a window needs, the same
+way `http.rs` and `rfb.rs` carry theirs.
+
+**It is Wayland only, and that has a consequence worth knowing.**
+`copal-prep.sh` writes `x11` to `/etc/copal/session` on a normal install and
+only writes `wayland` at the full-monty level, so **`--gui` does not run on a
+default Copal node**. On the same nodes, `x11vnc` cannot capture Wayland and
+`wayvnc` is absent from Alpine — so the GUI and the seat's Control currently
+want opposite session types. Unresolved, and recorded here rather than
+discovered later.
+
 ## Running it
 
 ```sh
@@ -124,6 +156,11 @@ cargo build --release
 ./target/release/orrery --seat museum-01 --sixel --fps 10
 
 cargo test
+
+# the compositor-backed tests step aside without a compositor, so run them
+# where one exists -- weston headless will do
+docker run --rm --platform linux/arm64 -v "$PWD":/w -w /w \
+    -e CARGO_TARGET_DIR=/tmp/t rust:alpine sh /w/tools/wl-check.sh
 ```
 
 ## Layout
@@ -138,6 +175,9 @@ cargo test
 | `src/rfb.rs` | RFB 3.8 — the one place that opens a socket to a node |
 | `src/paint.rs` | a node's screen into a terminal: sixel, and half-blocks |
 | `src/seat.rs` | the seat — the tty, the keys, the four faces |
+| `src/sys.rs` | the system calls `std` does not expose, and only those |
+| `src/wl.rs` | Wayland by hand: the wire, the registry, the window |
+| `tools/wl-check.sh` | the test suite against a real compositor |
 | `assets/wall.html` | the page — one file, no CDN, no build step |
 
 ## What it does not do, deliberately

@@ -36,6 +36,13 @@ mod paint;
 mod rfb;
 mod seat;
 mod verbs;
+// The native GUI. Wayland is a Linux protocol and `sys.rs` declares Linux
+// system calls, so both are absent elsewhere -- the seat and the wall still
+// build on a developer's Mac, which is where most of this is written.
+#[cfg(target_os = "linux")]
+mod sys;
+#[cfg(target_os = "linux")]
+mod wl;
 
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -69,6 +76,7 @@ fn main() {
     let mut quiet = false;
     let mut seat = String::new();
     let mut seat_opts = seat::Opts::default();
+    let mut gui = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -100,6 +108,7 @@ fn main() {
                 };
                 i += 2
             }
+            "--gui" => { gui = true; i += 1 }
             "--sixel" => { seat_opts.paint = Some(paint::Mode::Sixel); i += 1 }
             "--half-block" => { seat_opts.paint = Some(paint::Mode::HalfBlock); i += 1 }
             "--demo" => { demo = true; i += 1 }
@@ -121,9 +130,35 @@ fn main() {
     // Without --demo the CLI is the whole read model, so its absence is worth
     // one clear sentence at startup rather than a wall of identical errors
     // once the page is open.
-    if !demo && !on_path(&cmd[0]) {
+    // --gui is exempt while it is phase 1: a window that paints a colour has
+    // no read model to be missing. When the wall moves into it in phase 3 the
+    // exemption comes back off, because then it will.
+    if !demo && !gui && !on_path(&cmd[0]) {
         eprintln!("orrery: {} is not on PATH -- try --demo", cmd[0]);
         std::process::exit(2);
+    }
+
+    // --gui is phase 1 of the native console: a window, painted, resizable,
+    // closable. The wall and the seat move into it in later phases; what this
+    // proves is that the Wayland client underneath works at all.
+    if gui {
+        #[cfg(target_os = "linux")]
+        {
+            if let Err(e) = gui_window() {
+                eprintln!("orrery: {}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            eprintln!(
+                "orrery: --gui is Wayland, and Wayland is Linux. This binary was \n\
+                 built for {}; build it on a node, or in a container, to use it.",
+                std::env::consts::OS
+            );
+            std::process::exit(2);
+        }
     }
 
     // --seat is a different program wearing the same binary: no listener, no
@@ -174,6 +209,38 @@ fn main() {
     }
 }
 
+/// Phase 1's whole window: open, paint, follow resizes, exit when closed.
+///
+/// The colour is the theme's `--base`, so that what appears is recognisably
+/// the same console rather than a debug rectangle.
+#[cfg(target_os = "linux")]
+fn gui_window() -> Result<(), String> {
+    use std::time::Duration;
+
+    let mut win = wl::Window::open("orrery", 960, 600).map_err(|e| e.to_string())?;
+    eprintln!("orrery: window open at {}x{}", win.width, win.height);
+
+    win.fill(0xfc, 0xe2, 0xab);
+    win.present().map_err(|e| e.to_string())?;
+
+    loop {
+        let changes = win.poll().map_err(|e| e.to_string())?;
+        if changes.closed {
+            eprintln!("orrery: the window was closed");
+            return Ok(());
+        }
+        if changes.resized {
+            win.apply_resize().map_err(|e| e.to_string())?;
+            eprintln!("orrery: resized to {}x{}", win.width, win.height);
+            win.fill(0xfc, 0xe2, 0xab);
+            win.present().map_err(|e| e.to_string())?;
+        }
+        // Nothing animates yet, so this is a poll rather than a frame clock.
+        // `wl_surface.frame` is what phase 3 will want instead.
+        std::thread::sleep(Duration::from_millis(16));
+    }
+}
+
 /// Is this a command we could actually run? An absolute path is checked
 /// directly; a bare name is looked for along PATH, the way a shell would.
 fn on_path(cmd: &str) -> bool {
@@ -208,6 +275,13 @@ fn usage() {
     --vnc-port N         default 5900
     --fps N              frames to ask the node for, 1-60; default 6, because
                          frame rate is the axis III-B found expensive
+  the native window (Linux/Wayland)
+
+    --gui                open a window instead of serving one. Phase 1: it
+                         opens, paints, resizes and closes.
+
+  the seat, continued
+
     --sixel              force real pixels (iTerm2, kitty, foot, mlterm)
     --half-block         force the portable renderer, which is the default
                          anywhere sixel was not detected"
