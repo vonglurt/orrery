@@ -5,3 +5,7 @@ target/
 # resource forks -- eleven of them at the last count, none of them ours.
 ._*
 .DS_Store
+
+# Python bytecode from tools/
+__pycache__/
+*.pyc

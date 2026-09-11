@@ -29,7 +29,9 @@
 //!                          answering 403 -- a route that says "forbidden"
 //!                          tells a scanner it is there.
 
+mod draw;
 mod fleet;
+mod font;
 mod http;
 mod json;
 mod paint;
@@ -77,6 +79,8 @@ fn main() {
     let mut seat = String::new();
     let mut seat_opts = seat::Opts::default();
     let mut gui = false;
+    let mut frame_to = String::new();
+    let mut dark = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -109,6 +113,8 @@ fn main() {
                 i += 2
             }
             "--gui" => { gui = true; i += 1 }
+            "--frame" => { frame_to = need(i, "--frame"); i += 2 }
+            "--dark" => { dark = true; i += 1 }
             "--sixel" => { seat_opts.paint = Some(paint::Mode::Sixel); i += 1 }
             "--half-block" => { seat_opts.paint = Some(paint::Mode::HalfBlock); i += 1 }
             "--demo" => { demo = true; i += 1 }
@@ -133,9 +139,22 @@ fn main() {
     // --gui is exempt while it is phase 1: a window that paints a colour has
     // no read model to be missing. When the wall moves into it in phase 3 the
     // exemption comes back off, because then it will.
-    if !demo && !gui && !on_path(&cmd[0]) {
+    if !demo && !gui && frame_to.is_empty() && !on_path(&cmd[0]) {
         eprintln!("orrery: {} is not on PATH -- try --demo", cmd[0]);
         std::process::exit(2);
+    }
+
+    // --frame renders one frame to a file and exits. It needs no compositor,
+    // which makes it the way to look at the drawing on a machine that has
+    // none -- a headless node, a container, a developer's Mac.
+    if !frame_to.is_empty() {
+        let theme = if dark { draw::DARK } else { draw::LIGHT };
+        if let Err(e) = write_frame(&frame_to, 960, 600, &theme) {
+            eprintln!("orrery: {}", e);
+            std::process::exit(1);
+        }
+        eprintln!("orrery: wrote {}", frame_to);
+        return;
     }
 
     // --gui is phase 1 of the native console: a window, painted, resizable,
@@ -209,10 +228,152 @@ fn main() {
     }
 }
 
-/// Phase 1's whole window: open, paint, follow resizes, exit when closed.
+/// THE SPECIMEN, which is phase 2's deliverable and its own regression test.
 ///
-/// The colour is the theme's `--base`, so that what appears is recognisably
-/// the same console rather than a debug rectangle.
+/// Every primitive in `draw.rs` appears here once: both faces, the palette,
+/// filled and hollow discs, a frame, a mixed gradient, right-aligned numbers
+/// and a string deliberately too long for its column. When the wall arrives in
+/// phase 3 it is built out of these, and until then this is how a change to
+/// the canvas gets looked at rather than merely compiled.
+fn specimen(c: &mut draw::Canvas, t: &draw::Theme) {
+    use draw::mix;
+    use font::{F10X20, F8X13};
+
+    let w = c.w as i32;
+    c.clear(t.base);
+
+    // The header, in the large face.
+    c.rect(0, 0, w, 34, t.panel);
+    c.hline(0, 33, w, t.line);
+    let at = c.text(12, 7, "COPAL FLEET ", &F10X20, t.ink);
+    let at = c.text(at, 7, "\u{b7} ", &F10X20, t.dim);
+    c.text(at, 7, "MUSEUM", &F10X20, t.accent);
+    c.text_right(w - 12, 11, "6 of 8 up", &F8X13, t.dim);
+
+    // A row of tiles, which is the wall's actual unit.
+    let nodes = [
+        ("museum-01", "show", 45u32, 0u8),
+        ("museum-02", "show", 51, 0),
+        ("museum-06", "wake", 39, 1),
+        ("museum-07", "not announced", 0, 2),
+    ];
+    let tw = 216;
+    let th = 96;
+    for (i, (id, scene, temp, state)) in nodes.iter().enumerate() {
+        let x = 12 + i as i32 * (tw + 10);
+        let y = 48;
+        c.rect(x, y, tw, th, t.tile);
+        c.frame(x, y, tw, th, t.line);
+
+        // The status light: filled when the node is there, hollow when it is
+        // only declared. The SHAPE carries the state as well as the colour,
+        // so it survives being looked at from across a gallery.
+        let colour = match state {
+            0 => t.up,
+            1 => t.warn,
+            _ => t.dim,
+        };
+        if *state == 2 {
+            c.ring(x + 14, y + 15, 4, colour);
+        } else {
+            c.disc(x + 14, y + 15, 4, colour);
+        }
+        c.text(x + 26, y + 9, id, &F8X13, t.ink);
+
+        // The scene, clipped rather than allowed to run into the next tile.
+        c.rect(x + 10, y + 30, tw - 20, 26, t.panel);
+        c.text_in(x + 16, y + 36, tw - 32, scene, &F8X13, t.dim);
+
+        if *temp > 0 {
+            // A quantity, so it gets a bar as well as a number: 30 degrees is
+            // cool, 70 is hot, and the colour says which end it is nearer.
+            let frac = (((*temp as i32 - 30).clamp(0, 40)) * 255 / 40) as u8;
+            let bar = mix(t.up, t.alarm, frac);
+            let full = tw - 32;
+            let filled = full * frac as i32 / 255;
+            c.rect(x + 16, y + 66, full, 6, t.panel);
+            c.rect(x + 16, y + 66, filled, 6, bar);
+            c.text(x + 16, y + 78, "agent 1s", &F8X13, t.dim);
+            c.text_right(x + tw - 16, y + 78, &format!("{}\u{b0}C", temp), &F8X13, t.dim);
+        } else {
+            c.text_right(x + tw - 16, y + 78, "last seen 08:12", &F8X13, t.dim);
+        }
+    }
+
+    // The type specimen proper, so a font change is visible.
+    let mut y = 164;
+    c.text(12, y, "10x20", &F8X13, t.accent);
+    y += 17;
+    c.text(12, y, "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789", &F10X20, t.ink);
+    y += 22;
+    c.text(12, y, "abcdefghijklmnopqrstuvwxyz .,:;!?-+/", &F10X20, t.ink);
+    y += 30;
+    c.text(12, y, "8x13", &F8X13, t.accent);
+    y += 16;
+    c.text(12, y, "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789", &F8X13, t.ink);
+    y += 15;
+    c.text(12, y, "abcdefghijklmnopqrstuvwxyz .,:;!?-+/", &F8X13, t.ink);
+    y += 15;
+    c.text(12, y, "45\u{b0}C \u{b7} scene show \u{b7} agent 1s \u{b7} warden", &F8X13, t.dim);
+
+    // The palette, named -- a swatch nobody can name is decoration.
+    y += 26;
+    c.text(12, y, "palette", &F8X13, t.accent);
+    y += 15;
+    let swatches: [(&str, draw::Rgb); 8] = [
+        ("base", t.base),
+        ("panel", t.panel),
+        ("tile", t.tile),
+        ("line", t.line),
+        ("ink", t.ink),
+        ("dim", t.dim),
+        ("up", t.up),
+        ("alarm", t.alarm),
+    ];
+    for (i, (name, colour)) in swatches.iter().enumerate() {
+        let x = 12 + i as i32 * 104;
+        c.rect(x, y, 92, 26, *colour);
+        c.frame(x, y, 92, 26, t.line);
+        c.text(x, y + 31, name, &F8X13, t.dim);
+    }
+
+    // Clipping, shown rather than only asserted: this string does not fit its
+    // column, and the marker is what says so.
+    y += 62;
+    c.text(12, y, "clipped to its column:", &F8X13, t.dim);
+    c.rect(190, y - 4, 124, 19, t.panel);
+    c.frame(190, y - 4, 124, 19, t.line);
+    c.text_in(194, y, 116, "museum-01.gallery.local", &F8X13, t.ink);
+
+    // And the same string with room, so the two read against each other.
+    c.text(330, y, "museum-01.gallery.local", &F8X13, t.ink);
+}
+
+/// One frame to a binary PPM, which every viewer reads and which needs no
+/// encoder, no library and no compositor.
+fn write_frame(path: &str, w: usize, h: usize, theme: &draw::Theme) -> Result<(), String> {
+    use std::io::Write;
+
+    let mut px = vec![0u8; w * h * 4];
+    {
+        let mut c = draw::Canvas::new(&mut px, w, h);
+        specimen(&mut c, theme);
+    }
+
+    let mut out = Vec::with_capacity(w * h * 3 + 32);
+    out.extend_from_slice(format!("P6\n{} {}\n255\n", w, h).as_bytes());
+    for chunk in px.chunks_exact(4) {
+        let v = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        out.push((v >> 16) as u8);
+        out.push((v >> 8) as u8);
+        out.push(v as u8);
+    }
+    std::fs::File::create(path)
+        .and_then(|mut f| f.write_all(&out))
+        .map_err(|e| format!("cannot write {}: {}", path, e))
+}
+
+/// Phase 2's window: the specimen, redrawn whenever the compositor resizes it.
 #[cfg(target_os = "linux")]
 fn gui_window() -> Result<(), String> {
     use std::time::Duration;
@@ -220,7 +381,14 @@ fn gui_window() -> Result<(), String> {
     let mut win = wl::Window::open("orrery", 960, 600).map_err(|e| e.to_string())?;
     eprintln!("orrery: window open at {}x{}", win.width, win.height);
 
-    win.fill(0xfc, 0xe2, 0xab);
+    let theme = draw::LIGHT;
+    fn repaint(win: &mut wl::Window, theme: &draw::Theme) {
+        let (w, h) = (win.width, win.height);
+        let mut c = draw::Canvas::new(win.pixels(), w, h);
+        specimen(&mut c, theme);
+    }
+
+    repaint(&mut win, &theme);
     win.present().map_err(|e| e.to_string())?;
 
     loop {
@@ -232,7 +400,7 @@ fn gui_window() -> Result<(), String> {
         if changes.resized {
             win.apply_resize().map_err(|e| e.to_string())?;
             eprintln!("orrery: resized to {}x{}", win.width, win.height);
-            win.fill(0xfc, 0xe2, 0xab);
+            repaint(&mut win, &theme);
             win.present().map_err(|e| e.to_string())?;
         }
         // Nothing animates yet, so this is a poll rather than a frame clock.
@@ -277,8 +445,12 @@ fn usage() {
                          frame rate is the axis III-B found expensive
   the native window (Linux/Wayland)
 
-    --gui                open a window instead of serving one. Phase 1: it
-                         opens, paints, resizes and closes.
+    --gui                open a window instead of serving one. Phase 2: it
+                         draws the specimen -- both faces, the palette and
+                         every primitive the wall is made of.
+    --frame PATH         render one frame to a PPM and exit. Needs no
+                         compositor, so it works on a headless node.
+    --dark               the night palette, for either of those.
 
   the seat, continued
 
