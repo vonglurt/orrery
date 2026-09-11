@@ -36,10 +36,13 @@ mod http;
 mod json;
 mod keymap;
 mod lab;
+mod media;
+mod nav;
 #[cfg(target_os = "macos")]
 mod mac;
 mod paint;
 mod profile;
+mod pty;
 mod rfb;
 mod seat;
 mod surface;
@@ -88,7 +91,9 @@ fn main() {
     let mut gui = false;
     let mut frame_to = String::new();
     let mut dark = false;
+    let mut copal = String::new();
     let mut specimen_frame = false;
+    let mut frame_view = String::new();
     let mut frame_select: Vec<String> = Vec::new();
     let mut frame_state = String::new();
     let mut frame_size = (960usize, 600usize);
@@ -128,6 +133,7 @@ fn main() {
             // The review flags. A console whose screens can only be seen by
             // standing in front of one is a console nobody reviews.
             "--specimen" => { specimen_frame = true; i += 1 }
+            "--frame-view" => { frame_view = need(i, "--frame-view"); i += 2 }
             "--frame-state" => { frame_state = need(i, "--frame-state"); i += 2 }
             "--frame-select" => {
                 frame_select = need(i, "--frame-select")
@@ -152,6 +158,7 @@ fn main() {
                 i += 2
             }
             "--dark" => { dark = true; i += 1 }
+            "--copal" => { copal = need(i, "--copal"); i += 2 }
             "--sixel" => { seat_opts.paint = Some(paint::Mode::Sixel); i += 1 }
             "--half-block" => { seat_opts.paint = Some(paint::Mode::HalfBlock); i += 1 }
             "--demo" => { demo = true; i += 1 }
@@ -189,6 +196,8 @@ fn main() {
         let theme = if dark { draw::DARK } else { draw::LIGHT };
         let what = if specimen_frame {
             Frame::Specimen
+        } else if frame_view == "media" {
+            Frame::Media { copal: copal.clone(), demo }
         } else {
             // The document comes from a file, from the fixture, or from the
             // CLI -- in that order, so that a review frame can be pinned to a
@@ -258,7 +267,7 @@ fn main() {
                 if operator.is_empty() { "gallery (read-only)" } else { "operator" },
                 if demo { "  [demo fixture]" } else { "" }
             );
-            if let Err(e) = gui_loop(win, theme, fleet, posture) {
+            if let Err(e) = gui_loop(win, theme, fleet, posture, &copal, demo) {
                 eprintln!("orrery: {}", e);
                 std::process::exit(1);
             }
@@ -280,7 +289,7 @@ fn main() {
                 if operator.is_empty() { "gallery (read-only)" } else { "operator" },
                 if demo { "  [demo fixture]" } else { "" }
             );
-            if let Err(e) = gui_loop(win, theme, fleet, posture) {
+            if let Err(e) = gui_loop(win, theme, fleet, posture, &copal, demo) {
                 eprintln!("orrery: {}", e);
                 std::process::exit(1);
             }
@@ -354,6 +363,8 @@ enum Frame {
         select: Vec<String>,
         posture: lab::Posture,
     },
+    /// The card ledger, against a checkout.
+    Media { copal: String, demo: bool },
 }
 
 /// THE SPECIMEN, which is phase 2's deliverable and its own regression test.
@@ -499,6 +510,17 @@ fn write_frame(
         let mut c = draw::Canvas::new(&mut px, w, h);
         match what {
             Frame::Specimen => specimen(&mut c, theme),
+            Frame::Media { ref copal, demo } => {
+                let mut m = if demo {
+                    media::Media::demo()
+                } else {
+                    media::Media::open(copal)
+                };
+                let mut ui_state = ui::UiState::default();
+                ui_state.pointer = (-1, -1);
+                let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
+                media::draw(&mut u, &mut m);
+            }
             Frame::Lab { ref doc, ref select, posture } => {
                 let model = lab::Model::parse(doc);
                 let mut state = lab::Lab::new(posture);
@@ -540,6 +562,8 @@ fn gui_loop<S: surface::Surface>(
     theme: draw::Theme,
     fleet: Arc<Fleet>,
     posture: lab::Posture,
+    copal: &str,
+    demo_fixture: bool,
 ) -> Result<(), String> {
     use std::time::Duration;
 
@@ -567,6 +591,14 @@ fn gui_loop<S: surface::Surface>(
 
     let mut ui_state = ui::UiState::default();
     let mut lab_state = lab::Lab::new(posture);
+    let mut view = nav::View::default();
+    // The card pane reads files rather than the fleet, so it is opened once
+    // and reloaded after anything that writes one.
+    let mut media = if demo_fixture {
+        media::Media::demo()
+    } else {
+        media::Media::open(copal)
+    };
     let frame = Duration::from_millis(1000 / 12);
 
     loop {
@@ -583,12 +615,34 @@ fn gui_loop<S: surface::Surface>(
         lab_state.reconcile(&model);
         lab_state.results = results.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
+        // A running card write is pumped every frame whichever view is in
+        // front, so switching to the Lab while a card is being written does
+        // not stop reading from the terminal.
+        if let Some(j) = media.job.as_mut() {
+            j.pump();
+        }
+        media.note_fleet(&model.nodes.iter().map(|n| n.id.clone()).collect::<Vec<_>>());
+
         let (w, h) = s.size();
-        let action;
+        let mut action = None;
         {
             let mut c = draw::Canvas::new(s.pixels(), w, h);
             let mut u = ui::Ui::begin(&mut c, theme, &inputs, &mut ui_state);
-            action = lab::draw(&mut u, &model, &mut lab_state);
+            match view {
+                nav::View::Lab => action = lab::draw(&mut u, &model, &mut lab_state),
+                nav::View::Media => {
+                    if let Some(v) = media::draw(&mut u, &mut media) {
+                        action = Some(lab::Action::Go(v));
+                    }
+                }
+            }
+        }
+        if let Some(lab::Action::Go(v)) = action {
+            view = v;
+            if v == nav::View::Media {
+                media.reload();
+            }
+            action = None;
         }
         // A dismissed pane has to be cleared where it is OWNED, or the next
         // frame copies it straight back out of the mutex.

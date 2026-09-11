@@ -21,6 +21,7 @@
 use crate::draw::{mix, Rgb, Theme};
 use crate::font::{F10X20, F8X13};
 use crate::json;
+use crate::nav;
 use crate::surface::Sym;
 use crate::ui::{rect, Light, Rect, Ui};
 
@@ -360,6 +361,8 @@ impl Results {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Verb { name: &'static str, nodes: Vec<String> },
+    /// Go to another face of the console.
+    Go(nav::View),
     Quit,
 }
 
@@ -527,7 +530,9 @@ pub fn draw(ui: &mut Ui, m: &Model, lab: &mut Lab) -> Option<Action> {
         return None;
     }
 
-    draw_header(ui, &l, m);
+    if let Some(v) = draw_header(ui, &l, m) {
+        action = Some(Action::Go(v));
+    }
     draw_rail(ui, &l, m, lab);
     if lab.results.is_some() {
         if draw_results(ui, &l, lab) {
@@ -547,7 +552,7 @@ pub fn draw(ui: &mut Ui, m: &Model, lab: &mut Lab) -> Option<Action> {
     action
 }
 
-fn draw_header(ui: &mut Ui, l: &Layout, m: &Model) {
+fn draw_header(ui: &mut Ui, l: &Layout, m: &Model) -> Option<nav::View> {
     let t = ui.t;
     ui.panel(l.header, t.panel);
     ui.hrule(l.header.x, l.header.bottom() - 1, l.header.w);
@@ -556,6 +561,14 @@ fn draw_header(ui: &mut Ui, l: &Layout, m: &Model) {
     let mut x = PAD;
     x += ui.label(x, ty, "orrery", &F10X20, t.ink);
     x += 14;
+
+    // The navigation strip, in the same place on every view -- see nav.rs.
+    let nav_at = rect(x, l.header.y, nav::width(), HEADER_H);
+    let mut go = nav::strip(ui, nav_at, nav::View::Lab);
+    if let Some(v) = nav::chord(ui) {
+        go = Some(v);
+    }
+    x += nav::width() + 14;
     ui.label(x, ty, &m.fleet, &F10X20, t.accent);
 
     // THE PICTURE AND ITS REASON ALWAYS TRAVEL TOGETHER. A fallback that is
@@ -584,6 +597,7 @@ fn draw_header(ui: &mut Ui, l: &Layout, m: &Model) {
     };
     let word_x = ui.label_right(counts_x - 20, sy, &word, &F8X13, colour);
     ui.light(word_x - 9, l.header.y + HEADER_H / 2, 3, light, colour);
+    go
 }
 
 fn draw_rail(ui: &mut Ui, l: &Layout, m: &Model, lab: &mut Lab) {
