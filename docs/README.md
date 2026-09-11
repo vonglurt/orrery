@@ -14,6 +14,7 @@ Read in this order.
 | **[wire.md](wire.md)** | The credential rule, rewritten. `crypto.rs`, SSH, SFTP, TLS 1.3, RDP — and the one place "no dependencies" genuinely breaks. |
 | **[lockdown.md](lockdown.md)** | One list, in one place, with a number on it. The crypto profile, why a standard RDP client cannot reach a node, and what "synchronise the credentials" is allowed to mean. |
 | **[media.md](media.md)** | Cards, images and machines. The front end to `copal-prep.sh`, the card ledger, and the manifest. |
+| **[phase4.html](phase4.html)** | The current phase's brief: `crypto.rs`, why it is the largest module in the plan and the least likely to go wrong. |
 | **[plan.md](plan.md)** | The schedule. Eleven phases, what proves each one, the risks ranked, and what would make the plan wrong. |
 | **[fleet-control.md](../../copal-alpine-linux/docs/fleet-control.md)** | The node's half. What `copal-prep.sh` grows, and the one thing that turns out to need no change at all. |
 

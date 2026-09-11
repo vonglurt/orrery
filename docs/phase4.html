@@ -1,0 +1,360 @@
+<title>Orrery Crypto Primitives</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+/* Palette: src/draw.rs LIGHT and DARK, verbatim — the same two blocks at the
+   top of assets/wall.html that the console itself paints with. */
+:root {
+  --base:#fce2ab; --panel:#f7d79a; --tile:#fff2d4; --ink:#121212;
+  --dim:#6b5836; --line:#c4a870; --accent:#87704f;
+  --up:#4a7c4e; --warn:#b06a24; --alarm:#ff723e;
+  --term-bg:#1c1a16; --term-ink:#f0e3c4; --term-dim:#8a7d63; --term-line:#35302a;
+  --rule: color-mix(in srgb, var(--line) 70%, transparent);
+  --measure: 66ch;
+  --step--1: clamp(.78rem,.76rem + .1vw,.84rem);
+  --step-0: clamp(1rem,.97rem + .16vw,1.09rem);
+  --step-1: clamp(1.2rem,1.13rem + .33vw,1.4rem);
+  --step-2: clamp(1.5rem,1.36rem + .62vw,1.95rem);
+  --step-3: clamp(1.95rem,1.7rem + 1.14vw,2.75rem);
+}
+:root:not([data-theme="light"]) {
+  @media (prefers-color-scheme: dark) {
+    --base:#181818; --panel:#121212; --tile:#1f1f1f; --ink:#d0daed;
+    --dim:#87704f; --line:#2a2a2a; --accent:#fccf8a;
+    --up:#8fbf7a; --warn:#fccf8a; --alarm:#ff723e;
+    --term-bg:#0e0e0e; --term-ink:#d0daed; --term-dim:#7c705c; --term-line:#262626;
+    --rule: color-mix(in srgb, var(--line) 160%, transparent);
+  }
+}
+:root[data-theme="dark"] {
+  --base:#181818; --panel:#121212; --tile:#1f1f1f; --ink:#d0daed;
+  --dim:#87704f; --line:#2a2a2a; --accent:#fccf8a;
+  --up:#8fbf7a; --warn:#fccf8a; --alarm:#ff723e;
+  --term-bg:#0e0e0e; --term-ink:#d0daed; --term-dim:#7c705c; --term-line:#262626;
+  --rule: color-mix(in srgb, var(--line) 160%, transparent);
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--base); color: var(--ink);
+  font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+  font-size: var(--step-0); line-height: 1.62;
+  -webkit-font-smoothing: antialiased; padding: 0 20px;
+}
+.wrap { max-width: 1020px; margin: 0 auto; }
+
+header.mast { padding-block: clamp(40px,7vw,76px) clamp(26px,4vw,40px); }
+.eyebrow {
+  font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  font-size: var(--step--1); letter-spacing:.13em; text-transform:uppercase;
+  color: var(--accent); margin: 0 0 18px;
+}
+h1 {
+  font-family:"IBM Plex Sans Condensed","Helvetica Neue",Arial,sans-serif;
+  font-weight:700; font-size: var(--step-3); line-height:1.04;
+  letter-spacing:-.015em; text-wrap:balance; margin:0 0 20px; max-width:20ch;
+}
+.standfirst {
+  max-width: var(--measure); font-size: var(--step-1); line-height:1.5;
+  color: color-mix(in srgb, var(--ink) 86%, var(--dim)); margin:0;
+}
+.mast-meta {
+  margin-top:30px; padding-top:18px; border-top:1px solid var(--rule);
+  display:flex; flex-wrap:wrap; gap:8px 28px;
+  font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  font-size: var(--step--1); color: var(--dim);
+}
+.mast-meta b { color: var(--ink); font-weight:500; font-variant-numeric: tabular-nums; }
+
+section { padding-block: clamp(30px,4.5vw,52px); border-top:1px solid var(--rule); }
+h2 {
+  font-family:"IBM Plex Sans Condensed","Helvetica Neue",Arial,sans-serif;
+  font-weight:700; font-size: var(--step-2); line-height:1.12;
+  letter-spacing:-.01em; text-wrap:balance; margin:0 0 8px; max-width:26ch;
+}
+h3 {
+  font-family:"IBM Plex Sans Condensed","Helvetica Neue",Arial,sans-serif;
+  font-weight:600; font-size: var(--step-1); line-height:1.25;
+  text-wrap:balance; margin:0 0 8px;
+}
+.kicker {
+  font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  font-size: var(--step--1); letter-spacing:.12em; text-transform:uppercase;
+  color: var(--accent); margin:0 0 14px;
+}
+p { max-width: var(--measure); margin:0 0 1em; }
+p:last-child { margin-bottom:0; }
+.lede { font-size: var(--step-1); line-height:1.5; color: color-mix(in srgb, var(--ink) 88%, var(--dim)); }
+strong { font-weight:600; } em { font-style:italic; }
+code,.mono { font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace; font-size:.88em; }
+p code,li code,td code { color: var(--accent); word-break: break-word; }
+.stack { display:flex; flex-direction:column; gap:24px; }
+.stack-lg { display:flex; flex-direction:column; gap:34px; }
+
+.term {
+  background: var(--term-bg); color: var(--term-ink);
+  border:1px solid var(--term-line); border-radius:3px; overflow-x:auto; max-width:100%;
+}
+.term-head {
+  display:flex; gap:14px; align-items:baseline; padding:9px 14px;
+  border-bottom:1px solid var(--term-line);
+  font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color: var(--term-dim);
+}
+.term pre {
+  margin:0; padding:16px 14px 18px;
+  font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  font-size: clamp(.62rem,.32rem + 1vw,.8rem); line-height:1.5; white-space:pre; color: var(--term-ink);
+}
+figure { margin:0; }
+figcaption { margin-top:10px; max-width: var(--measure); font-size: var(--step--1); color: var(--dim); line-height:1.5; }
+
+.tablewrap { overflow-x:auto; max-width:100%; }
+table {
+  border-collapse:collapse; width:100%; min-width:540px;
+  font-family:"IBM Plex Sans Condensed","Helvetica Neue",Arial,sans-serif;
+  font-size: var(--step--1); line-height:1.45;
+}
+th {
+  text-align:left; font-weight:700; color: var(--accent);
+  letter-spacing:.07em; text-transform:uppercase; font-size:.74rem;
+  padding:0 14px 7px 0; border-bottom:1px solid var(--rule); white-space:nowrap;
+}
+td { padding:9px 14px 9px 0; border-bottom:1px solid var(--rule); vertical-align:top; }
+tr:last-child td { border-bottom:none; }
+td.num,th.num { font-variant-numeric: tabular-nums; text-align:right; padding-right:0; }
+td.mono { font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace; font-size:.8rem; }
+td.tick { text-align:center; color: var(--up); font-weight:700; }
+td.dash { text-align:center; color: var(--dim); }
+caption {
+  text-align:left; padding-bottom:10px; color: var(--dim); font-size: var(--step--1);
+  font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  letter-spacing:.1em; text-transform:uppercase;
+}
+
+.callout {
+  background: var(--tile); border:1px solid var(--rule);
+  border-left:3px solid var(--accent); border-radius:2px; padding:20px 22px; max-width:80ch;
+}
+.callout.hot { border-left-color: var(--alarm); }
+.callout.hot .kicker { color: var(--alarm); }
+.callout p { font-size: var(--step--1); line-height:1.6; }
+
+.grid2 { display:grid; gap:1px; background: var(--rule); border:1px solid var(--rule); }
+@media (min-width: 760px) { .grid2 { grid-template-columns: 1fr 1fr; } }
+.cell { background: var(--tile); padding:22px; }
+.cell p { font-size: var(--step--1); line-height:1.6; max-width:58ch; }
+
+.tag {
+  display:inline-block; margin-bottom:10px;
+  font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  font-size:.68rem; letter-spacing:.12em; text-transform:uppercase;
+  color: var(--term-ink); background: var(--accent); padding:3px 7px; border-radius:2px;
+}
+.tag.warn { background: var(--warn); }
+.tag.good { background: var(--up); }
+
+ul.plain { margin:0; padding-left:1.15em; max-width: var(--measure); }
+ul.plain li { margin-bottom:.5em; }
+ul.plain li::marker { color: var(--accent); }
+
+footer {
+  border-top:1px solid var(--rule); padding-block:30px 50px;
+  font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  font-size: var(--step--1); color: var(--dim);
+}
+footer p { max-width:70ch; line-height:1.6; }
+:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+@media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Phase four of eleven · orrery · the brief</p>
+  <h1>Two thousand lines with a published answer</h1>
+  <p class="standfirst">Every interface phase is done. What is left is the wire — a shell on a node, a file transfer, a screen you can drive — and all four of those sit on one module of arithmetic that has not been written yet.</p>
+  <div class="mast-meta">
+    <span>module <b>src/crypto.rs</b></span>
+    <span>about <b>2,000</b> lines</span>
+    <span>dependencies <b>0</b></span>
+    <span>unlocks <b>4</b> phases</span>
+    <span>risk <b>lowest in the plan</b></span>
+  </div>
+</header>
+
+<section>
+  <p class="kicker">Where we are</p>
+  <h2>The console works. It just cannot talk to anything yet.</h2>
+  <p class="lede">Phases 0 through 3 and phase 9 are landed: a native window on macOS and on Wayland, one immediate-mode toolkit, the museum interface with selection and per-node results, navigation, and the SD-card ledger with a real pty behind it.</p>
+
+  <div class="tablewrap" style="margin-top:24px">
+    <table>
+      <caption>What exists · 202 tests on macOS, 223 on Linux</caption>
+      <thead><tr><th>Module</th><th>Does</th><th class="num">Lines</th><th>State</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">surface.rs</td><td>the platform seam — Input, Surface, Offscreen</td><td class="num">~200</td><td>done</td></tr>
+        <tr><td class="mono">ui.rs</td><td>immediate-mode widgets, tested with no compositor</td><td class="num">~750</td><td>done</td></tr>
+        <tr><td class="mono">mac.rs</td><td>AppKit, no runtime Objective-C classes</td><td class="num">~800</td><td>done</td></tr>
+        <tr><td class="mono">wl.rs</td><td>Wayland by hand, now with seat, pointer, keyboard</td><td class="num">~1,500</td><td>done</td></tr>
+        <tr><td class="mono">keymap.rs</td><td>the keyboard, baked in — no libxkbcommon</td><td class="num">~400</td><td>done</td></tr>
+        <tr><td class="mono">lab.rs</td><td>the museum interface, selection, results pane</td><td class="num">~1,100</td><td>done</td></tr>
+        <tr><td class="mono">media.rs</td><td>the card ledger, the sequence checks</td><td class="num">~700</td><td>done</td></tr>
+        <tr><td class="mono">pty.rs</td><td>a child on a real terminal — and phase 5's shell</td><td class="num">~250</td><td>done</td></tr>
+        <tr><td class="mono">profile.rs</td><td>the crypto whitelist, versioned</td><td class="num">~250</td><td>done</td></tr>
+        <tr><td class="mono"><strong>crypto.rs</strong></td><td><strong>the primitives</strong></td><td class="num"><strong>~2,000</strong></td><td><strong>phase 4</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p style="margin-top:22px">Six buttons in the verb bar are <em>absent rather than greyed</em> — Observe, Control, Terminal, Exchange, Send, Message — because their transports do not exist. The status line says <code>6 not built</code> rather than offering something that would fail. Phase 4 is the first step toward that number going down.</p>
+</section>
+
+<section>
+  <p class="kicker">The argument for doing it now</p>
+  <h2>SSH and TLS want the same arithmetic</h2>
+  <p class="lede">This is the structural fact that makes the rest of the plan tractable. Write the primitives once and the second protocol is a wire format rather than a cryptosystem.</p>
+
+  <figure style="margin:24px 0 26px">
+    <div class="term">
+      <div class="term-head"><span>src/</span><span>what sits on what</span></div>
+<pre>  crypto.rs   the primitives          ~2000   ← phase 4
+       │
+       ├── ssh.rs    transport, auth, channels   ~1400   phase 5
+       │       └── sftp.rs   SFTP v3              ~600   phase 6
+       │
+       └── tls.rs    TLS 1.3, one suite          ~1100   phase 7
+               └── rdp.rs    the RDP client      ~2200   phase 8
+
+  Terminal ── ssh.rs        Exchange ── sftp.rs
+  Send     ── sftp.rs       Control  ── rdp.rs / rfb.rs</pre>
+    </div>
+    <figcaption>Four of the six absent verbs land on this tree. <code>rfb.rs</code> — already written and tested — is the other path to Control, and the reason phase 8 can fail without taking the plan with it.</figcaption>
+  </figure>
+
+  <div class="tablewrap">
+    <table>
+      <caption>One primitive, two callers</caption>
+      <thead><tr><th>Primitive</th><th class="num">SSH-2</th><th class="num">TLS 1.3</th><th>What it is for</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">SHA-256</td><td class="tick">✓</td><td class="tick">✓</td><td>exchange hash; transcript and HKDF</td></tr>
+        <tr><td class="mono">SHA-512</td><td class="tick">✓</td><td class="tick">✓</td><td>Ed25519's own internals</td></tr>
+        <tr><td class="mono">HMAC / HKDF</td><td class="dash">—</td><td class="tick">✓</td><td>key schedule</td></tr>
+        <tr><td class="mono">X25519</td><td class="tick">✓</td><td class="tick">✓</td><td><code>curve25519-sha256</code>; the TLS key share</td></tr>
+        <tr><td class="mono">Ed25519</td><td class="tick">✓</td><td class="tick">✓</td><td>host certificates; CertificateVerify</td></tr>
+        <tr><td class="mono">ChaCha20-Poly1305</td><td class="tick">✓</td><td class="tick">✓</td><td>the default cipher on both</td></tr>
+        <tr><td class="mono">AES-256-GCM</td><td class="tick">✓</td><td class="tick">✓</td><td>because the far end may insist</td></tr>
+        <tr><td class="mono">base64 / DER</td><td class="tick">✓</td><td class="tick">✓</td><td>OpenSSH key files; X.509</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <p class="kicker">The specification already exists</p>
+  <h2>Nothing here is a judgement call</h2>
+  <p class="lede">There is normally an argument at the start of a crypto module about which algorithms to support. That argument already happened, and it is committed.</p>
+
+  <p><code>src/profile.rs</code> — written two phases early, at the request to lock the fleet down — is the whitelist, versioned, and it is already the thing that renders the node's <code>sshd</code> block. <strong>It names exactly one algorithm per slot.</strong> So phase 4 has no design space: the list of functions to write is a list somebody already reviewed, and a test called <code>nothing_weak_is_on_any_list</code> fails the build if it grows something with <code>sha1</code>, <code>cbc</code>, <code>rc4</code>, <code>ssh-rsa</code>, <code>ecdsa</code> or eighteen other tokens in it.</p>
+
+  <div class="callout" style="margin-top:22px">
+    <p class="kicker">What that buys</p>
+    <p>No RSA. No NIST curves in key exchange. No CBC and no separate MAC, because both ciphers are AEAD. No TLS 1.2 record layer. No Diffie-Hellman group negotiation. <strong>Every one of those is a decoder that can be wrong and is not being written</strong> — the same argument <code>rfb.rs</code> made when it asked for Raw and CopyRect only, applied to a much larger surface.</p>
+  </div>
+</section>
+
+<section>
+  <p class="kicker">Why it is the lowest risk, not the highest</p>
+  <h2>Every line has a published answer</h2>
+  <p class="lede">It is the largest single module in the plan, and it is the one least likely to go wrong — because unlike an RDP client negotiating with a server nobody here has run, every function in it has a known-correct output that somebody else wrote down.</p>
+
+  <div class="tablewrap" style="margin-top:22px">
+    <table>
+      <caption>Where the answers come from</caption>
+      <thead><tr><th>Function</th><th>Checked against</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">X25519</td><td>RFC 7748 §5.2, plus Wycheproof's small-order and all-zero cases</td></tr>
+        <tr><td class="mono">Ed25519</td><td>RFC 8032 §7.1, plus Wycheproof's malleability set</td></tr>
+        <tr><td class="mono">ChaCha20-Poly1305</td><td>RFC 8439 §2.8.2</td></tr>
+        <tr><td class="mono">SHA-256 / SHA-512</td><td>FIPS 180-4</td></tr>
+        <tr><td class="mono">HMAC / HKDF</td><td>RFC 4231, RFC 5869</td></tr>
+        <tr><td class="mono">AES-256-GCM</td><td>the NIST known-answer tests</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p style="margin-top:22px"><strong>A module where every line is checked against a vector somebody else published is either right or obviously wrong.</strong> That is a different risk profile from the rest of the wire, where correctness means agreeing with a live server about an ambiguous specification. Budget the time for phase 4; do not budget the worry.</p>
+
+  <div class="grid2" style="margin-top:28px">
+    <div class="cell">
+      <span class="tag warn">Trap one</span>
+      <h3>X25519's degenerate outputs</h3>
+      <p>A shared secret of all zeros means the peer sent a small-order point, and an implementation that does not check produces a session key an attacker chose. Wycheproof has the exact inputs; the check is two lines and is the difference between key agreement and theatre.</p>
+    </div>
+    <div class="cell">
+      <span class="tag warn">Trap two</span>
+      <h3>Ed25519's canonical <span class="mono">S</span></h3>
+      <p>Without a bounds check on the signature's second half, a valid signature can be transformed into a second, different, also-valid signature for the same message. For a host certificate that is a live malleability bug, and it is one line.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <p class="kicker">The discipline</p>
+  <h2>Constant time, or it is decoration</h2>
+  <p>A reviewer should be able to read <code>crypto.rs</code> looking for exactly two things: <strong>a branch that depends on a secret</strong>, and <strong>a table index that depends on a secret</strong>. Neither may exist. Concretely —</p>
+
+  <ul class="plain" style="margin-top:16px">
+    <li>Field arithmetic over 2²⁵⁵−19 in 5×51-bit limbs, with no conditional reduction. The carry chain runs the same way every time regardless of the value.</li>
+    <li>Authentication tags compared by OR-accumulating a difference across all sixteen bytes, never by an early-returning loop. A comparison that stops at the first wrong byte tells an attacker how many bytes were right.</li>
+    <li><strong>AES is bitsliced, not tabulated.</strong> A textbook T-table AES is a cache-timing oracle. The slower version is the only one worth writing.</li>
+  </ul>
+
+  <div class="callout" style="margin-top:24px">
+    <p class="kicker">Which is why ChaCha20-Poly1305 is the default</p>
+    <p>It is constant time by construction, and it is fast in software on a core with no AES instructions — <strong>and a Raspberry Pi Zero 2 has no AES instructions.</strong> AES-256-GCM is implemented only because an IronRDP server very likely insists on it for TLS. The cipher the console actually prefers is the one the hardware is good at.</p>
+  </div>
+</section>
+
+<section>
+  <p class="kicker">The deliverable</p>
+  <h2>What "done" means for phase 4</h2>
+
+  <div class="stack">
+    <div>
+      <h3>It ships with nothing visible</h3>
+      <p>No new pixels. No new button. The verb bar still says <code>6 not built</code>, because the transports that use these primitives are phases 5 through 8. <strong>This is the one phase whose deliverable is a test report</strong>, and saying so in advance is better than delivering one and calling it progress.</p>
+    </div>
+    <div>
+      <h3>Acceptance</h3>
+      <ul class="plain">
+        <li>Every published vector in the table above passes, including the Wycheproof edge cases — not only the happy-path RFC examples.</li>
+        <li><code>cargo test</code> stays green on macOS and under weston on Linux, and the module cross-compiles to <code>aarch64-unknown-linux-musl</code>.</li>
+        <li><code>[dependencies]</code> is still empty. No <code>#[link]</code> is added — this is pure arithmetic and needs no system library at all, which makes it the first new module since <code>ui.rs</code> with no unsafe in it.</li>
+        <li>A measured throughput number for ChaCha20-Poly1305 on <code>saskatchewan</code>, because "fast enough on a Zero 2" is a claim this plan keeps making and has not yet checked.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Then the number starts falling</h3>
+      <p>Phase 5 is <code>ssh.rs</code>, and it turns <code>6 not built</code> into <code>5</code> — a real shell on a node, as the login user, with no password asked, because <code>copal-prep.sh</code> already installed the <code>fleet-human</code> principal that makes it possible. Phase 6 takes it to <code>3</code>. The interface is finished; what happens now is that its buttons start appearing.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <p class="kicker">Stated rather than glossed</p>
+  <h2>The risk that does not go away</h2>
+  <div class="callout hot">
+    <p class="kicker">R3 · hand-written cryptography</p>
+    <p>Test vectors and narrowness reduce the surface. <strong>They do not eliminate the risk, and this is not a reviewed library.</strong> The argument for doing it anyway is the same argument the whole repository rests on: a fleet node is on a LAN that invariant 6 says never reaches the internet, a dependency is a crate fetch that fails on the one machine this is for, and the gate is the fleet's certificate authority rather than this code.</p>
+    <p style="margin-top:12px">A narrow list of hand-written primitives is a better bet than a wide one. It is not the same bet as <code>rustls</code>, and nothing in this brief should be read as claiming otherwise.</p>
+  </div>
+</section>
+
+<footer>
+  <p>Phase 4 brief · <code>~/code/orrery</code> · the plan is <code>docs/plan.md</code>, the protocol design is <code>docs/wire.md</code>, the whitelist is <code>docs/lockdown.md</code> and <code>src/profile.rs</code>. Palette from <code>src/draw.rs</code>, which takes it from <code>assets/wall.html</code>.</p>
+</footer>
+
+</div>
