@@ -310,6 +310,38 @@ screen will be a slideshow. `--fps 6` remains the default for the reason §III-B
 found — frame rate is the expensive axis — and the honest description of this
 feature is "you can drive a node from across the room", not "you can watch it".
 
+### R4 — the cipher the peer prefers is the one we are slowest at
+
+**Found by building phase 4, not by planning it.** `crypto.rs` is written, and
+its own measurement says:
+
+    chacha20-poly1305   186.1 MB/s
+    aes-256-gcm           0.5 MB/s
+
+on a Mac; call it a tenth of that on a Zero 2. The AES is constant-time by
+construction — a bitsliced circuit rather than an S-box table, because a node
+has no AES instructions to hide a table lookup behind — and it slices across
+the sixteen bytes of one block rather than across four blocks at a time, which
+is where the factor of three hundred lives.
+
+This is not a footnote, because **the server picks the cipher.** rustls, which
+is what hypr-rdp is built on, ranks `TLS_AES_256_GCM_SHA384` above
+`TLS_CHACHA20_POLY1305_SHA256` in its own preference order and chooses by
+server preference. Offer both from `tls.rs` and the RDP stream runs at a tenth
+of a megabyte a second, which is not a slow session — it is a dead one.
+
+So phase 7 has a decision it did not have before, and only two answers:
+
+1. **Offer ChaCha alone in the ClientHello.** One line, no new code. `profile.rs`
+   still lists AES-256-GCM as accepted — what a peer may offer and what we ask
+   for are different lists — and this is the option the plan assumes.
+2. **Write the four-block bitslice first**, if some peer ever turns out to
+   require AES. Perhaps 80 lines, and roughly a 3× win, which still does not
+   make AES the faster of the two.
+
+The honest summary: AES-256-GCM in this console is a compatibility path, not a
+transport.
+
 ### The two risks, named
 
 **R1 — hypr-rdp may not offer the bitmap path.** A server written around

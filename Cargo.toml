@@ -24,3 +24,13 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# The tests run the curve arithmetic thousands of times -- every flipped bit of
+# a signature is a verification -- and an unoptimised u128 multiply is roughly
+# fifty times slower than an optimised one, which turns a ten-second test run
+# into a ten-minute one. Optimising the test build costs a few seconds of
+# compilation and is the difference between a suite people run and a suite
+# people skip. Debug assertions stay on: this is about speed, not about turning
+# checks off.
+[profile.test]
+opt-level = 2

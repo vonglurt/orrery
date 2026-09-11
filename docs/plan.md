@@ -110,23 +110,36 @@ no fleet at all is how this is developed.
 
 ---
 
-## Phase 4 · `crypto.rs`
+## Phase 4 · `crypto.rs` — **built**
 
 | | |
 |---|---|
-| adds | `src/crypto.rs` ~2,000 |
-| does | SHA-256, SHA-512, HMAC, HKDF, X25519, Ed25519 (sign + verify), ChaCha20-Poly1305, AES-128/256-GCM bitsliced, P-256 verify, RSA-PSS verify, base64, DER/ASN.1 reader |
-| proves | RFC 7748 §5.2, RFC 8032 §7.1, RFC 8439 §2.8.2, FIPS 180-4, the NIST GCM KATs, Wycheproof's edge cases for X25519 and Ed25519 |
+| adds | `src/crypto.rs` 2,971 lines, 35 tests |
+| does | SHA-256, SHA-512, HMAC, HKDF (+ TLS 1.3's Expand-Label), X25519, Ed25519 (sign + verify), ChaCha20-Poly1305 in both the IETF and the OpenSSH nonce layouts, AES-256-GCM bitsliced, base64, a DER writer and reader |
+| proves | RFC 7748 §5.2 and §6.1, RFC 8032 §7.1, RFC 8439 §2.4.2/§2.5.2/§2.8.2, FIPS 180-4, FIPS 197 C.3, NIST GCM cases 13/14/16, RFC 4231, RFC 5869 |
 
-**The lowest-risk phase in the plan, and the second largest.** Every function
-has a published answer. Budget the time; do not budget the worry.
+**The lowest-risk phase in the plan, and the largest.** Every function had a
+published answer before it was written. That held: the three bugs the vectors
+caught were a hash whose buffer count reset when a call ended mid-block, an
+HKDF counter that overflowed on its last legal block, and two test vectors
+transcribed from the wrong section of their own RFC.
 
-Two things that are easy to get wrong and are specifically tested: the
-all-zero / small-order X25519 outputs (Wycheproof), and Ed25519's canonical-`S`
-check, without which signature malleability is a live bug.
+Two things that are easy to get wrong, and are each now a named test: the
+all-zero / small-order X25519 output (`a_small_order_point_is_refused_rather_than_agreed_with`,
+five points including both spellings of the identity), and Ed25519's
+canonical-`S` check (`a_second_spelling_of_a_signature_is_refused`, which
+builds S+L and watches it be turned away).
 
-**Discipline:** no secret-dependent branch, no secret-dependent index. A
-reviewer should be able to read `crypto.rs` looking only for those two things.
+**What was planned and deliberately not built: P-256 verify and RSA-PSS
+verify.** `profile.rs` arrived after this plan did, and it names neither —
+`nothing_weak_is_on_any_list` fails the build on `ecdsa` and `ssh-rsa`. Code
+for an algorithm the profile forbids is code that can only ever be reached by
+a bug, so the two rows came out.
+
+**Discipline:** no secret-dependent branch, no secret-dependent index. The AES
+S-box is a circuit rather than a table for exactly that reason, and the bill
+for it is measured in the file — 0.5 MB/s against ChaCha's 186. See the note
+in §6 of `wire.md`: that number is a constraint on phase 7, not a footnote.
 
 ---
 

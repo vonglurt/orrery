@@ -29,6 +29,7 @@
 //!                          answering 403 -- a route that says "forbidden"
 //!                          tells a scanner it is there.
 
+mod crypto;
 mod draw;
 mod fleet;
 mod font;
