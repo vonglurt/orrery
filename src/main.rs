@@ -35,6 +35,8 @@ mod font;
 mod http;
 mod json;
 mod lab;
+#[cfg(target_os = "macos")]
+mod mac;
 mod paint;
 mod profile;
 mod rfb;
@@ -51,7 +53,7 @@ mod sys;
 mod wl;
 
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use fleet::Fleet;
@@ -170,10 +172,11 @@ fn main() {
     // Without --demo the CLI is the whole read model, so its absence is worth
     // one clear sentence at startup rather than a wall of identical errors
     // once the page is open.
-    // --gui is exempt while it is phase 1: a window that paints a colour has
-    // no read model to be missing. When the wall moves into it in phase 3 the
-    // exemption comes back off, because then it will.
-    if !demo && !gui && frame_to.is_empty() && !on_path(&cmd[0]) {
+    // THE EXEMPTION IS OFF AGAIN, AS IT SAID IT WOULD BE. --gui was exempt
+    // while it painted a specimen and had no read model to be missing. Phase 3
+    // moved the wall into it, so it has one, so its absence is worth the same
+    // clear sentence at startup as every other face gets.
+    if !demo && frame_to.is_empty() && !on_path(&cmd[0]) {
         eprintln!("orrery: {} is not on PATH -- try --demo", cmd[0]);
         std::process::exit(2);
     }
@@ -231,19 +234,51 @@ fn main() {
     // closable. The wall and the seat move into it in later phases; what this
     // proves is that the Wayland client underneath works at all.
     if gui {
+        let theme = if dark { draw::DARK } else { draw::LIGHT };
+        let posture = if operator.is_empty() {
+            lab::Posture::Gallery
+        } else {
+            lab::Posture::Operator
+        };
+        let fleet = Arc::new(Fleet::new(cmd.clone(), fleet_name.clone(), demo));
+
+        #[cfg(target_os = "macos")]
+        {
+            let win = match mac::Window::open("orrery", 960, 600) {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("orrery: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            eprintln!(
+                "orrery: window open, backing scale {}  posture: {}{}",
+                win.scale(),
+                if operator.is_empty() { "gallery (read-only)" } else { "operator" },
+                if demo { "  [demo fixture]" } else { "" }
+            );
+            if let Err(e) = gui_loop(win, theme, fleet, posture) {
+                eprintln!("orrery: {}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
         #[cfg(target_os = "linux")]
         {
+            // Phase 1's Wayland input is not written yet, so this is still the
+            // specimen window. It becomes `gui_loop` the moment wl.rs binds
+            // wl_seat -- see docs/plan.md.
+            let _ = (theme, posture, fleet);
             if let Err(e) = gui_window() {
                 eprintln!("orrery: {}", e);
                 std::process::exit(1);
             }
             return;
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             eprintln!(
-                "orrery: --gui is Wayland, and Wayland is Linux. This binary was \n\
-                 built for {}; build it on a node, or in a container, to use it.",
+                "orrery: --gui needs Wayland or AppKit. This binary was built for {}.",
                 std::env::consts::OS
             );
             std::process::exit(2);
@@ -482,6 +517,130 @@ fn write_frame(
     std::fs::File::create(path)
         .and_then(|mut f| f.write_all(&out))
         .map_err(|e| format!("cannot write {}: {}", path, e))
+}
+
+/// The console, on whatever surface the platform gave us.
+///
+/// ONE LOOP FOR BOTH PLATFORMS, which is the whole return on `surface.rs`
+/// existing. `mac.rs` and `wl.rs` differ in how a rectangle of memory is got
+/// and how an event is heard; from here down neither is visible.
+fn gui_loop<S: surface::Surface>(
+    mut s: S,
+    theme: draw::Theme,
+    fleet: Arc<Fleet>,
+    posture: lab::Posture,
+) -> Result<(), String> {
+    use std::time::Duration;
+
+    // THE READ MODEL IS REFRESHED ON A SECOND THREAD, and it has to be.
+    // `copal fleet state` may take forty-five seconds, and a console that
+    // stops drawing while it asks is worse than one showing a five-second-old
+    // picture. The thread posts a document; the loop takes whatever is there.
+    let doc = Arc::new(Mutex::new(String::new()));
+    {
+        let doc = Arc::clone(&doc);
+        let fleet = Arc::clone(&fleet);
+        thread::spawn(move || loop {
+            let text = match fleet.state() {
+                Ok(d) => fleet::annotate(&d),
+                Err(e) => format!("{{\"error\":{}}}", json::Value::quote(&e)),
+            };
+            *doc.lock().unwrap_or_else(|e| e.into_inner()) = text;
+            thread::sleep(Duration::from_secs(5));
+        });
+    }
+
+    // A verb may take three minutes, so it runs on a thread too and the pane
+    // says "running" until it lands.
+    let results: Arc<Mutex<Option<lab::Results>>> = Arc::new(Mutex::new(None));
+
+    let mut ui_state = ui::UiState::default();
+    let mut lab_state = lab::Lab::new(posture);
+    let frame = Duration::from_millis(1000 / 12);
+
+    loop {
+        let inputs = s.poll()?;
+        if s.closed() || inputs.iter().any(|i| *i == surface::Input::Closed) {
+            return Ok(());
+        }
+        if inputs.iter().any(|i| matches!(i, surface::Input::Resized { .. })) {
+            s.apply_resize()?;
+        }
+
+        let text = doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let model = lab::Model::parse(if text.is_empty() { "{}" } else { &text });
+        lab_state.reconcile(&model);
+        lab_state.results = results.lock().unwrap_or_else(|e| e.into_inner()).clone();
+
+        let (w, h) = s.size();
+        let action;
+        {
+            let mut c = draw::Canvas::new(s.pixels(), w, h);
+            let mut u = ui::Ui::begin(&mut c, theme, &inputs, &mut ui_state);
+            action = lab::draw(&mut u, &model, &mut lab_state);
+        }
+        // A dismissed pane has to be cleared where it is OWNED, or the next
+        // frame copies it straight back out of the mutex.
+        if lab_state.results.is_none() {
+            *results.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+        s.present()?;
+
+        if let Some(lab::Action::Verb { name, nodes }) = action {
+            run_verb(name, nodes, Arc::clone(&fleet), Arc::clone(&results));
+        }
+        thread::sleep(frame);
+    }
+}
+
+/// Run a verb on a thread and post its per-node results.
+///
+/// `lab.rs` DRAWS; it does not shell out. The verb arrives here, where the
+/// `Fleet` is, for the same reason every screen is a rendering of a command a
+/// person could have typed.
+fn run_verb(
+    name: &'static str,
+    nodes: Vec<String>,
+    fleet: Arc<Fleet>,
+    results: Arc<Mutex<Option<lab::Results>>>,
+) {
+    // The bar's label and the allow-list's name are not the same string, and
+    // the allow-list is the security boundary -- so the lookup happens here
+    // and a label with no verb behind it runs nothing at all.
+    let verb = match verbs::lookup(&name.to_ascii_lowercase()) {
+        Some(v) => v,
+        None => return,
+    };
+    let arg = match verb.arg {
+        verbs::Arg::None => None,
+        // Phase 3 offers the verbs that need no typing. Scene and Run grow a
+        // field in the pane; until then they are not dispatched rather than
+        // dispatched with a guess.
+        _ => return,
+    };
+    let plan = match verbs::build_argv(verb, arg) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    *results.lock().unwrap_or_else(|e| e.into_inner()) = Some(lab::Results {
+        verb: name.to_string(),
+        running: true,
+        items: Vec::new(),
+    });
+
+    thread::spawn(move || {
+        let out = fleet.verb_each(&plan, &nodes);
+        let items = out
+            .into_iter()
+            .map(|r| lab::Outcome { node: r.node, code: r.code, output: r.output })
+            .collect();
+        *results.lock().unwrap_or_else(|e| e.into_inner()) = Some(lab::Results {
+            verb: name.to_string(),
+            running: false,
+            items,
+        });
+    });
 }
 
 /// Phase 2's window: the specimen, redrawn whenever the compositor resizes it.

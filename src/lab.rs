@@ -22,7 +22,7 @@ use crate::draw::{mix, Rgb, Theme};
 use crate::font::{F10X20, F8X13};
 use crate::json;
 use crate::surface::Sym;
-use crate::ui::{rect, Light, Rect, Ui, UiState};
+use crate::ui::{rect, Light, Rect, Ui};
 
 // ------------------------------------------------------------- the read model ---
 
@@ -321,6 +321,37 @@ pub fn visible(posture: Posture, selected: usize) -> Vec<&'static Face> {
         .collect()
 }
 
+/// One node's answer to one verb.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outcome {
+    pub node: String,
+    pub code: i32,
+    pub output: String,
+}
+
+/// What a verb did, per node.
+///
+/// "I TOLD EIGHT MACHINES TO SHUT DOWN" AND "EIGHT MACHINES SHUT DOWN" ARE
+/// DIFFERENT CLAIMS. That sentence is already in `fleet.rs`; this is where it
+/// is drawn. A verb on eight nodes produces eight answers and the one thing
+/// this must never do is collapse them into a success -- "six of eight got the
+/// memo" is the normal case and the console has to be able to say so.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Results {
+    pub verb: String,
+    pub running: bool,
+    pub items: Vec<Outcome>,
+}
+
+impl Results {
+    pub fn ok(&self) -> usize {
+        self.items.iter().filter(|o| o.code == 0).count()
+    }
+    pub fn failed(&self) -> usize {
+        self.items.iter().filter(|o| o.code != 0).count()
+    }
+}
+
 /// What the operator pressed, handed back for the caller to run.
 ///
 /// `lab.rs` DRAWS; it does not shell out. The verb travels up to `main.rs`,
@@ -343,6 +374,10 @@ pub struct Lab {
     /// The tile the arrow keys are on.
     pub focus: usize,
     pub posture: Posture,
+    /// While this is set the results pane REPLACES the lab. One pane at a
+    /// time, never a window inside the window, so there is never a question
+    /// about what is on top.
+    pub results: Option<Results>,
 }
 
 impl Default for Posture {
@@ -494,7 +529,13 @@ pub fn draw(ui: &mut Ui, m: &Model, lab: &mut Lab) -> Option<Action> {
 
     draw_header(ui, &l, m);
     draw_rail(ui, &l, m, lab);
-    draw_lab(ui, &l, m, lab);
+    if lab.results.is_some() {
+        if draw_results(ui, &l, lab) {
+            lab.results = None;
+        }
+    } else {
+        draw_lab(ui, &l, m, lab);
+    }
     if let Some(a) = draw_bar(ui, &l, lab) {
         action = Some(a);
     }
@@ -681,6 +722,74 @@ fn draw_lab(ui: &mut Ui, l: &Layout, m: &Model, lab: &mut Lab) {
     }
 }
 
+/// The results pane. Returns true when the operator dismissed it.
+fn draw_results(ui: &mut Ui, l: &Layout, lab: &Lab) -> bool {
+    let t = ui.t;
+    let r = lab.results.as_ref().expect("draw_results with no results");
+    ui.panel(l.lab, t.base);
+
+    let (head, rest) = l.lab.cut_top(28);
+    ui.panel(head, t.panel);
+    ui.hrule(head.x, head.bottom() - 1, head.w);
+
+    let ty = head.y + (28 - F8X13.height as i32) / 2;
+    let title = if r.running {
+        format!("{}  running on {} ...", r.verb, r.items.len().max(1))
+    } else {
+        format!(
+            "{}  {} of {} ok",
+            r.verb,
+            r.ok(),
+            r.items.len()
+        )
+    };
+    ui.label_in(head.x + PAD, ty, head.w - 120, &title, &F8X13, t.ink);
+    let close = rect(head.right() - 78, head.y + 4, 68, 20);
+    let dismissed = ui.button(close, "Dismiss", true);
+
+    // A card per node. Never a single verdict.
+    let inner = rest.inset(PAD);
+    let cw = 236.min(inner.w);
+    let cols = ((inner.w + PAD) / (cw + PAD)).max(1);
+    for (i, o) in r.items.iter().enumerate() {
+        let (x, y) = (i as i32 % cols, i as i32 / cols);
+        let card = rect(
+            inner.x + x * (cw + PAD),
+            inner.y + y * (56 + PAD),
+            cw,
+            56,
+        );
+        if card.bottom() > inner.bottom() {
+            break;
+        }
+        ui.panel(card, t.tile);
+        ui.outline(card, t.line);
+        // The exit code is the claim, so it is drawn as a colour as well as a
+        // number -- a column of grey numbers does not say which row needs a
+        // person.
+        let (mark, colour) = if o.code == 0 {
+            ("ok", t.up)
+        } else {
+            ("failed", t.alarm)
+        };
+        ui.c.rect(card.x, card.y, 3, card.h, colour);
+        ui.label_in(card.x + 10, card.y + 8, cw - 80, &o.node, &F8X13, t.ink);
+        ui.label_right(card.right() - 8, card.y + 8, mark, &F8X13, colour);
+        let line = o.output.lines().next().unwrap_or("");
+        ui.label_in(card.x + 10, card.y + 26, cw - 20, line, &F8X13, t.dim);
+        if o.code != 0 {
+            ui.label_right(
+                card.right() - 8,
+                card.y + 26,
+                &format!("exit {}", o.code),
+                &F8X13,
+                t.dim,
+            );
+        }
+    }
+    dismissed
+}
+
 fn draw_bar(ui: &mut Ui, l: &Layout, lab: &Lab) -> Option<Action> {
     let t = ui.t;
     ui.panel(l.bar, t.panel);
@@ -750,7 +859,14 @@ fn keys(ui: &mut Ui, m: &Model, lab: &mut Lab) -> Option<Action> {
     };
 
     if ui.f.pressed(Sym::Escape) {
-        lab.selection.clear();
+        // The pane first. Escape means "put that away", and putting away the
+        // selection underneath it in the same keystroke loses the thing the
+        // operator is about to act on again.
+        if lab.results.is_some() {
+            lab.results = None;
+        } else {
+            lab.selection.clear();
+        }
     }
     // Select all -- NEVER STRANGERS, which is guaranteed by there being no
     // stranger in `m.nodes` to begin with.
@@ -797,6 +913,7 @@ mod tests {
     use crate::draw;
     use crate::fleet::{annotate, demo_doc};
     use crate::surface::{Button, Input, Mods};
+    use crate::ui::UiState;
 
     fn model() -> Model {
         Model::parse(&annotate(&demo_doc()))
