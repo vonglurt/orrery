@@ -34,9 +34,13 @@ mod fleet;
 mod font;
 mod http;
 mod json;
+mod lab;
 mod paint;
+mod profile;
 mod rfb;
 mod seat;
+mod surface;
+mod ui;
 mod verbs;
 // The native GUI. Wayland is a Linux protocol and `sys.rs` declares Linux
 // system calls, so both are absent elsewhere -- the seat and the wall still
@@ -81,6 +85,10 @@ fn main() {
     let mut gui = false;
     let mut frame_to = String::new();
     let mut dark = false;
+    let mut specimen_frame = false;
+    let mut frame_select: Vec<String> = Vec::new();
+    let mut frame_state = String::new();
+    let mut frame_size = (960usize, 600usize);
 
     let mut i = 0;
     while i < args.len() {
@@ -114,6 +122,32 @@ fn main() {
             }
             "--gui" => { gui = true; i += 1 }
             "--frame" => { frame_to = need(i, "--frame"); i += 2 }
+            // The review flags. A console whose screens can only be seen by
+            // standing in front of one is a console nobody reviews.
+            "--specimen" => { specimen_frame = true; i += 1 }
+            "--frame-state" => { frame_state = need(i, "--frame-state"); i += 2 }
+            "--frame-select" => {
+                frame_select = need(i, "--frame-select")
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                i += 2
+            }
+            "--frame-size" => {
+                let v = need(i, "--frame-size");
+                let (a, b) = v.split_once('x').unwrap_or(("", ""));
+                match (a.parse::<usize>(), b.parse::<usize>()) {
+                    (Ok(w), Ok(h)) if w >= 120 && h >= 120 && w <= 8192 && h <= 8192 => {
+                        frame_size = (w, h)
+                    }
+                    _ => {
+                        eprintln!("orrery: --frame-size takes WIDTHxHEIGHT, e.g. 960x600");
+                        std::process::exit(2)
+                    }
+                }
+                i += 2
+            }
             "--dark" => { dark = true; i += 1 }
             "--sixel" => { seat_opts.paint = Some(paint::Mode::Sixel); i += 1 }
             "--half-block" => { seat_opts.paint = Some(paint::Mode::HalfBlock); i += 1 }
@@ -149,7 +183,43 @@ fn main() {
     // none -- a headless node, a container, a developer's Mac.
     if !frame_to.is_empty() {
         let theme = if dark { draw::DARK } else { draw::LIGHT };
-        if let Err(e) = write_frame(&frame_to, 960, 600, &theme) {
+        let what = if specimen_frame {
+            Frame::Specimen
+        } else {
+            // The document comes from a file, from the fixture, or from the
+            // CLI -- in that order, so that a review frame can be pinned to a
+            // saved document and stay the same picture next week.
+            let doc = if !frame_state.is_empty() {
+                match std::fs::read_to_string(&frame_state) {
+                    Ok(d) => fleet::annotate(&d),
+                    Err(e) => {
+                        eprintln!("orrery: cannot read {}: {}", frame_state, e);
+                        std::process::exit(1);
+                    }
+                }
+            } else if demo || !on_path(&cmd[0]) {
+                fleet::annotate(&fleet::demo_doc())
+            } else {
+                let f = Fleet::new(cmd.clone(), fleet_name.clone(), demo);
+                match f.state() {
+                    Ok(d) => fleet::annotate(&d),
+                    Err(e) => {
+                        eprintln!("orrery: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            };
+            Frame::Lab {
+                doc,
+                select: frame_select.clone(),
+                posture: if operator.is_empty() {
+                    lab::Posture::Gallery
+                } else {
+                    lab::Posture::Operator
+                },
+            }
+        };
+        if let Err(e) = write_frame(&frame_to, frame_size.0, frame_size.1, &theme, what) {
             eprintln!("orrery: {}", e);
             std::process::exit(1);
         }
@@ -226,6 +296,18 @@ fn main() {
             Err(_) => {}
         }
     }
+}
+
+/// What `--frame` should render.
+enum Frame {
+    /// Phase 2's palette sheet: every primitive in `draw.rs`, once.
+    Specimen,
+    /// The museum interface, against a document.
+    Lab {
+        doc: String,
+        select: Vec<String>,
+        posture: lab::Posture,
+    },
 }
 
 /// THE SPECIMEN, which is phase 2's deliverable and its own regression test.
@@ -351,13 +433,42 @@ fn specimen(c: &mut draw::Canvas, t: &draw::Theme) {
 
 /// One frame to a binary PPM, which every viewer reads and which needs no
 /// encoder, no library and no compositor.
-fn write_frame(path: &str, w: usize, h: usize, theme: &draw::Theme) -> Result<(), String> {
+///
+/// THIS IS HOW THE INTERFACE IS REVIEWED. Every screen in `docs/console.md` is
+/// a file this produces, so a change to the drawing is a diff rather than a
+/// thing somebody has to stand in front of a node to notice. `--specimen`
+/// still renders phase 2's palette sheet, which is the regression test for
+/// `draw.rs` itself.
+fn write_frame(
+    path: &str,
+    w: usize,
+    h: usize,
+    theme: &draw::Theme,
+    what: Frame,
+) -> Result<(), String> {
     use std::io::Write;
 
     let mut px = vec![0u8; w * h * 4];
     {
         let mut c = draw::Canvas::new(&mut px, w, h);
-        specimen(&mut c, theme);
+        match what {
+            Frame::Specimen => specimen(&mut c, theme),
+            Frame::Lab { ref doc, ref select, posture } => {
+                let model = lab::Model::parse(doc);
+                let mut state = lab::Lab::new(posture);
+                for id in select {
+                    if model.index_of(id).is_some() {
+                        state.selection.push(id.clone());
+                    }
+                }
+                let mut ui_state = ui::UiState::default();
+                // Off the canvas, so nothing is drawn hot. A review frame
+                // should show the interface at rest, not mid-hover.
+                ui_state.pointer = (-1, -1);
+                let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
+                lab::draw(&mut u, &model, &mut state);
+            }
+        }
     }
 
     let mut out = Vec::with_capacity(w * h * 3 + 32);

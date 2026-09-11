@@ -185,6 +185,18 @@ docker run --rm --platform linux/arm64 -v "$PWD":/w -w /w \
     -e CARGO_TARGET_DIR=/tmp/t rust:alpine sh /w/tools/wl-check.sh
 ```
 
+## The control console
+
+The next thing this becomes is the console the operator stands in front of: a
+room of machines to select from, a row of verbs that act on the selection, and
+a window that opens on a Mac as well as on a node. The design is
+**[`docs/`](docs/)** -- six documents, of which
+[`docs/console.md`](docs/console.md) is the interface and
+[`docs/plan.md`](docs/plan.md) is the schedule.
+
+Three of the "Still open" entries below stop being true when it lands, and
+[`docs/plan.md`](docs/plan.md) §11 is the pass that corrects them.
+
 ## Layout
 
 | | |

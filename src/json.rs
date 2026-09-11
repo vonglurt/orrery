@@ -46,6 +46,30 @@ impl Value {
         }
     }
 
+    /// A number, where the document carries one.
+    ///
+    /// `None` and `Null` are the same answer here on purpose: the wall's rule
+    /// is that "not reported" and "45" are different claims, so a caller has
+    /// to handle the absence either way and giving it two absences to tell
+    /// apart would only invite one of them to be forgotten.
+    pub fn as_num(&self) -> Option<f64> {
+        match self {
+            Value::Num(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    pub fn as_i64(&self) -> Option<i64> {
+        self.as_num().map(|n| n as i64)
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
     /// Escape a string as a JSON literal, quotes included.
     pub fn quote(s: &str) -> String {
         let mut out = String::with_capacity(s.len() + 2);
