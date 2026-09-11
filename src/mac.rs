@@ -208,15 +208,20 @@ const NAMED: &[(u16, Sym, u16)] = &[
     (0x31, Sym::Space, 0x39),
     (0x33, Sym::Backspace, 0x0e),
     (0x35, Sym::Escape, 0x01),
-    (0x75, Sym::Delete, 0x53),
-    (0x73, Sym::Home, 0x47),
-    (0x77, Sym::End, 0x4f),
-    (0x74, Sym::PageUp, 0x49),
-    (0x79, Sym::PageDown, 0x51),
-    (0x7b, Sym::Left, 0x4b),
-    (0x7c, Sym::Right, 0x4d),
-    (0x7d, Sym::Down, 0x50),
-    (0x7e, Sym::Up, 0x48),
+    // THE NAVIGATION CLUSTER IS EXTENDED, and the 0xE0 is not decoration:
+    // 0x48 on its own is NUMPAD 8. The arrows are the same scancodes with a
+    // prefix byte, which is the entire reason the prefix exists -- a bare
+    // 0x48 would drive the far end from the number pad. `keymap::is_extended`
+    // is what rdp.rs will read this with.
+    (0x75, Sym::Delete, 0xe053),
+    (0x73, Sym::Home, 0xe047),
+    (0x77, Sym::End, 0xe04f),
+    (0x74, Sym::PageUp, 0xe049),
+    (0x79, Sym::PageDown, 0xe051),
+    (0x7b, Sym::Left, 0xe04b),
+    (0x7c, Sym::Right, 0xe04d),
+    (0x7d, Sym::Down, 0xe050),
+    (0x7e, Sym::Up, 0xe048),
     (0x7a, Sym::Func(1), 0x3b),
     (0x78, Sym::Func(2), 0x3c),
     (0x63, Sym::Func(3), 0x3d),
@@ -659,13 +664,41 @@ mod tests {
     #[test]
     fn the_arrow_keys_carry_the_scancodes_rdp_expects() {
         let find = |s: Sym| NAMED.iter().find(|(_, k, _)| *k == s).map(|(_, _, sc)| *sc);
-        // The grey arrow block, set 1. Control forwards these verbatim.
-        assert_eq!(find(Sym::Up), Some(0x48));
-        assert_eq!(find(Sym::Left), Some(0x4b));
-        assert_eq!(find(Sym::Right), Some(0x4d));
-        assert_eq!(find(Sym::Down), Some(0x50));
+        // The grey arrow block, set 1, EXTENDED -- see the note on NAMED.
+        assert_eq!(find(Sym::Up), Some(0xe048));
+        assert_eq!(find(Sym::Left), Some(0xe04b));
+        assert_eq!(find(Sym::Right), Some(0xe04d));
+        assert_eq!(find(Sym::Down), Some(0xe050));
         assert_eq!(find(Sym::Escape), Some(0x01));
         assert_eq!(find(Sym::Return), Some(0x1c));
+
+        // And the two platforms agree, which is the property that actually
+        // matters: Control must send the same scancode for the same key
+        // whether the operator is at a Mac or at a node.
+        use crate::keymap;
+        for (mac_sym, evdev) in [
+            (Sym::Up, 103u16),
+            (Sym::Down, 108),
+            (Sym::Left, 105),
+            (Sym::Right, 106),
+            (Sym::Home, 102),
+            (Sym::End, 107),
+            (Sym::PageUp, 104),
+            (Sym::PageDown, 109),
+            (Sym::Delete, 111),
+            (Sym::Escape, 1),
+            (Sym::Return, 28),
+            (Sym::Tab, 15),
+            (Sym::Space, 57),
+            (Sym::Backspace, 14),
+        ] {
+            assert_eq!(
+                find(mac_sym),
+                Some(keymap::set1(evdev)),
+                "the two platforms disagree about {:?}",
+                mac_sym
+            );
+        }
     }
 
     #[test]

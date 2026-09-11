@@ -34,6 +34,7 @@ mod fleet;
 mod font;
 mod http;
 mod json;
+mod keymap;
 mod lab;
 #[cfg(target_os = "macos")]
 mod mac;
@@ -265,11 +266,21 @@ fn main() {
         }
         #[cfg(target_os = "linux")]
         {
-            // Phase 1's Wayland input is not written yet, so this is still the
-            // specimen window. It becomes `gui_loop` the moment wl.rs binds
-            // wl_seat -- see docs/plan.md.
-            let _ = (theme, posture, fleet);
-            if let Err(e) = gui_window() {
+            let win = match wl::Window::open("orrery", 960, 600) {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("orrery: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            eprintln!(
+                "orrery: window open at {}x{}  posture: {}{}",
+                win.width,
+                win.height,
+                if operator.is_empty() { "gallery (read-only)" } else { "operator" },
+                if demo { "  [demo fixture]" } else { "" }
+            );
+            if let Err(e) = gui_loop(win, theme, fleet, posture) {
                 eprintln!("orrery: {}", e);
                 std::process::exit(1);
             }
@@ -643,44 +654,12 @@ fn run_verb(
     });
 }
 
-/// Phase 2's window: the specimen, redrawn whenever the compositor resizes it.
-#[cfg(target_os = "linux")]
-fn gui_window() -> Result<(), String> {
-    use std::time::Duration;
-
-    let mut win = wl::Window::open("orrery", 960, 600).map_err(|e| e.to_string())?;
-    eprintln!("orrery: window open at {}x{}", win.width, win.height);
-
-    let theme = draw::LIGHT;
-    fn repaint(win: &mut wl::Window, theme: &draw::Theme) {
-        let (w, h) = (win.width, win.height);
-        let mut c = draw::Canvas::new(win.pixels(), w, h);
-        specimen(&mut c, theme);
-    }
-
-    repaint(&mut win, &theme);
-    win.present().map_err(|e| e.to_string())?;
-
-    loop {
-        let changes = win.poll().map_err(|e| e.to_string())?;
-        if changes.closed {
-            eprintln!("orrery: the window was closed");
-            return Ok(());
-        }
-        if changes.resized {
-            win.apply_resize().map_err(|e| e.to_string())?;
-            eprintln!("orrery: resized to {}x{}", win.width, win.height);
-            repaint(&mut win, &theme);
-            win.present().map_err(|e| e.to_string())?;
-        }
-        // Nothing animates yet, so this is a poll rather than a frame clock.
-        // `wl_surface.frame` is what phase 3 will want instead.
-        std::thread::sleep(Duration::from_millis(16));
-    }
-}
-
-/// Is this a command we could actually run? An absolute path is checked
-/// directly; a bare name is looked for along PATH, the way a shell would.
+// Phase 2's specimen window has retired. `--gui` on Linux now opens the same
+// interface `gui_loop` draws on a Mac, because `wl.rs` implements `Surface` --
+// which is the whole return on phase 0 having happened first. The specimen
+// itself is still reachable and still the regression test for `draw.rs`:
+//
+//     orrery --frame specimen.ppm --specimen
 fn on_path(cmd: &str) -> bool {
     let p = std::path::Path::new(cmd);
     if p.is_absolute() || cmd.contains('/') {

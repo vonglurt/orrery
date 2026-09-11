@@ -29,10 +29,13 @@
 
 use std::collections::VecDeque;
 use std::io;
+use std::time::{Duration, Instant};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
+use crate::keymap;
+use crate::surface::{Button, Input, Mods, Sym, Surface};
 use crate::sys::{self, Mapping};
 
 // ------------------------------------------------------------------ errors ---
@@ -173,6 +176,15 @@ impl Args<'_> {
 
     pub fn int(&mut self) -> Option<i32> {
         self.uint().map(|v| v as i32)
+    }
+
+    /// A `wl_fixed`: signed 24.8 fixed point, NOT an integer.
+    ///
+    /// `wl_pointer.motion` carries these. Reading one as an `i32` puts the
+    /// pointer at 256 times the right place, which looks like a broken
+    /// compositor rather than like an arithmetic mistake.
+    pub fn fixed(&mut self) -> Option<i32> {
+        self.int().map(|v| v >> 8)
     }
 
     pub fn string(&mut self) -> Option<String> {
@@ -463,6 +475,36 @@ pub mod xdg_surface {
     pub const EV_CONFIGURE: u16 = 0;
 }
 
+pub mod seat {
+    pub const GET_POINTER: u16 = 0;
+    pub const GET_KEYBOARD: u16 = 1;
+    pub const EV_CAPABILITIES: u16 = 0;
+    pub const CAP_POINTER: u32 = 1;
+    pub const CAP_KEYBOARD: u32 = 2;
+}
+
+pub mod pointer {
+    pub const EV_ENTER: u16 = 0;
+    pub const EV_LEAVE: u16 = 1;
+    pub const EV_MOTION: u16 = 2;
+    pub const EV_BUTTON: u16 = 3;
+    pub const EV_AXIS: u16 = 4;
+    /// Linux input event codes, which is what Wayland passes through.
+    pub const BTN_LEFT: u32 = 0x110;
+    pub const BTN_RIGHT: u32 = 0x111;
+    pub const BTN_MIDDLE: u32 = 0x112;
+    pub const AXIS_VERTICAL: u32 = 0;
+    pub const AXIS_HORIZONTAL: u32 = 1;
+}
+
+pub mod keyboard {
+    pub const EV_KEYMAP: u16 = 0;
+    pub const EV_LEAVE: u16 = 2;
+    pub const EV_KEY: u16 = 3;
+    pub const EV_MODIFIERS: u16 = 4;
+    pub const EV_REPEAT_INFO: u16 = 5;
+}
+
 pub mod toplevel {
     pub const DESTROY: u16 = 0;
     pub const SET_TITLE: u16 = 2;
@@ -472,15 +514,6 @@ pub mod toplevel {
 }
 
 // ------------------------------------------------------------------ window ---
-
-/// What the compositor has told us since the last time anyone asked.
-#[derive(Debug, Default, PartialEq)]
-pub struct Changes {
-    /// A new size was configured and the buffer no longer matches it.
-    pub resized: bool,
-    /// The user closed the window. Honour it.
-    pub closed: bool,
-}
 
 /// One toplevel window with a shared-memory buffer behind it.
 pub struct Window {
@@ -502,6 +535,22 @@ pub struct Window {
     /// True while the compositor holds the buffer. Painting into a buffer the
     /// compositor is still reading is the classic Wayland tear.
     buffer_busy: bool,
+
+    // -- input, which is phase 1 -----------------------------------------
+    seat: u32,
+    pointer: u32,
+    kbd: u32,
+    /// What has happened since the last `poll`, in the interface's own terms.
+    inputs: Vec<Input>,
+    /// Where the pointer was last seen, because `wl_pointer.button` does not
+    /// carry a position and the interface wants one with every click.
+    at: (i32, i32),
+    mods: Mods,
+    caps: bool,
+    /// The key being held, and when its next repeat is due.
+    repeat: Option<(u16, Instant)>,
+    repeat_delay: Duration,
+    repeat_gap: Duration,
 }
 
 /// What `bind` found in the registry.
@@ -509,6 +558,10 @@ struct Globals {
     compositor: u32,
     shm: u32,
     wm_base: u32,
+    /// Zero where the compositor advertised no seat at all -- a headless
+    /// weston under `wl-check.sh` does exactly that, and a window with no
+    /// input is still a window that paints.
+    seat: u32,
 }
 
 impl Window {
@@ -589,6 +642,18 @@ impl Window {
             pending_size: None,
             closed: false,
             buffer_busy: false,
+            seat: g.seat,
+            pointer: 0,
+            kbd: 0,
+            inputs: Vec::new(),
+            at: (0, 0),
+            mods: Mods::default(),
+            caps: false,
+            repeat: None,
+            // Replaced by `repeat_info` the moment the compositor sends it.
+            // These are the values nearly every compositor reports anyway.
+            repeat_delay: Duration::from_millis(400),
+            repeat_gap: Duration::from_millis(1000 / 25),
         };
 
         // Wait for the first configure and acknowledge it, or the window never
@@ -657,12 +722,192 @@ impl Window {
             self.conn.send(Msg::new(self.wm_base, wm_base::PONG).uint(serial))?;
             return Ok(false);
         }
+        self.handle_input(e)?;
         Ok(false)
     }
 
+    /// The seat, the pointer and the keyboard.
+    ///
+    /// Every arm names its object, for the reason the ping arm above records
+    /// at length: an opcode alone never identifies an event.
+    fn handle_input(&mut self, e: &Event) -> Result<(), Error> {
+        // THE SEAT'S CAPABILITIES ARRIVE LATE, so the pointer and the keyboard
+        // are asked for here rather than at open(): a compositor says what it
+        // has after the bind, and asking for a keyboard on a seat with none is
+        // a protocol error.
+        if self.seat != 0 && e.object == self.seat && e.opcode == seat::EV_CAPABILITIES {
+            let caps = e.args().uint().unwrap_or(0);
+            if caps & seat::CAP_POINTER != 0 && self.pointer == 0 {
+                let id = self.conn.allocate();
+                self.conn.send(Msg::new(self.seat, seat::GET_POINTER).new_id(id))?;
+                self.pointer = id;
+            }
+            if caps & seat::CAP_KEYBOARD != 0 && self.kbd == 0 {
+                let id = self.conn.allocate();
+                self.conn.send(Msg::new(self.seat, seat::GET_KEYBOARD).new_id(id))?;
+                self.kbd = id;
+            }
+            return Ok(());
+        }
+
+        if self.pointer != 0 && e.object == self.pointer {
+            let mut a = e.args();
+            match e.opcode {
+                pointer::EV_ENTER => {
+                    let _serial = a.uint();
+                    let _surface = a.uint();
+                    if let (Some(x), Some(y)) = (a.fixed(), a.fixed()) {
+                        self.at = (x, y);
+                        self.inputs.push(Input::Motion { x, y });
+                    }
+                }
+                pointer::EV_MOTION => {
+                    let _time = a.uint();
+                    if let (Some(x), Some(y)) = (a.fixed(), a.fixed()) {
+                        self.at = (x, y);
+                        self.inputs.push(Input::Motion { x, y });
+                    }
+                }
+                pointer::EV_BUTTON => {
+                    let _serial = a.uint();
+                    let _time = a.uint();
+                    let code = a.uint().unwrap_or(0);
+                    let down = a.uint().unwrap_or(0) == 1;
+                    if let Some(button) = button_of(code) {
+                        // The modifiers ride with the click so that `ui.rs`
+                        // does not have to guess which key event established
+                        // them -- the same shape `mac.rs` sends.
+                        self.inputs.push(Input::Key {
+                            scancode: 0,
+                            sym: Sym::Unknown,
+                            down: true,
+                            mods: self.mods,
+                        });
+                        let (x, y) = self.at;
+                        self.inputs.push(Input::Button { x, y, button, down });
+                    }
+                }
+                pointer::EV_AXIS => {
+                    let _time = a.uint();
+                    let axis = a.uint().unwrap_or(0);
+                    let v = a.fixed().unwrap_or(0);
+                    match axis {
+                        pointer::AXIS_VERTICAL => self.inputs.push(Input::Scroll { dx: 0, dy: v }),
+                        pointer::AXIS_HORIZONTAL => self.inputs.push(Input::Scroll { dx: v, dy: 0 }),
+                        _ => {}
+                    }
+                }
+                pointer::EV_LEAVE => {
+                    // Off the window entirely. Parking the pointer where no
+                    // widget is stops the last thing hovered from staying hot.
+                    self.at = (-1, -1);
+                    self.inputs.push(Input::Motion { x: -1, y: -1 });
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        if self.kbd != 0 && e.object == self.kbd {
+            let mut a = e.args();
+            match e.opcode {
+                keyboard::EV_KEYMAP => {
+                    // THE DESCRIPTOR MUST BE CLOSED AND THE KEYMAP IS NOT
+                    // READ. It is an XKB_V1 text keymap, and reading it means
+                    // libxkbcommon, which is a dependency on the one machine
+                    // this is for -- see keymap.rs, which bakes a table in
+                    // instead. What must not happen is leaking one descriptor
+                    // per keymap change for the life of the console.
+                    if let Some(fd) = self.conn.take_fd() {
+                        sys::close_fd(fd);
+                    }
+                }
+                keyboard::EV_MODIFIERS => {
+                    let _serial = a.uint();
+                    let depressed = a.uint().unwrap_or(0);
+                    let _latched = a.uint();
+                    let locked = a.uint().unwrap_or(0);
+                    self.mods = mods_of(depressed);
+                    self.caps = locked & XKB_LOCK_CAPS != 0;
+                }
+                keyboard::EV_KEY => {
+                    let _serial = a.uint();
+                    let _time = a.uint();
+                    let raw = a.uint().unwrap_or(0) as u16;
+                    let down = a.uint().unwrap_or(0) == 1;
+                    let evdev = raw.saturating_sub(keymap::WL_KEYCODE_OFFSET);
+                    self.emit_key(evdev, down);
+                    if down {
+                        self.repeat = Some((evdev, Instant::now() + self.repeat_delay));
+                    } else if matches!(self.repeat, Some((k, _)) if k == evdev) {
+                        self.repeat = None;
+                    }
+                }
+                keyboard::EV_REPEAT_INFO => {
+                    let rate = a.int().unwrap_or(25);
+                    let delay = a.int().unwrap_or(400);
+                    // A rate of zero means "do not repeat", and it is a real
+                    // setting rather than a missing one.
+                    self.repeat_gap = if rate > 0 {
+                        Duration::from_millis(1000 / rate as u64)
+                    } else {
+                        Duration::from_secs(86400)
+                    };
+                    self.repeat_delay = Duration::from_millis(delay.max(0) as u64);
+                }
+                keyboard::EV_LEAVE => {
+                    // THE SEAT'S OWN LESSON, ONE LAYER UP: a modifier that is
+                    // never released stays held. Losing focus with Control
+                    // down and getting it back without would otherwise leave
+                    // the interface believing a chord is in progress.
+                    self.mods = Mods::default();
+                    self.repeat = None;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// One keypress, as the two facts it is.
+    fn emit_key(&mut self, evdev: u16, down: bool) {
+        let sym = keymap::sym(evdev);
+        let scancode = keymap::set1(evdev);
+        self.inputs.push(Input::Key { scancode, sym, down, mods: self.mods });
+        if down && !self.mods.ctrl && !self.mods.logo && !self.mods.alt {
+            if let Some(c) = keymap::text(evdev, self.mods.shift, self.caps) {
+                self.inputs.push(Input::Text(c.to_string()));
+            }
+        }
+    }
+
+    /// Emit the repeats a held key has earned since the last frame.
+    fn pump_repeat(&mut self) {
+        let now = Instant::now();
+        let (key, mut due) = match self.repeat {
+            Some(r) => r,
+            None => return,
+        };
+        // A held arrow key that does nothing is the difference this makes, and
+        // the loop is bounded so that a console paused in a debugger does not
+        // come back to four thousand queued keystrokes.
+        let mut sent = 0;
+        while now >= due && sent < 8 {
+            self.emit_key(key, true);
+            due += self.repeat_gap;
+            sent += 1;
+        }
+        if sent == 8 {
+            due = now + self.repeat_gap;
+        }
+        self.repeat = Some((key, due));
+    }
+
     /// Drain whatever the compositor has said, without blocking.
-    pub fn poll(&mut self) -> Result<Changes, Error> {
-        let mut changes = Changes::default();
+    ///
+    /// Returns the events in the interface's own terms rather than the
+    /// protocol's, which is what lets `gui_loop` be the same loop on a Mac.
+    pub fn poll(&mut self) -> Result<Vec<Input>, Error> {
         self.conn.set_nonblocking(true)?;
         let r = self.conn.fill();
         self.conn.set_nonblocking(false)?;
@@ -674,11 +919,16 @@ impl Window {
         while let Some(e) = self.conn.next_event() {
             self.handle(&e)?;
         }
-        if self.pending_size.is_some() {
-            changes.resized = true;
+        self.pump_repeat();
+
+        let mut out = std::mem::take(&mut self.inputs);
+        if let Some((w, h)) = self.pending_size {
+            out.push(Input::Resized { w, h });
         }
-        changes.closed = self.closed;
-        Ok(changes)
+        if self.closed {
+            out.push(Input::Closed);
+        }
+        Ok(out)
     }
 
     /// The pixels, as `width * height` words of `0x00RRGGBB`.
@@ -785,6 +1035,64 @@ impl Window {
     }
 }
 
+/// A Linux input event code as the interface's button, or nothing.
+///
+/// Wayland passes evdev's codes straight through, so this is the one place
+/// that vocabulary reaches the console.
+fn button_of(code: u32) -> Option<Button> {
+    match code {
+        pointer::BTN_LEFT => Some(Button::Left),
+        pointer::BTN_RIGHT => Some(Button::Right),
+        pointer::BTN_MIDDLE => Some(Button::Middle),
+        _ => None,
+    }
+}
+
+/// The modifier mask, decoded against the CONVENTIONAL xkb indices.
+///
+/// THIS IS AN ASSUMPTION AND IT IS WORTH SEEING. `wl_keyboard.modifiers`
+/// carries indices into the keymap's own modifier list, and the keymap is the
+/// thing `keymap.rs` declines to parse. Shift 0, Lock 1, Control 2, Mod1 3 and
+/// Mod4 6 is what every ordinary keymap uses; a deliberately exotic one need
+/// not. Same trade as the layout table, made in the same place, for the same
+/// reason -- and pulled out here so a test can state it rather than leaving it
+/// inside a match arm.
+fn mods_of(depressed: u32) -> Mods {
+    Mods {
+        shift: depressed & 1 != 0,
+        ctrl: depressed & (1 << 2) != 0,
+        alt: depressed & (1 << 3) != 0,
+        logo: depressed & (1 << 6) != 0,
+    }
+}
+
+const XKB_LOCK_CAPS: u32 = 1 << 1;
+
+/// The seam. From `gui_loop` down, neither platform is visible.
+impl Surface for Window {
+    fn pixels(&mut self) -> &mut [u8] {
+        Window::pixels(self)
+    }
+    fn size(&self) -> (usize, usize) {
+        (self.width, self.height)
+    }
+    fn poll(&mut self) -> Result<Vec<Input>, String> {
+        Window::poll(self).map_err(|e| e.to_string())
+    }
+    fn apply_resize(&mut self) -> Result<(), String> {
+        Window::apply_resize(self).map_err(|e| e.to_string())
+    }
+    fn present(&mut self) -> Result<(), String> {
+        Window::present(self).map_err(|e| e.to_string())
+    }
+    fn closed(&self) -> bool {
+        Window::closed(self)
+    }
+    fn busy(&self) -> bool {
+        self.buffer_busy
+    }
+}
+
 impl Drop for Window {
     fn drop(&mut self) {
         // Politeness the compositor does not require -- it cleans up when the
@@ -813,6 +1121,7 @@ fn discover(conn: &mut Conn) -> Result<Globals, Error> {
     let mut compositor_id = 0;
     let mut shm_id = 0;
     let mut wm_base_id = 0;
+    let mut seat_id = 0;
     let mut seen: Vec<String> = Vec::new();
 
     loop {
@@ -845,6 +1154,9 @@ fn discover(conn: &mut Conn) -> Result<Globals, Error> {
             "wl_compositor" => (&mut compositor_id, 1u32),
             "wl_shm" => (&mut shm_id, 1),
             "xdg_wm_base" => (&mut wm_base_id, 1),
+            // 5 is where `wl_keyboard.repeat_info` arrived, and a held arrow
+            // key that does nothing is the difference it makes.
+            "wl_seat" => (&mut seat_id, 5),
             _ => continue,
         };
         if *slot != 0 {
@@ -874,7 +1186,80 @@ fn discover(conn: &mut Conn) -> Result<Globals, Error> {
         ));
     }
 
-    Ok(Globals { compositor: compositor_id, shm: shm_id, wm_base: wm_base_id })
+    Ok(Globals {
+        compositor: compositor_id,
+        shm: shm_id,
+        wm_base: wm_base_id,
+        seat: seat_id,
+    })
+}
+
+#[cfg(test)]
+mod input_tests {
+    //! The parts of phase 1 that need no compositor. The wiring itself is
+    //! proved by `tools/wl-check.sh` against a real one.
+    use super::*;
+
+    fn args_of(words: &[u32]) -> Vec<u8> {
+        words.iter().flat_map(|w| w.to_ne_bytes()).collect()
+    }
+
+    #[test]
+    fn a_wl_fixed_is_twenty_four_point_eight_and_not_an_integer() {
+        // Reading one as an i32 puts the pointer at 256 times the right place,
+        // which looks like a broken compositor rather than like arithmetic.
+        let body = args_of(&[(100i32 << 8) as u32, (250i32 << 8) as u32]);
+        let mut a = Args { body: &body, at: 0 };
+        assert_eq!(a.fixed(), Some(100));
+        assert_eq!(a.fixed(), Some(250));
+
+        // Sub-pixel positions truncate toward the pixel the pointer is in.
+        let body = args_of(&[((7i32 << 8) | 128) as u32]);
+        let mut a = Args { body: &body, at: 0 };
+        assert_eq!(a.fixed(), Some(7), "7.5 did not land in pixel 7");
+
+        // And it is SIGNED: a pointer dragged off the left edge is negative,
+        // not two million.
+        let body = args_of(&[(-3i32 << 8) as u32]);
+        let mut a = Args { body: &body, at: 0 };
+        assert_eq!(a.fixed(), Some(-3));
+    }
+
+    #[test]
+    fn the_pointer_buttons_are_evdevs_codes_and_nothing_else_gets_through() {
+        assert_eq!(button_of(0x110), Some(Button::Left));
+        assert_eq!(button_of(0x111), Some(Button::Right));
+        assert_eq!(button_of(0x112), Some(Button::Middle));
+        // Side, extra, forward, back. A mouse with eight buttons must not
+        // have six of them read as clicks.
+        for code in [0x113, 0x114, 0x115, 0x116, 0x117, 0, 1] {
+            assert_eq!(button_of(code), None, "{:#x} became a button", code);
+        }
+    }
+
+    #[test]
+    fn the_modifier_mask_is_decoded_against_the_conventional_xkb_indices() {
+        assert_eq!(mods_of(1), Mods { shift: true, ..Default::default() });
+        assert_eq!(mods_of(1 << 2), Mods { ctrl: true, ..Default::default() });
+        assert_eq!(mods_of(1 << 3), Mods { alt: true, ..Default::default() });
+        assert_eq!(mods_of(1 << 6), Mods { logo: true, ..Default::default() });
+        assert_eq!(mods_of(0), Mods::default());
+
+        // Caps lock is index 1 and is NOT shift -- it arrives in `locked`,
+        // not `depressed`, and it must not read as a held shift key.
+        assert_eq!(mods_of(XKB_LOCK_CAPS), Mods::default());
+
+        // Control is the toggling chord on this platform, Command on the Mac.
+        assert!(mods_of(1 << 2).toggling());
+        assert!(!mods_of(1).toggling());
+    }
+
+    #[test]
+    fn the_seat_is_bound_high_enough_to_have_repeat_info() {
+        // A held arrow key that does nothing is the difference version 5
+        // makes, and binding lower is how that becomes a mystery.
+        assert!(seat::CAP_POINTER == 1 && seat::CAP_KEYBOARD == 2);
+    }
 }
 
 #[cfg(test)]
@@ -1118,7 +1503,7 @@ mod tests {
 
         let start = std::time::Instant::now();
         while win.buffer_busy() && start.elapsed() < std::time::Duration::from_secs(5) {
-            win.poll().expect("polled");
+            let _ = win.poll().expect("polled");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(
@@ -1143,8 +1528,11 @@ mod tests {
         let start = std::time::Instant::now();
         let mut resized = false;
         while start.elapsed() < std::time::Duration::from_secs(3) {
-            let c = win.poll().expect("polled");
-            if c.resized {
+            let events = win.poll().expect("polled");
+            if events
+                .iter()
+                .any(|e| matches!(e, Input::Resized { .. }))
+            {
                 win.apply_resize().expect("resized");
                 resized = true;
                 win.fill(0x12, 0x34, 0x56);
