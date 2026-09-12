@@ -284,21 +284,22 @@ pub struct Face {
 
 /// The lab report's table, and the state of each row in this build.
 ///
-/// Terminal became `built: true` when `ssh.rs` was written -- that is what a
-/// phase looks like from in here, one row of a table changing and a pane
-/// appearing that was not there before.
+/// Terminal became `built: true` when `ssh.rs` was written, and Exchange and
+/// Send when `sftp.rs` was -- that is what a phase looks like from in here,
+/// rows of a table changing and a pane appearing that was not there before.
 ///
-/// Observe, Control, Exchange, Send and Message are still `built: false`
-/// because their transports are docs/wire.md's phases 6 to 8 and none of those
-/// is written yet. They are listed rather than omitted so that the interface
+/// Observe, Control and Message are still `built: false`. The first two are
+/// waiting for docs/wire.md's phases 7 and 8; Message is waiting for a
+/// node-side verb that does not exist, which console.md explains and phase 10
+/// is where it would be decided. They are listed rather than omitted so that the interface
 /// can say what it is missing and why, which is the difference between a
 /// console that is honest about being unfinished and one that looks finished.
 pub const FACES: &[Face] = &[
     Face { name: "Observe",  key: 'o', arity: Arity::Many, built: false },
     Face { name: "Control",  key: 'c', arity: Arity::One,  built: false },
     Face { name: "Terminal", key: 't', arity: Arity::One,  built: true },
-    Face { name: "Exchange", key: 'e', arity: Arity::One,  built: false },
-    Face { name: "Send",     key: 's', arity: Arity::Many, built: false },
+    Face { name: "Exchange", key: 'e', arity: Arity::One,  built: true },
+    Face { name: "Send",     key: 's', arity: Arity::Many, built: true },
     Face { name: "Message",  key: 'm', arity: Arity::Many, built: false },
     Face { name: "Run",      key: 'r', arity: Arity::Many, built: true },
     Face { name: "Scene",    key: 'S', arity: Arity::Many, built: true },
@@ -1057,15 +1058,22 @@ mod tests {
     #[test]
     fn an_unbuilt_verb_is_absent_rather_than_drawn() {
         let names: Vec<&str> = visible(Posture::Operator, 1).iter().map(|f| f.name).collect();
-        for unbuilt in ["Observe", "Control", "Exchange", "Send", "Message"] {
+        for unbuilt in ["Observe", "Control", "Message"] {
             assert!(!names.contains(&unbuilt), "{} was offered with no transport", unbuilt);
         }
-        // And the one that phase 5 built. This assertion is the difference the
-        // phase made, stated where a future phase will have to come and change
-        // it again.
+        // And the ones phases 5 and 6 built. These assertions are the
+        // difference those phases made, stated where a later phase will have
+        // to come and change them again.
+        for built in ["Terminal", "Exchange"] {
+            assert!(
+                names.contains(&built),
+                "{} has a transport now and is still not offered",
+                built
+            );
+        }
         assert!(
-            names.contains(&"Terminal"),
-            "Terminal has a transport now and is still not offered"
+            visible(Posture::Operator, 3).iter().any(|f| f.name == "Send"),
+            "Send is the verb for several nodes and was not offered for several"
         );
     }
 

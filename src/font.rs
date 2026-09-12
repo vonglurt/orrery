@@ -27,7 +27,13 @@ pub struct Font {
 }
 
 /// The code points baked past Latin-1, in the order they are stored.
-pub static EXTRAS: [u32; 5] = [0x2026, 0x2192, 0x25cf, 0x25cb, 0x2580];
+///
+/// U+2190 and U+2014 were added when the file browser drew a button labelled
+/// "← copy" and the arrow came out as a blank cell -- `glyph` refuses to panic
+/// on an unbaked character, which is right, and means a missing glyph is
+/// silent. IF A DRAWN STRING USES A CHARACTER, IT BELONGS ON THIS LIST; the
+/// test at the bottom of this file is what makes that true rather than hoped.
+pub static EXTRAS: [u32; 7] = [0x2026, 0x2192, 0x25cf, 0x25cb, 0x2580, 0x2190, 0x2014];
 
 impl Font {
     /// The rows for one character, or the blank cell for anything
@@ -61,7 +67,7 @@ impl Font {
 
 static BLANK: [u16; 20] = [0; 20];
 
-static F8X13_GLYPHS: [[u16; 20]; 229] = [
+static F8X13_GLYPHS: [[u16; 20]; 231] = [
     [0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+0020
     [0x0000, 0x0000, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0000, 0x0008, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // !
     [0x0000, 0x0000, 0x0024, 0x0024, 0x0024, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // "
@@ -291,6 +297,8 @@ static F8X13_GLYPHS: [[u16; 20]; 229] = [
     [0x0000, 0x0000, 0x0000, 0x003c, 0x007e, 0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x007e, 0x003c, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+25CF
     [0x0000, 0x0000, 0x0000, 0x003c, 0x0042, 0x0081, 0x0081, 0x0081, 0x0081, 0x0042, 0x003c, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+25CB
     [0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x00ff, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+2580
+    [0x0000, 0x0000, 0x0000, 0x0000, 0x0004, 0x0002, 0x007f, 0x0002, 0x0004, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+2190
+    [0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x00ff, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+2014
 ];
 
 /// 8x13.
@@ -301,7 +309,7 @@ pub static F8X13: Font = Font {
     first: 32,
 };
 
-static F10X20_GLYPHS: [[u16; 20]; 229] = [
+static F10X20_GLYPHS: [[u16; 20]; 231] = [
     [0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+0020
     [0x0000, 0x0000, 0x0000, 0x0030, 0x0030, 0x0030, 0x0030, 0x0030, 0x0030, 0x0030, 0x0030, 0x0030, 0x0030, 0x0000, 0x0030, 0x0030, 0x0000, 0x0000, 0x0000, 0x0000], // !
     [0x0000, 0x0000, 0x0000, 0x00cc, 0x00cc, 0x00cc, 0x0048, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // "
@@ -531,6 +539,8 @@ static F10X20_GLYPHS: [[u16; 20]; 229] = [
     [0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0078, 0x00fc, 0x01fe, 0x01fe, 0x01fe, 0x01fe, 0x00fc, 0x0078, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+25CF
     [0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0078, 0x0084, 0x0102, 0x0102, 0x0102, 0x0102, 0x0084, 0x0078, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+25CB
     [0x03ff, 0x03ff, 0x03ff, 0x03ff, 0x03ff, 0x03ff, 0x03ff, 0x03ff, 0x03ff, 0x03ff, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+2580
+    [0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0030, 0x0018, 0x000c, 0x03fe, 0x03fe, 0x000c, 0x0018, 0x0030, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+2190
+    [0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x03ff, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000], // U+2014
 ];
 
 /// 10x20.
@@ -540,3 +550,76 @@ pub static F10X20: Font = Font {
     glyphs: &F10X20_GLYPHS,
     first: 32,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_character_the_interface_draws_has_a_glyph() {
+        // A missing glyph is a BLANK CELL rather than a panic, which is right
+        // -- a node's output must not be able to crash the console -- and it
+        // means an unbaked character in the interface's own text is invisible
+        // until somebody looks at a screenshot. That is exactly how "← copy"
+        // shipped as "copy" for one frame. So the interface's own vocabulary
+        // is listed here, where a new one fails the build instead.
+        let used = "→←—…●○▀";
+        for face in [&F8X13, &F10X20] {
+            for c in used.chars() {
+                let g = face.glyph(c);
+                assert!(
+                    g.iter().any(|row| *row != 0),
+                    "{:?} draws nothing at {}x{}",
+                    c,
+                    face.width,
+                    face.height
+                );
+            }
+            // And a character nobody baked is a blank rather than a panic or
+            // somebody else's glyph.
+            assert!(face.glyph('\u{4e2d}').iter().all(|r| *r == 0));
+            assert!(face.glyph('\u{0}').iter().all(|r| *r == 0));
+        }
+    }
+
+    #[test]
+    fn the_two_new_glyphs_are_the_shapes_they_claim_to_be() {
+        // Both were authored by hand, so this is the check that they are not a
+        // blank row and a smudge.
+        let left = F8X13.glyph('←').to_vec();
+        let right = F8X13.glyph('→').to_vec();
+        assert_ne!(left, right, "the left arrow is the right arrow");
+        let mirror: Vec<u16> = right
+            .iter()
+            .map(|row| {
+                let mut out = 0u16;
+                for i in 0..8 {
+                    if row >> i & 1 == 1 {
+                        out |= 1 << (7 - i);
+                    }
+                }
+                out
+            })
+            .collect();
+        assert_eq!(left, mirror, "the left arrow is not the right one mirrored");
+
+        let dash = F8X13.glyph('—');
+        assert_eq!(dash.iter().filter(|r| **r != 0).count(), 1, "a dash is one rule");
+        assert_eq!(dash[6], 0x00ff, "the dash does not cross the cell");
+    }
+
+    #[test]
+    fn ascii_is_all_there_and_measured_by_the_character() {
+        for c in ' '..='~' {
+            let g = F8X13.glyph(c);
+            assert_eq!(g.len(), 13);
+            if c != ' ' {
+                assert!(g.iter().any(|r| *r != 0), "{:?} is blank", c);
+            }
+        }
+        assert_eq!(F8X13.measure("hello"), 40);
+        assert_eq!(F10X20.measure("hello"), 50);
+        // A multi-byte character is one cell wide, not one byte wide.
+        assert_eq!(F8X13.measure("←→"), 16);
+    }
+}

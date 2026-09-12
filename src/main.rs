@@ -37,6 +37,8 @@
 #[allow(dead_code)]
 mod crypto;
 mod draw;
+#[allow(dead_code)]
+mod files;
 mod fleet;
 mod font;
 mod http;
@@ -52,6 +54,8 @@ mod profile;
 mod pty;
 mod rfb;
 mod seat;
+#[allow(dead_code)]
+mod sftp;
 #[allow(dead_code)]
 mod ssh;
 mod surface;
@@ -220,6 +224,14 @@ fn main() {
         let theme = if dark { draw::DARK } else { draw::LIGHT };
         let what = if specimen_frame {
             Frame::Specimen
+        } else if frame_view == "files" {
+            Frame::Files {
+                nodes: if frame_select.is_empty() {
+                    vec!["museum-01".to_string()]
+                } else {
+                    frame_select.clone()
+                },
+            }
         } else if frame_view == "media" {
             Frame::Media { copal: copal.clone(), demo }
         } else {
@@ -389,6 +401,12 @@ enum Frame {
     },
     /// The card ledger, against a checkout.
     Media { copal: String, demo: bool },
+    /// The file browser, against this machine and a made-up node.
+    ///
+    /// The remote side is a fixture rather than a connection, for the same
+    /// reason `--demo` exists at all: the drawing has to be reviewable without
+    /// eight Raspberry Pis on the bench.
+    Files { nodes: Vec<String> },
 }
 
 /// THE SPECIMEN, which is phase 2's deliverable and its own regression test.
@@ -545,6 +563,14 @@ fn write_frame(
                 let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
                 media::draw(&mut u, &mut m);
             }
+            Frame::Files { ref nodes } => {
+                let here = std::env::current_dir().unwrap_or_else(|_| ".".into());
+                let mut f = files::Files::specimen(nodes.clone(), here);
+                let mut ui_state = ui::UiState::default();
+                ui_state.pointer = (-1, -1);
+                let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
+                files::draw(&mut u, ui::rect(0, 0, w as i32, h as i32), &mut f);
+            }
             Frame::Lab { ref doc, ref select, posture } => {
                 let model = lab::Model::parse(doc);
                 let mut state = lab::Lab::new(posture);
@@ -621,6 +647,9 @@ fn gui_loop<S: surface::Surface>(
     // and an authentication -- so it happens on a thread and the pane appears
     // when it is ready.
     let mut shell: Option<media::Job> = None;
+    // The file browser. Exchange and Send are the same pane aimed at one node
+    // or at several, so there is one of these rather than two.
+    let mut browser: Option<files::Files> = None;
     let opening: Arc<Mutex<Option<Result<media::Job, String>>>> = Arc::new(Mutex::new(None));
     let mut connecting: Option<String> = None;
     let mut shell_size = (0u32, 0u32);
@@ -660,6 +689,9 @@ fn gui_loop<S: surface::Surface>(
         if let Some(j) = shell.as_mut() {
             j.pump();
         }
+        if let Some(b) = browser.as_mut() {
+            b.pump();
+        }
         if let Some(done) = opening.lock().unwrap_or_else(|e| e.into_inner()).take() {
             connecting = None;
             match done {
@@ -689,6 +721,7 @@ fn gui_loop<S: surface::Surface>(
         let (w, h) = s.size();
         let mut action = None;
         let mut close_shell = false;
+        let mut close_browser = false;
         {
             let mut c = draw::Canvas::new(s.pixels(), w, h);
             let mut u = ui::Ui::begin(&mut c, theme, &inputs, &mut ui_state);
@@ -708,6 +741,14 @@ fn gui_loop<S: surface::Surface>(
                         media::Pane::Stop => j.stop(),
                         media::Pane::Close => close_shell = true,
                         media::Pane::Stay => {}
+                    }
+                }
+                (None, _) if browser.is_some() => {
+                    let b = browser.as_mut().expect("checked");
+                    let at = ui::rect(0, 0, w as i32, h as i32);
+                    files::keys(&mut u, b);
+                    if files::draw(&mut u, at, b) {
+                        close_browser = true;
                     }
                 }
                 (None, nav::View::Lab) => action = lab::draw(&mut u, &model, &mut lab_state),
@@ -735,6 +776,9 @@ fn gui_loop<S: surface::Surface>(
         if close_shell {
             shell = None;
             shell_size = (0, 0);
+        }
+        if close_browser {
+            browser = None;
         }
         if let Some(lab::Action::Verb { name, nodes }) = action {
             if name == "Terminal" {
@@ -768,6 +812,34 @@ fn gui_loop<S: surface::Surface>(
                         );
                     }
                 }
+            } else if name == "Exchange" || name == "Send" {
+                if browser.is_none() && shell.is_none() {
+                    match dials_for(&model, &nodes, ssh_user) {
+                        Ok(dials) => {
+                            let start = std::env::current_dir().unwrap_or_else(|_| {
+                                std::path::PathBuf::from(
+                                    std::env::var("HOME").unwrap_or_else(|_| "/".into()),
+                                )
+                            });
+                            browser = Some(files::Files::open(dials, start));
+                        }
+                        // A missing operator key or certificate is the usual
+                        // reason, and it is the same sentence for every verb
+                        // that needs one.
+                        Err(e) => {
+                            *results.lock().unwrap_or_else(|err| err.into_inner()) =
+                                Some(lab::Results {
+                                    verb: name.to_string(),
+                                    running: false,
+                                    items: vec![lab::Outcome {
+                                        node: nodes.first().cloned().unwrap_or_default(),
+                                        code: 1,
+                                        output: e,
+                                    }],
+                                });
+                        }
+                    }
+                }
             } else {
                 run_verb(name, nodes, Arc::clone(&fleet), Arc::clone(&results));
             }
@@ -775,6 +847,40 @@ fn gui_loop<S: surface::Surface>(
 
         thread::sleep(frame);
     }
+}
+
+/// The key material for each selected node, or the first sentence that
+/// explains why there is none.
+///
+/// ONE PLACE THAT KNOWS WHERE CREDENTIALS LIVE. Terminal, Exchange and Send all
+/// need the same three files, and three copies of that knowledge would be three
+/// things to change when the CA moves.
+fn dials_for(
+    model: &lab::Model,
+    nodes: &[String],
+    user: &str,
+) -> Result<Vec<(String, ssh::Dial)>, String> {
+    let home = match std::env::var("HOME") {
+        Ok(h) => std::path::PathBuf::from(h).join(".copal"),
+        Err(_) => std::path::PathBuf::from("/etc/copal"),
+    };
+    let mut out = Vec::new();
+    for node in nodes {
+        let address = model
+            .nodes
+            .iter()
+            .find(|n| n.id == *node)
+            .map(|n| n.address.clone())
+            .unwrap_or_default();
+        out.push((
+            node.clone(),
+            ssh::Dial::for_node(&home, &model.fleet, node, &address, user)?,
+        ));
+    }
+    if out.is_empty() {
+        return Err("nothing was selected".into());
+    }
+    Ok(out)
 }
 
 /// Open a shell on a node, on a thread, and hand back the pane when it is up.

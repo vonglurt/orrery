@@ -54,7 +54,7 @@ bottom one:
   src/crypto.rs   the primitives           ~2000 lines, every line has a test vector
        │
        ├── src/ssh.rs    SSH-2 transport + auth + channels   ~1400
-       │        └── src/sftp.rs   SFTP v3                    ~600
+       │        └── src/sftp.rs   SFTP v3                     900 ✓
        │
        └── src/tls.rs    TLS 1.3 client, one suite           ~1100
                 └── src/rdp.rs    RDP client                 ~2200
@@ -187,9 +187,21 @@ types out of a possible forty:
 `HANDLE`, `DATA` and `NAME` coming back.
 
 No symlink creation, no `SETSTAT`, no `FSETSTAT`, no extensions. Reads and
-writes are pipelined — 32 KiB requests, 16 outstanding — because a serial
-request-per-block over a LAN with a 1 ms round trip caps at about 30 MB/s and
-the boards can do better than that.
+writes are pipelined — 32 KiB requests, **eight** outstanding — because a
+serial request-per-block over a LAN with a 1 ms round trip caps at about
+30 MB/s and the boards can do better than that. (Eight rather than the sixteen
+this document first guessed: a quarter of a megabyte in flight already fills a
+hundred-megabit link at museum latencies, and it is half as much state to
+unwind when a transfer stalls.)
+
+**Built, and against the real server.** This is the one phase with no fake in
+it: `sftp-server` is on every machine this is developed on and is the same
+binary a node runs, so the transport is a trait — an `ssh::Session` against a
+node, a pair of pipes in the tests. Answers are matched to offsets by request
+id and the file is written by seeking, because a pipelined reader must assume
+its answers arrive in any order; a short read puts the remainder of its chunk
+back on the queue rather than losing it, which is how a transfer ends one
+block short and corrupt.
 
 **Send on a selection is one transfer per node, sequential**, for the same
 reason `verb_each` is sequential: eight SSH sessions opened at once from a Pi is

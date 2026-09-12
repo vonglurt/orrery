@@ -70,6 +70,11 @@ export ORRERY_SSH_CA="$D/fleet_ca.pub"
 cd /w
 status=0
 cargo test ssh:: -- --nocapture --test-threads=1 || status=$?
+# The SFTP half runs against the same package's `sftp-server` binary. It needs
+# no sshd at all -- it is a subsystem on a pipe -- but this is the container
+# where OpenSSH is installed, so this is where it means something.
+cargo test sftp:: -- --test-threads=1 || status=$?
+cargo test files:: || status=$?
 echo "--- sshd said ---"
 tail -30 "$D/sshd.log" || true
 kill "$(cat "$D/sshd.pid")" 2>/dev/null || true

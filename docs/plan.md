@@ -11,6 +11,39 @@ the design. The node's half is
 
 ---
 
+## The board
+
+**Every phase has a state, and this table is where it is kept.** A plan whose
+status lives in prose is a plan nobody can read at a glance, and a phase that
+is neither done nor listed is a phase that quietly stops existing. Each heading
+below carries the same word as its row here; if the two ever disagree, this
+table is wrong and the heading is right, because the heading sits next to the
+work.
+
+| | phase | state | what it delivers | what it unblocks |
+|---|---|---|---|---|
+| 0 | The seams | **done** | `surface.rs`, the `Surface` trait, `Offscreen` | everything |
+| 1 | Input, and the toolkit | **done** | `wl.rs` seat, `keymap.rs`, `ui.rs` | every click and keystroke |
+| 2 | The Mac backend | **done** | `mac.rs`, AppKit through the Objective-C runtime | developing on the machine this is written on |
+| 3 | The museum interface | **done** | `lab.rs`, `nav.rs`, the verb bar | the console people stand in front of |
+| 4 | `crypto.rs` | **done** | the primitives, 35 vector tests | phases 5–8, all of them |
+| 5 | `ssh.rs` and Terminal | **done** | the transport, the CA check, a shell in a pane | Terminal; phase 6 rides the same connection |
+| 6 | `sftp.rs`, Exchange and Send | **done** | SFTP v3, the file browser, fan-out send | Exchange, Send |
+| 7 | `tls.rs` | **next** | TLS 1.3 client, ChaCha only (R4) | phase 8 |
+| 8 | `rdp.rs`, Control and Observe | **backlog** | the RDP client, mutual TLS to the node | Control, Observe — the last two verbs |
+| 9 | The media pane | **done** | `media.rs`, `pty.rs`, the card ledger | writing SD cards from the console |
+| 10 | The `copal-alpine-linux` side | **backlog** | `copal-prep.sh`, `copal-fleet-view`, `make sync-profile` | the node enforcing what the console speaks |
+| 11 | The truth pass | **backlog** | the README and every "not built" line re-read | shipping without a lie in the documentation |
+
+**Backlog means chosen and not started, not "maybe".** Nothing on this list is
+optional to the design; what is optional is stopping — after 3 the console
+works, after 6 it has a shell and file transfer, and only 7–8 depend on
+anything unverified. Message stays absent past the end of this plan because it
+needs a node-side verb that does not exist; `console.md` says so and phase 10
+is where that would be decided.
+
+---
+
 ## The size of it, stated up front
 
 | | today | added | after |
@@ -34,7 +67,7 @@ phases 7–8 depend on anything unverified.
 
 ---
 
-## Phase 0 · The seams
+## Phase 0 · The seams — **done**
 
 No behaviour changes. This is the refactor that makes the rest additive rather
 than invasive.
@@ -52,7 +85,7 @@ unchanged PPM means the canvas survived the seam.
 
 ---
 
-## Phase 1 · Input, and the toolkit
+## Phase 1 · Input, and the toolkit — **done**
 
 | | |
 |---|---|
@@ -70,7 +103,7 @@ a broken compositor.
 
 ---
 
-## Phase 2 · The Mac backend
+## Phase 2 · The Mac backend — **done**
 
 | | |
 |---|---|
@@ -89,7 +122,7 @@ signatures, the CGImage byte-order flags, and the main thread.
 
 ---
 
-## Phase 3 · The museum interface
+## Phase 3 · The museum interface — **done**
 
 **The first phase that is worth having on its own.**
 
@@ -110,7 +143,7 @@ no fleet at all is how this is developed.
 
 ---
 
-## Phase 4 · `crypto.rs` — **built**
+## Phase 4 · `crypto.rs` — **done**
 
 | | |
 |---|---|
@@ -143,7 +176,7 @@ in §6 of `wire.md`: that number is a constraint on phase 7, not a footnote.
 
 ---
 
-## Phase 5 · `ssh.rs` and Terminal — **built**
+## Phase 5 · `ssh.rs` and Terminal — **done**
 
 | | |
 |---|---|
@@ -181,21 +214,54 @@ trust-on-first-use path, no prompt, and no bare-key branch to fall back to.
 
 ---
 
-## Phase 6 · `sftp.rs`, Exchange and Send
+## Phase 6 · `sftp.rs`, Exchange and Send — **done**
 
 | | |
 |---|---|
-| adds | `src/sftp.rs` ~600, `lab.rs` +300 |
-| does | SFTP v3, pipelined; the two-pane browser; Send fanned out with per-node results |
-| proves | against OpenSSH's own `sftp-server` over a pipe — no fake at all |
+| adds | `src/sftp.rs` 900, `src/files.rs` 800, `font.rs` +2 glyphs, `ssh.rs` +15, `main.rs` +60 |
+| does | SFTP v3, pipelined eight deep; the two-pane browser; Send fanned out with per-node results; `--frame-view files` |
+| proves | **OpenSSH's own `sftp-server` over a pipe — no fake at all**, ten tests, on the Mac and in the container |
 
-**Stopping here is a defensible place to stop.** A console with the wall, a
-selection, the CLI's verbs, a shell and file transfer is most of the lab
-report's table.
+**There is no fake server in this phase and there should not be.** `rfb.rs` and
+`ssh.rs` each carry one because there was no way to run the real thing in a
+unit test; here the binary is sitting on both machines this is developed on
+(`/usr/libexec/sftp-server` on a Mac, `/usr/lib/ssh/sftp-server` on Alpine),
+and it is the same binary a node runs. So the transport is a trait: an
+`ssh::Session` against a node, a pair of pipes in the tests.
+
+**Exchange and Send are one pane aimed differently.** Exchange is one node and
+two directions; Send is many nodes and one. With several nodes the right-hand
+column lists the machines rather than a directory, because there is no single
+directory to browse when there are five of them, and each row fills in with
+its own result as the fan-out reaches it. The fan-out is sequential for the
+reason `fleet.rs` gives about `verb_each`: eight parallel transfers over one
+switch arrive at the same time as eight sequential ones, except that a failure
+halfway leaves seven half-written files and no account of which.
+
+**Pipelining is the whole of the transfer speed.** A 32 KB read that waits for
+its answer moves one chunk per round trip; eight are kept in flight, answers
+are matched to offsets by request id, and the file is written by seeking
+rather than appending — because the answers are allowed to arrive in any
+order. A short read puts the rest of its chunk back on the queue instead of
+being quietly lost, which is how a transfer ends one block short and corrupt.
+
+**Two bugs the rendered frame caught that no test would have.** `--frame-view
+files` was added for exactly this and paid for itself twice in one sitting:
+`Rect::cut_bottom` returns the piece it took FIRST, the opposite of `cut_top`,
+which drew the entire browser inside a forty-pixel strip; and the gutter
+between the columns was never painted, so it showed the canvas's own zeroes as
+a black hole down the middle. **And a third:** the button labelled `← copy`
+drew as `copy`, because `font.rs` bakes U+2192 and not U+2190 and a missing
+glyph is a blank cell rather than a panic. The arrow and the em dash are baked
+now, and `every_character_the_interface_draws_has_a_glyph` fails the build if
+the interface reaches for another one.
+
+**Verb bar: three not built.** Observe and Control are waiting for phases 7–8.
+Message is waiting for a node-side verb that does not exist.
 
 ---
 
-## Phase 7 · `tls.rs`
+## Phase 7 · `tls.rs` — **next**
 
 | | |
 |---|---|
@@ -208,7 +274,7 @@ separately.
 
 ---
 
-## Phase 8 · `rdp.rs`, Control and Observe
+## Phase 8 · `rdp.rs`, Control and Observe — **backlog**
 
 **Every risk in this plan is in this phase.**
 
@@ -239,7 +305,7 @@ phase whose failure is survivable by design**, and that is deliberate.
 
 ---
 
-## Phase 9 · The media pane
+## Phase 9 · The media pane — **done**
 
 | | |
 |---|---|
@@ -250,7 +316,7 @@ phase whose failure is survivable by design**, and that is deliberate.
 
 ---
 
-## Phase 10 · The `copal-alpine-linux` side
+## Phase 10 · The `copal-alpine-linux` side — **backlog**
 
 | | |
 |---|---|
@@ -265,7 +331,7 @@ emits them.
 
 ---
 
-## Phase 11 · The truth pass
+## Phase 11 · The truth pass — **backlog**
 
 Documentation last, and specifically **the corrections**, because three things
 this repository currently says will have stopped being true:

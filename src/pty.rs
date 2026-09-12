@@ -50,7 +50,9 @@ const O_NONBLOCK: c_int = 0x0004;
 #[cfg(target_os = "linux")]
 const O_NONBLOCK: c_int = 0o4000;
 
-fn set_nonblocking(fd: RawFd) -> Result<(), String> {
+/// Shared with `sftp.rs`, which runs `sftp-server` on a pair of pipes rather
+/// than on a terminal and wants the same "give me what has arrived" contract.
+pub fn set_nonblocking(fd: RawFd) -> Result<(), String> {
     unsafe {
         let flags = fcntl(fd, F_GETFL, 0);
         if flags < 0 {

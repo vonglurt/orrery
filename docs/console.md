@@ -137,7 +137,7 @@ a session aimed at one node** — there is no third kind.
 | **Observe** `o` | view-only screen | the wall *is* observe-many | RDP or RFB, input never sent |
 | **Control** `c` | screen, keyboard, pointer | **refused** | RDP where the node is Wayland, RFB where it is X11 |
 | **Terminal** `t` | a shell | **refused** | SSH as the login user, `fleet-human` principal |
-| **Exchange** `e` | two-pane file browser | **refused** | SFTP over the same connection |
+| **Exchange** `e` | two-pane file browser | **refused** | SFTP over the same connection — **built** |
 | **Send** `s` | push a file | push to all | SFTP put, per-node result |
 | **Message** `m` | banner | banner on all | `copal fleet run message`, once the node has the verb |
 | **Run** `r` | one verb | fan-out, a result each | `copal fleet run --node ID …` |
@@ -215,10 +215,19 @@ because a gallery screen is a machine an unattended member of the public is
 standing in front of, and "the button is hidden" is not a security property.
 
 The operator posture additionally requires the operator key to be readable at
-`~/.copal/fleets/<fleet>/operator`. Without it the session verbs — Control,
-Terminal, Exchange, Send — are absent even under `--operator`, because there is
-no credential to make them with. The status line says which of the two is
-missing rather than dimming a button with no explanation.
+`~/.copal/fleets/<fleet>/operator`.
+
+**This paragraph used to say the session verbs would be absent without it, and
+the built console does something else on purpose.** Terminal, Exchange and Send
+are offered, and pressing one produces the sentence that says exactly what is
+missing — the key, the certificate, or the CA — in the results pane every other
+verb's failure already goes to. The reason for the change is two lines above:
+*"the button is hidden" is not a security property*. An absent button teaches
+an operator nothing and looks identical to a console that is broken; a refusal
+that names the file is something a person can act on. Absence is still the
+right answer for a verb with **no transport at all** — there is nothing to say
+about Observe except that it does not exist yet — and that rule has not
+changed.
 
 ---
 

@@ -1956,7 +1956,7 @@ fn ghash(h: &[u64; 2], data: &[&[u8]]) -> [u8; 16] {
     let mut y = [0u64; 2];
     let mut block = [0u8; 16];
     let mut n = 0usize;
-    let mut absorb = |y: &mut [u64; 2], b: &[u8; 16]| {
+    let absorb = |y: &mut [u64; 2], b: &[u8; 16]| {
         let v = be(b);
         y[0] ^= v[0];
         y[1] ^= v[1];

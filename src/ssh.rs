@@ -1395,6 +1395,19 @@ impl Session {
         self.request("shell", &[], true)
     }
 
+    /// Ask for a subsystem rather than a shell -- which on every node in the
+    /// fleet means `sftp`, and is how `sftp.rs` gets a channel to talk over.
+    ///
+    /// A subsystem is a name the server looks up in its own configuration, not
+    /// a path this console gets to choose. That is the point: `exec` would let
+    /// the console name a binary, and the node's `Subsystem sftp` line is the
+    /// node deciding what the word means.
+    pub fn subsystem(&mut self, name: &str) -> Result<(), String> {
+        let mut a = Buf::new();
+        a.str(name);
+        self.request("subsystem", &a.take(), true)
+    }
+
     /// Run one command rather than a shell. This is the verb that runs the
     /// same thing on every node.
     pub fn exec(&mut self, command: &str) -> Result<(), String> {
