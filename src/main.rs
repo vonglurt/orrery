@@ -582,6 +582,22 @@ fn write_frame(
             Frame::Lab { ref doc, ref select, posture } => {
                 let model = lab::Model::parse(doc);
                 let mut state = lab::Lab::new(posture);
+                // `--frame-verb NAME` draws the bar as the prompt that verb
+                // opens, which is the only way to review a question that only
+                // exists between two clicks.
+                if let Some(verb) = std::env::var("ORRERY_FRAME_VERB").ok().filter(|v| !v.is_empty())
+                {
+                    if let Some(face) = lab::FACES.iter().find(|f| f.name == verb) {
+                        state.ask = Some(lab::Ask {
+                            verb: face.name,
+                            nodes: select.clone(),
+                            field: ui::Field::new("please stand back"),
+                            prompt: verbs::lookup(&face.name.to_ascii_lowercase())
+                                .and_then(|v| verbs::prompt_for(v.arg))
+                                .unwrap_or("word:"),
+                        });
+                    }
+                }
                 for id in select {
                     if model.index_of(id).is_some() {
                         state.selection.push(id.clone());
@@ -833,7 +849,9 @@ fn gui_loop<S: surface::Surface>(
             }
             desktop = None;
         }
-        if let Some(lab::Action::Verb { name, nodes }) = action {
+        if let Some(lab::Action::Typed { name, nodes, arg }) = action {
+            run_verb(name, nodes, Some(arg), Arc::clone(&fleet), Arc::clone(&results));
+        } else if let Some(lab::Action::Verb { name, nodes }) = action {
             if name == "Terminal" {
                 // One node, because a shell is a conversation with one
                 // machine -- `Arity::One` in the verb table already says so,
@@ -867,7 +885,41 @@ fn gui_loop<S: surface::Surface>(
                 }
             } else if name == "Control" {
                 if let Some(node) = nodes.first().cloned() {
-                    if desktop.is_none() && shell.is_none() && connecting.is_none() {
+                    // WHAT THE NODE SAYS ABOUT ITS OWN SCREEN, rather than a
+                    // port scan. `remote` is one of off, vnc:PORT, rdp:PORT or
+                    // "not installed", and each of those is a different
+                    // sentence -- the useless one being the connection attempt
+                    // that times out because nothing was ever listening.
+                    let said = model
+                        .nodes
+                        .iter()
+                        .find(|n| n.id == node)
+                        .and_then(|n| n.remote.clone())
+                        .unwrap_or_default();
+                    let refusal = match said.as_str() {
+                        s if s.starts_with("rdp") => None,
+                        "" => None, // has not said; try, and let the socket answer
+                        "off" => Some(
+                            "that node's screen is not on the network.                              Run `copal fleet run remote start` on it first."
+                                .to_string(),
+                        ),
+                        "not installed" => Some(
+                            "that node has no remote-desktop server installed -- see                              fleet-control.md H1."
+                                .to_string(),
+                        ),
+                        s if s.starts_with("vnc") => Some(format!(
+                            "that node serves RFB ({}), and this window's Control speaks RDP.                              The seat speaks RFB today: orrery --seat {}",
+                            s, node
+                        )),
+                        s => Some(format!("that node says its screen is {:?}", s)),
+                    };
+                    if let Some(why) = refusal {
+                        *results.lock().unwrap_or_else(|e| e.into_inner()) = Some(lab::Results {
+                            verb: "Control".to_string(),
+                            running: false,
+                            items: vec![lab::Outcome { node: node.clone(), code: 1, output: why }],
+                        });
+                    } else if desktop.is_none() && shell.is_none() && connecting.is_none() {
                         let address = model
                             .nodes
                             .iter()
@@ -917,8 +969,19 @@ fn gui_loop<S: surface::Surface>(
                         }
                     }
                 }
+            } else if let Some(prompt) = verbs::lookup(&name.to_ascii_lowercase())
+                .and_then(|v| verbs::prompt_for(v.arg))
+            {
+                // It needs a word. The bar becomes the question rather than
+                // the verb running with a guess.
+                lab_state.ask = Some(lab::Ask {
+                    verb: name,
+                    nodes,
+                    field: ui::Field::default(),
+                    prompt,
+                });
             } else {
-                run_verb(name, nodes, Arc::clone(&fleet), Arc::clone(&results));
+                run_verb(name, nodes, None, Arc::clone(&fleet), Arc::clone(&results));
             }
         }
 
@@ -1053,6 +1116,7 @@ fn open_shell(
 fn run_verb(
     name: &'static str,
     nodes: Vec<String>,
+    typed: Option<String>,
     fleet: Arc<Fleet>,
     results: Arc<Mutex<Option<lab::Results>>>,
 ) {
@@ -1063,16 +1127,27 @@ fn run_verb(
         Some(v) => v,
         None => return,
     };
+    // THE WORD THE OPERATOR TYPED IS VALIDATED HERE, not where it was typed.
+    // `verbs.rs` is the allow-list and it owns what a scene name or a banner
+    // may contain; the field is a place to type, not a place to decide.
     let arg = match verb.arg {
         verbs::Arg::None => None,
-        // Phase 3 offers the verbs that need no typing. Scene and Run grow a
-        // field in the pane; until then they are not dispatched rather than
-        // dispatched with a guess.
-        _ => return,
+        _ => typed,
     };
-    let plan = match verbs::build_argv(verb, arg) {
+    let plan = match verbs::build_argv(verb, arg.as_deref()) {
         Ok(p) => p,
-        Err(_) => return,
+        Err(why) => {
+            *results.lock().unwrap_or_else(|e| e.into_inner()) = Some(lab::Results {
+                verb: name.to_string(),
+                running: false,
+                items: vec![lab::Outcome {
+                    node: nodes.first().cloned().unwrap_or_default(),
+                    code: 1,
+                    output: why.to_string(),
+                }],
+            });
+            return;
+        }
     };
 
     *results.lock().unwrap_or_else(|e| e.into_inner()) = Some(lab::Results {
@@ -1303,7 +1378,7 @@ fn verb(console: &Console, req: &Request) -> Response {
         Err(e) => return err(400, &e.to_string()),
     };
     let arg = parsed.get("arg").and_then(|a| a.as_str());
-    let plan = match verbs::build_argv(verb, arg) {
+    let plan = match verbs::build_argv(verb, arg.as_deref()) {
         Ok(p) => p,
         Err(e) => return err(400, &e.to_string()),
     };

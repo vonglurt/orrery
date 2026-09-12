@@ -599,3 +599,215 @@ mod tests {
         assert!(f.closed);
     }
 }
+
+// ---------------------------------------------------------------------------
+// A place to type
+// ---------------------------------------------------------------------------
+
+/// One line of typing, and where the caret is in it.
+///
+/// WHY THIS EXISTS AT ALL, AFTER SIX PHASES WITHOUT IT. Run, Scene and Message
+/// each take an argument, and until something could take one they were buttons
+/// with nothing behind them -- `main.rs` said so in a comment and declined to
+/// dispatch them. A console that refuses to draw a verb it cannot perform has
+/// to be able to perform the ones it draws.
+///
+/// DELIBERATELY NOT A TEXT EDITOR. One line, no selection, no clipboard, no
+/// undo, no scrolling. Everything a person types into this console is a node
+/// name, a scene name or a sentence for a screen, and all three fit.
+#[derive(Debug, Default, Clone)]
+pub struct Field {
+    pub text: String,
+    /// A byte offset into `text`, always on a character boundary.
+    pub caret: usize,
+}
+
+impl Field {
+    pub fn new(text: &str) -> Field {
+        Field { text: text.to_string(), caret: text.len() }
+    }
+
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.caret = 0;
+    }
+
+    fn left(&mut self) {
+        let mut at = self.caret;
+        while at > 0 {
+            at -= 1;
+            if self.text.is_char_boundary(at) {
+                break;
+            }
+        }
+        self.caret = at;
+    }
+
+    fn right(&mut self) {
+        let mut at = self.caret;
+        while at < self.text.len() {
+            at += 1;
+            if self.text.is_char_boundary(at) {
+                break;
+            }
+        }
+        self.caret = at;
+    }
+
+    fn backspace(&mut self) {
+        if self.caret == 0 {
+            return;
+        }
+        let from = self.caret;
+        self.left();
+        self.text.replace_range(self.caret..from, "");
+    }
+
+    /// Take a frame's typing. Returns true when Return was pressed.
+    pub fn feed(&mut self, f: &Frame) -> bool {
+        for ch in f.text.chars() {
+            // Control characters arrive as text on some platforms -- a Return
+            // is a key, not a character, and letting one through would put a
+            // newline inside a one-line field.
+            if (ch as u32) < 0x20 || ch == '\u{7f}' {
+                continue;
+            }
+            if self.text.len() + ch.len_utf8() > 400 {
+                break;
+            }
+            self.text.insert(self.caret, ch);
+            self.caret += ch.len_utf8();
+        }
+        if f.pressed(Sym::Backspace) {
+            self.backspace();
+        }
+        if f.pressed(Sym::Left) {
+            self.left();
+        }
+        if f.pressed(Sym::Right) {
+            self.right();
+        }
+        if f.pressed(Sym::Home) {
+            self.caret = 0;
+        }
+        if f.pressed(Sym::End) {
+            self.caret = self.text.len();
+        }
+        f.pressed(Sym::Return)
+    }
+}
+
+impl<'c, 'p> Ui<'c, 'p> {
+    /// Draw a field. It is always the focused thing when it is on screen --
+    /// the pane it lives in has nothing else to type into.
+    pub fn field(&mut self, r: Rect, f: &Field, placeholder: &str) {
+        let t = self.t;
+        self.panel(r, t.tile);
+        self.outline(r, t.accent);
+        let y = r.y + (r.h - F8X13.height as i32) / 2;
+        let inner = r.x + 6;
+        if f.text.is_empty() && !placeholder.is_empty() {
+            self.label_in(inner, y, r.w - 12, placeholder, &F8X13, t.dim);
+        } else {
+            self.label_in(inner, y, r.w - 12, &f.text, &F8X13, t.ink);
+        }
+        // The caret sits where the next character goes, measured in characters
+        // rather than in bytes -- a caret after a multi-byte character drawn at
+        // its byte offset lands in the middle of the next word.
+        let before = f.text[..f.caret.min(f.text.len())].chars().count() as i32;
+        let x = inner + before * F8X13.width as i32;
+        if x < r.right() - 2 {
+            self.c.rect(x, y, 1, F8X13.height as i32, t.accent);
+        }
+    }
+}
+
+#[cfg(test)]
+mod field_tests {
+    use super::*;
+    use crate::surface::{Input, Mods};
+
+    fn frame(events: &[Input]) -> Frame {
+        let mut s = UiState::default();
+        Frame::gather(events, &mut s)
+    }
+
+    fn typed(s: &str) -> Vec<Input> {
+        vec![Input::Text(s.to_string())]
+    }
+
+    fn key(sym: Sym) -> Vec<Input> {
+        vec![Input::Key { scancode: 0, sym, down: true, mods: Mods::default() }]
+    }
+
+    #[test]
+    fn typing_lands_where_the_caret_is() {
+        let mut f = Field::default();
+        f.feed(&frame(&typed("stand back")));
+        assert_eq!(f.text, "stand back");
+        assert_eq!(f.caret, 10);
+
+        f.feed(&frame(&key(Sym::Home)));
+        f.feed(&frame(&typed("please ")));
+        assert_eq!(f.text, "please stand back");
+        f.feed(&frame(&key(Sym::End)));
+        f.feed(&frame(&typed("!")));
+        assert_eq!(f.text, "please stand back!");
+    }
+
+    #[test]
+    fn backspace_takes_one_character_and_not_one_byte() {
+        // A node name is ASCII, and a banner might not be. Deleting a byte
+        // would leave half a character in the string and panic the next time
+        // anything sliced it.
+        let mut f = Field::new("café");
+        f.feed(&frame(&key(Sym::Backspace)));
+        assert_eq!(f.text, "caf");
+        assert_eq!(f.caret, 3);
+        f.feed(&frame(&key(Sym::Backspace)));
+        f.feed(&frame(&key(Sym::Backspace)));
+        f.feed(&frame(&key(Sym::Backspace)));
+        f.feed(&frame(&key(Sym::Backspace)));
+        assert_eq!(f.text, "", "backspace on an empty field is not an error");
+    }
+
+    #[test]
+    fn the_arrows_step_over_characters_too() {
+        let mut f = Field::new("é9");
+        f.feed(&frame(&key(Sym::Left)));
+        assert_eq!(f.caret, 2, "left did not land on a character boundary");
+        f.feed(&frame(&key(Sym::Left)));
+        assert_eq!(f.caret, 0);
+        f.feed(&frame(&key(Sym::Left)));
+        assert_eq!(f.caret, 0, "left ran off the beginning");
+        f.feed(&frame(&key(Sym::Right)));
+        assert_eq!(f.caret, 2);
+    }
+
+    #[test]
+    fn a_control_character_is_not_text() {
+        // Some platforms deliver Return and Escape as text as well as as keys.
+        // A newline inside a one-line field is a field that draws over the
+        // rest of the bar.
+        let mut f = Field::default();
+        f.feed(&frame(&typed("a\nb\tc\u{7f}")));
+        assert_eq!(f.text, "abc");
+    }
+
+    #[test]
+    fn return_is_what_submits_and_it_is_not_typed() {
+        let mut f = Field::new("show");
+        assert!(f.feed(&frame(&key(Sym::Return))));
+        assert_eq!(f.text, "show", "the Return went into the field");
+        assert!(!f.feed(&frame(&typed("x"))));
+    }
+
+    #[test]
+    fn a_field_has_a_bound_and_stops_rather_than_growing() {
+        let mut f = Field::default();
+        for _ in 0..50 {
+            f.feed(&frame(&typed(&"x".repeat(20))));
+        }
+        assert!(f.text.len() <= 400, "the field grew to {}", f.text.len());
+    }
+}

@@ -20,6 +20,9 @@ pub enum Arg {
     Name,
     /// on / off / reboot, and nothing else.
     Power,
+    /// A sentence for a screen: letters, digits, spaces and six marks of
+    /// punctuation, 200 characters at most. The node enforces the same rule.
+    Banner,
 }
 
 pub struct Verb {
@@ -56,7 +59,22 @@ pub const WRITE_VERBS: &[Verb] = &[
     Verb { name: "run",      argv: &["run", "{arg}"],                arg: Arg::Name,  per_node: true },
     Verb { name: "power",    argv: &["run", "power", "{arg}"],       arg: Arg::Power, per_node: true },
     Verb { name: "snapshot", argv: &["run", "snapshot", "restore"],  arg: Arg::None,  per_node: true },
+    // THE COMMENT ABOVE WAS TRUE UNTIL THE NODE GREW THE VERB. Phase 10 put
+    // `message` in copal-fleet-exec and `copal-notify` beside it, so the
+    // banner exists and can be offered. It travels as `run message TEXT`,
+    // which is how every other forced-command verb travels.
+    Verb { name: "message",  argv: &["run", "message", "{arg}"],     arg: Arg::Banner, per_node: true },
 ];
+
+/// What to ask for, for a verb that needs a word. `None` for a verb that does
+/// not -- which is also how `main.rs` decides whether to open the prompt.
+pub fn prompt_for(kind: Arg) -> Option<&'static str> {
+    match kind {
+        Arg::None | Arg::Power => None,
+        Arg::Name => Some("name:"),
+        Arg::Banner => Some("banner:"),
+    }
+}
 
 pub fn lookup(name: &str) -> Option<&'static Verb> {
     WRITE_VERBS.iter().find(|v| v.name == name)
@@ -105,6 +123,15 @@ pub fn validate_nodes(want: &[String], doc: &Value) -> Result<Vec<String>, Refus
     Ok(out)
 }
 
+/// The banner charset, spelled once here and once in the node's forced
+/// command. The test below is what keeps the two spellings the same rule.
+fn is_banner(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 200
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | ',' | '!' | '?' | ':' | '-'))
+}
+
 fn is_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
@@ -125,6 +152,18 @@ pub fn validate_arg(kind: Arg, value: Option<&str>) -> Result<Option<String>, Re
         Arg::Name => match value {
             Some(v) if is_name(v) => Ok(Some(v.to_string())),
             other => refuse(format!("not a usable name: {:?}", other.unwrap_or(""))),
+        },
+        // THE SAME RULE THE NODE ENFORCES, and it has to be: letters, digits,
+        // spaces and six marks of punctuation, 200 characters at most.
+        // copal-fleet-exec refuses anything else, so a console that allowed
+        // more would be a console whose banners sometimes vanish with a
+        // refusal nobody could explain. An allow-list rather than a
+        // deny-list, so the text cannot carry anything a rendering program
+        // might read as markup or a shell as syntax.
+        Arg::Banner => match value {
+            Some(v) if is_banner(v) => Ok(Some(v.to_string())),
+            Some(v) if v.len() > 200 => refuse("a banner is 200 characters or fewer"),
+            _ => refuse("a banner is letters, digits and . , ! ? : -"),
         },
     }
 }
@@ -274,12 +313,43 @@ mod tests {
     }
 
     #[test]
-    fn there_is_no_message_verb_to_call() {
-        // `copal fleet notify` means "tell me when all eight are up" and
-        // refuses anything else, so a banner is not offered rather than
-        // offered and broken.
-        assert!(lookup("message").is_none());
-        assert!(lookup("notify").is_none());
+    fn the_banner_verb_exists_now_and_carries_the_node_s_own_rule() {
+        // THIS TEST USED TO ASSERT THE OPPOSITE, and the comment explaining
+        // why is worth keeping: `copal fleet notify` means "tell me when all
+        // eight are up" and refuses anything else, so a banner was not offered
+        // rather than offered and broken. Phase 10 put a `message` case in the
+        // node's forced command and `copal-notify` beside it, so there is
+        // something to call.
+        assert!(lookup("message").is_some());
+        assert!(lookup("notify").is_none(), "notify is still not a banner");
+
+        // The charset is the node's, spelled again here. Both ends must agree
+        // or a banner vanishes with a refusal nobody can explain.
+        assert!(validate_arg(Arg::Banner, Some("Please stand back.")).is_ok());
+        assert!(validate_arg(Arg::Banner, Some("Closing in 10 minutes - thank you!")).is_ok());
+        for bad in [
+            "<b>bold</b>",
+            "rm -rf /; echo",
+            "quote\"inside",
+            "back`tick`",
+            "$(command)",
+            "new\nline",
+            "",
+        ] {
+            assert!(
+                validate_arg(Arg::Banner, Some(bad)).is_err(),
+                "banner {:?} was allowed and the node would refuse it",
+                bad
+            );
+        }
+        let long = "a".repeat(201);
+        assert!(validate_arg(Arg::Banner, Some(&long)).is_err());
+        assert!(validate_arg(Arg::Banner, Some(&"a".repeat(200))).is_ok());
+
+        // And it travels the way every other forced-command verb travels.
+        let plan = build_argv(lookup("message").unwrap(), Some("Please stand back.")).unwrap();
+        assert_eq!(plan.argv, vec!["run", "message", "Please stand back."]);
+        assert!(plan.per_node, "a banner goes to each node it was aimed at");
     }
 
     #[test]

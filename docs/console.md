@@ -164,6 +164,15 @@ Observe on a selection does is **enlarge**: the selected tiles grow to fill the
 lab and the rest are hidden. Still thumbnails, still the read model's `thumb`
 field, still one live session at most.
 
+**Phase 10 refused the thumbnail, and therefore this verb.** Nothing produces a
+`thumb` and nothing will: a node capturing its screen every few seconds is a
+capture daemon on every machine in the museum, running whether or not anybody
+is looking, and — unlike `remote start` — it cannot be bounded by a deadline.
+The honest description of what this console does is one live screen at a time,
+through Control, with the node's own consent and a clock on it.
+`fleet-control.md` §9 records the decision and the shape that would fit if
+Observe is ever wanted: a `remote thumb` verb that captures once, on request.
+
 ### Terminal is no longer a fleet decision
 
 The README has said, since the seat was built, that *"a shell on a node needs a

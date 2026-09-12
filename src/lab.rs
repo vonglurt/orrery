@@ -55,6 +55,15 @@ pub struct Node {
     /// protocol Control would speak to it. Empty until the node emits it --
     /// see copal-alpine-linux/docs/fleet-control.md §3.
     pub session: String,
+    /// What the node says it is showing the network: `off`, `vnc:5900`,
+    /// `rdp:3389`, `not installed`, or empty when it has not said.
+    ///
+    /// READ RATHER THAN PROBED. A console that scanned ports to find a screen
+    /// would be guessing about a machine that can answer for itself, and an
+    /// absent reading and "off" are different facts -- one is a node that has
+    /// not spoken, the other is a node that has.
+    ///
+    /// `None` is "has not said" and `Some("off")` is "has said, and off".
     pub remote: Option<String>,
 }
 
@@ -300,7 +309,7 @@ pub const FACES: &[Face] = &[
     Face { name: "Terminal", key: 't', arity: Arity::One,  built: true },
     Face { name: "Exchange", key: 'e', arity: Arity::One,  built: true },
     Face { name: "Send",     key: 's', arity: Arity::Many, built: true },
-    Face { name: "Message",  key: 'm', arity: Arity::Many, built: false },
+    Face { name: "Message",  key: 'm', arity: Arity::Many, built: true },
     Face { name: "Run",      key: 'r', arity: Arity::Many, built: true },
     Face { name: "Scene",    key: 'S', arity: Arity::Many, built: true },
     Face { name: "Snapshot", key: 'k', arity: Arity::Many, built: true },
@@ -366,6 +375,8 @@ impl Results {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Verb { name: &'static str, nodes: Vec<String> },
+    /// A verb that asked for a word and got one.
+    Typed { name: &'static str, nodes: Vec<String>, arg: String },
     /// Go to another face of the console.
     Go(nav::View),
     Quit,
@@ -386,6 +397,23 @@ pub struct Lab {
     /// time, never a window inside the window, so there is never a question
     /// about what is on top.
     pub results: Option<Results>,
+    /// A verb that wants a word before it can run.
+    ///
+    /// Run, Scene and Message each take an argument, and a console that draws
+    /// a verb it cannot perform is the thing this interface refuses to be. The
+    /// bar becomes a prompt rather than opening a window: the selection is
+    /// still visible above it, which is what the question is about.
+    pub ask: Option<Ask>,
+}
+
+/// A verb waiting for its argument.
+#[derive(Debug, Clone, Default)]
+pub struct Ask {
+    pub verb: &'static str,
+    pub nodes: Vec<String>,
+    pub field: crate::ui::Field,
+    /// What to say above the field.
+    pub prompt: &'static str,
 }
 
 impl Default for Posture {
@@ -809,10 +837,58 @@ fn draw_results(ui: &mut Ui, l: &Layout, lab: &Lab) -> bool {
     dismissed
 }
 
-fn draw_bar(ui: &mut Ui, l: &Layout, lab: &Lab) -> Option<Action> {
+fn draw_bar(ui: &mut Ui, l: &Layout, lab: &mut Lab) -> Option<Action> {
     let t = ui.t;
     ui.panel(l.bar, t.panel);
     ui.hrule(l.bar.x, l.bar.y, l.bar.w);
+
+    // THE BAR BECOMES THE PROMPT. Not a dialog over the lab: the question is
+    // "what shall I run on those nodes", and those nodes are the thing the
+    // operator is looking at.
+    if lab.ask.is_some() {
+        let mut done: Option<Action> = None;
+        let mut cancel = false;
+        {
+            let ask = lab.ask.as_mut().expect("checked");
+            let label = format!("{}  {}", ask.verb, ask.prompt);
+            let lw = F8X13.measure(&label) as i32 + PAD;
+            ui.label(l.bar.x + PAD, l.bar.y + 10, &label, &F8X13, t.dim);
+            let go = rect(l.bar.right() - 78, l.bar.y + 4, 68, BAR_H - 8);
+            let field = rect(
+                l.bar.x + PAD + lw,
+                l.bar.y + 4,
+                (go.x - 8) - (l.bar.x + PAD + lw),
+                BAR_H - 8,
+            );
+            if field.w > 40 {
+                ui.field(field, &ask.field, "type it, then Return");
+            }
+            // The field is fed BEFORE the button is drawn, because both read the
+            // same frame and a Return that submits must not also be typed.
+            let typed_return = ask.field.feed(&ui.f);
+            let pressed = ui.button(go, "Run", !ask.field.text.is_empty());
+            let submitted = typed_return || pressed;
+            if submitted && !ask.field.text.is_empty() {
+                done = Some(Action::Verb {
+                    name: ask.verb,
+                    nodes: ask.nodes.clone(),
+                });
+            }
+            if ui.f.pressed(Sym::Escape) {
+                cancel = true;
+            }
+        }
+        if cancel {
+            lab.ask = None;
+            return None;
+        }
+        if let Some(Action::Verb { name, nodes }) = done {
+            let arg = lab.ask.as_ref().map(|a| a.field.text.clone()).unwrap_or_default();
+            lab.ask = None;
+            return Some(Action::Typed { name, nodes, arg });
+        }
+        return None;
+    }
 
     let faces = visible(lab.posture, lab.selection.len());
     let mut x = l.bar.x + PAD;
@@ -1056,9 +1132,82 @@ mod tests {
     }
 
     #[test]
+    fn a_verb_that_needs_a_word_asks_for_one_and_can_be_cancelled() {
+        // THE BAR BECOMES THE QUESTION. Run, Scene and Message each take an
+        // argument, and until this existed they were buttons main.rs refused
+        // to dispatch -- which is a console drawing a verb it cannot perform.
+        let m = model();
+        let mut lab = Lab::new(Posture::Operator);
+        lab.selection = vec!["museum-01".to_string(), "museum-02".to_string()];
+        lab.ask = Some(Ask {
+            verb: "Message",
+            nodes: lab.selection.clone(),
+            field: crate::ui::Field::new("stand back"),
+            prompt: "banner:",
+        });
+
+        // Return submits it, with the word, aimed at the nodes it was opened
+        // for rather than at whatever is selected by then.
+        let ev = [Input::Key {
+            scancode: 0,
+            sym: Sym::Return,
+            down: true,
+            mods: Mods::default(),
+        }];
+        let got = run(&mut lab, &m, &ev, |ui, m, lab| draw(ui, m, lab));
+        match got {
+            Some(Action::Typed { name, nodes, arg }) => {
+                assert_eq!(name, "Message");
+                assert_eq!(arg, "stand back");
+                assert_eq!(nodes.len(), 2);
+            }
+            other => panic!("Return did not submit the prompt: {:?}", other),
+        }
+        assert!(lab.ask.is_none(), "the prompt stayed open after it was answered");
+
+        // Escape puts it away and runs nothing.
+        lab.ask = Some(Ask {
+            verb: "Scene",
+            nodes: lab.selection.clone(),
+            field: crate::ui::Field::new("show"),
+            prompt: "name:",
+        });
+        let ev = [Input::Key {
+            scancode: 0,
+            sym: Sym::Escape,
+            down: true,
+            mods: Mods::default(),
+        }];
+        let got = run(&mut lab, &m, &ev, |ui, m, lab| draw(ui, m, lab));
+        assert!(got.is_none(), "escape ran something");
+        assert!(lab.ask.is_none(), "escape did not close the prompt");
+    }
+
+    #[test]
+    fn an_empty_prompt_runs_nothing() {
+        let m = model();
+        let mut lab = Lab::new(Posture::Operator);
+        lab.selection = vec!["museum-01".to_string()];
+        lab.ask = Some(Ask {
+            verb: "Scene",
+            nodes: lab.selection.clone(),
+            field: crate::ui::Field::default(),
+            prompt: "name:",
+        });
+        let ev = [Input::Key {
+            scancode: 0,
+            sym: Sym::Return,
+            down: true,
+            mods: Mods::default(),
+        }];
+        assert!(run(&mut lab, &m, &ev, |ui, m, lab| draw(ui, m, lab)).is_none());
+        assert!(lab.ask.is_some(), "an empty answer closed the question");
+    }
+
+    #[test]
     fn an_unbuilt_verb_is_absent_rather_than_drawn() {
         let names: Vec<&str> = visible(Posture::Operator, 1).iter().map(|f| f.name).collect();
-        for unbuilt in ["Observe", "Message"] {
+        for unbuilt in ["Observe"] {
             assert!(!names.contains(&unbuilt), "{} was offered with no transport", unbuilt);
         }
         // And the ones phases 5 and 6 built. These assertions are the
@@ -1071,10 +1220,13 @@ mod tests {
                 built
             );
         }
-        assert!(
-            visible(Posture::Operator, 3).iter().any(|f| f.name == "Send"),
-            "Send is the verb for several nodes and was not offered for several"
-        );
+        for many in ["Send", "Message"] {
+            assert!(
+                visible(Posture::Operator, 3).iter().any(|f| f.name == many),
+                "{} is a verb for several nodes and was not offered for several",
+                many
+            );
+        }
     }
 
     #[test]

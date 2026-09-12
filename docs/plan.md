@@ -31,10 +31,10 @@ work.
 | 6 | `sftp.rs`, Exchange and Send | **done** | SFTP v3, the file browser, fan-out send | Exchange, Send |
 | 7 | `tls.rs`, `x509.rs` | **done** | TLS 1.3 client, ChaCha only (R4); the certificate reader | phase 8 |
 | 8 | `rdp.rs`, Control | **done** | the RDP client, and a node's desktop in a pane | Control |
-| 8b | Observe | **backlog** | enlarged tiles with thumbnails | waits on the read model carrying `thumb` — phase 10 |
+| 8b | Observe | **refused** | — | phase 10 decided against a capture daemon; `fleet-control.md` §9 |
 | 9 | The media pane | **done** | `media.rs`, `pty.rs`, the card ledger | writing SD cards from the console |
-| 10 | The `copal-alpine-linux` side | **next** | `copal-prep.sh`, `copal-fleet-view`, `make sync-profile` | the node enforcing what the console speaks |
-| 11 | The truth pass | **backlog** | the README and every "not built" line re-read | shipping without a lie in the documentation |
+| 10 | The `copal-alpine-linux` side | **done** | the node's verbs and readings, and the crypto profile written into it | Message; the node enforcing what the console speaks |
+| 11 | The truth pass | **next** | the README and every "not built" line re-read | shipping without a lie in the documentation |
 
 **Backlog means chosen and not started, not "maybe".** Nothing on this list is
 optional to the design; what is optional is stopping — after 3 the console
@@ -345,22 +345,47 @@ correct, and the fleet's screens are a desktop rather than a video.
 
 ---
 
-## Phase 10 · The `copal-alpine-linux` side — **next**
+## Phase 10 · The `copal-alpine-linux` side — **done**
 
 | | |
 |---|---|
-| touches | `copal-prep.sh` (~450 lines), `tools/copal-fleet-view`, `tools/copal-answers.sh`, `Makefile`, `bin/` |
-| does | `facts()` readings, the `remote` and `message` verbs, `copal-remote`, `copal-notify`, `fleet_remote_rdp()`, two answers keys, the manifest tool, the Makefile targets |
-| proves | `make lint` — which already extracts `copal-init.sh` from the heredoc and checks it as the file it becomes, and already checks that every `bin/` shortcut names a target that exists |
+| touches | `copal-prep.sh` (+330), `tools/copal-fleet-view`, `tools/copal-answers.sh`, `tools/copal-media.sh` **(new)**, `Makefile`, `bin/gui.sh` **(new)**; and in orrery `ui.rs` +130, `verbs.rs` +60, `lab.rs` +90 |
+| does | the `session` and `remote` readings, the `remote` and `message` verbs, `copal-remote`, `copal-notify`, `fleet_remote_rdp()`, two answers keys, the manifest tool, `make fleet-gui`, `make sync-profile` — **and the crypto profile, written into the node** |
+| proves | `make lint`, which now also fails when the whitelist has drifted between the two repositories |
 
-Some of this is needed earlier: the `session` and `remote` readings (§3 of
-fleet-control.md) are wanted by phase 8, and the fixture in `fleet.rs` carries
-them from phase 3 so the interface can be drawn against them before a node
-emits them.
+**The whitelist is one list again.** `orrery --profile-sshd` prints
+`profile.rs`'s P1 and `fleet_sshd_policy()` writes exactly that into the node's
+`sshd_config`; `make lint` compares them and `make sync-profile` is the fix.
+That is the sentence `profile.rs` has carried since phase 3 — *"a whitelist
+that exists in a Rust file and again in a shell heredoc is two whitelists"* —
+finally being true rather than intended.
+
+**Message is built, at both ends.** The node grew a `message` verb bounded by
+length, an allow-list charset and `exec` with the text as one argument; the
+console grew `ui::Field` and a bar that becomes the question. That last piece
+unblocked **Run and Scene too**, which had been drawn but undispatchable since
+phase 3 with a comment in `main.rs` admitting it. The verb bar now says **1 not
+built**.
+
+**One promise was refused rather than kept.** `console.md` said Observe draws
+the read model's `thumb` field; nothing produces a thumbnail, and this phase
+decided not to add one — a node capturing its screen every few seconds is a
+capture daemon on every machine in the museum, running whether or not anybody
+is looking, and it cannot be bounded by a deadline the way `remote start` is.
+The decision and the shape that would fit instead are written up in
+`fleet-control.md` §9.
+
+**Two things the node found out.** A `(` inside a `case` pattern does not parse
+under dash, so the banner's charset is six marks of punctuation rather than
+ten — caught by `make lint`, which checks the embedded scripts under the shell
+they will actually run on. And `copal-remote` reports what is **running**
+rather than what is installed, because "there is an x11vnc on this machine" and
+"an x11vnc is listening right now" are different claims and a tile that offers
+Control for a screen nobody is serving is a tile that lies.
 
 ---
 
-## Phase 11 · The truth pass — **backlog**
+## Phase 11 · The truth pass — **next**
 
 Documentation last, and specifically **the corrections**, because three things
 this repository currently says will have stopped being true:

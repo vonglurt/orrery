@@ -314,15 +314,19 @@ pub fn demo_doc() -> String {
     let mut nodes = Vec::new();
     for i in 1..=8 {
         let (tags, extra): (&str, String) = match i {
-            1 | 2 => ("[\"wall\"]", String::new()),
+            1 | 2 => ("[\"wall\"]", "\"session\":\"x11\",\"remote\":\"off\",".into()),
             3 => (
                 "[\"sdr\"]",
                 "\"job\":\"sdr-source\",\"temp_c\":51,".into(),
             ),
-            5 => ("[\"north\"]", String::new()),
+            5 => (
+                "[\"north\"]",
+                "\"session\":\"x11\",\"remote\":\"vnc:5900\",".into(),
+            ),
             6 => (
                 "[\"north\"]",
-                "\"role\":\"warden\",\"scene\":\"wake\",\"temp_c\":39,".into(),
+                "\"role\":\"warden\",\"scene\":\"wake\",\"temp_c\":39,                 \"session\":\"wayland\",\"remote\":\"rdp:3389\","
+                    .into(),
             ),
             7 => (
                 "[\"north\"]",
@@ -333,7 +337,8 @@ pub fn demo_doc() -> String {
             ),
             8 => (
                 "[]",
-                "\"scene\":\"rest\",\"on_bus\":false,\"agent\":\"silent\",\"temp_c\":48,".into(),
+                "\"scene\":\"rest\",\"on_bus\":false,\"agent\":\"silent\",\"temp_c\":48,                 \"session\":\"wayland\",\"remote\":\"not installed\","
+                    .into(),
             ),
             _ => ("[]", String::new()),
         };
@@ -347,7 +352,7 @@ pub fn demo_doc() -> String {
              \"temp_c\":{temp},\"agent\":\"up\",\"heard_s\":{heard},\"uptime_min\":{up},\
              \"announced\":true,\"on_bus\":true,\"declared\":true,\"tags\":{tags},\
              \"ram_mb\":1024,\"job\":\"smallpt\",\"cert_days\":87,\"apk_pending\":3,\
-             \"thumb\":null,\"vnc\":null,{extra}\"_fixture\":true}}",
+             \"thumb\":null,\"session\":\"\",\"remote\":null,{extra}\"_fixture\":true}}",
             extra = extra,
             i = i,
             addr = 10 + i,
