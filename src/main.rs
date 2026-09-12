@@ -29,6 +29,12 @@
 //!                          answering 403 -- a route that says "forbidden"
 //!                          tells a scanner it is there.
 
+// The primitives, and the transport built on them. Parts of both are written
+// for phases that have not arrived -- AES-GCM and DER are TLS's and the
+// certificate writer's -- so they are dead code today and deliberately so.
+// `nothing_here_is_off_the_profile` is what keeps the set honest in the
+// meantime: nothing is in there that the whitelist does not name.
+#[allow(dead_code)]
 mod crypto;
 mod draw;
 mod fleet;
@@ -46,6 +52,8 @@ mod profile;
 mod pty;
 mod rfb;
 mod seat;
+#[allow(dead_code)]
+mod ssh;
 mod surface;
 mod ui;
 mod verbs;
@@ -93,6 +101,7 @@ fn main() {
     let mut frame_to = String::new();
     let mut dark = false;
     let mut copal = String::new();
+    let mut ssh_user = String::from("copal");
     let mut specimen_frame = false;
     let mut frame_view = String::new();
     let mut frame_select: Vec<String> = Vec::new();
@@ -160,10 +169,24 @@ fn main() {
             }
             "--dark" => { dark = true; i += 1 }
             "--copal" => { copal = need(i, "--copal"); i += 2 }
+            // The account on the node -- `copal-prep.sh`'s PI_USER. It is a
+            // flag rather than a guess because the certificate names
+            // principals, not usernames, and which account those principals
+            // are listed under is the node's decision.
+            "--user" => { ssh_user = need(i, "--user"); i += 2 }
             "--sixel" => { seat_opts.paint = Some(paint::Mode::Sixel); i += 1 }
             "--half-block" => { seat_opts.paint = Some(paint::Mode::HalfBlock); i += 1 }
             "--demo" => { demo = true; i += 1 }
             "--quiet" => { quiet = true; i += 1 }
+            // The node's sshd lines, rendered from the same whitelist the
+            // client builds its offer from. This is how the two ends stay in
+            // step: `copal-prep.sh` writes what this prints, so a profile that
+            // narrows here narrows there in the same commit rather than in a
+            // later one somebody has to remember.
+            "--profile-sshd" => {
+                print!("{}", profile::sshd_config(&profile::P1));
+                std::process::exit(0);
+            }
             other => {
                 eprintln!("orrery: unknown option {:?}", other);
                 usage();
@@ -268,7 +291,7 @@ fn main() {
                 if operator.is_empty() { "gallery (read-only)" } else { "operator" },
                 if demo { "  [demo fixture]" } else { "" }
             );
-            if let Err(e) = gui_loop(win, theme, fleet, posture, &copal, demo) {
+            if let Err(e) = gui_loop(win, theme, fleet, posture, &copal, &ssh_user, demo) {
                 eprintln!("orrery: {}", e);
                 std::process::exit(1);
             }
@@ -290,7 +313,7 @@ fn main() {
                 if operator.is_empty() { "gallery (read-only)" } else { "operator" },
                 if demo { "  [demo fixture]" } else { "" }
             );
-            if let Err(e) = gui_loop(win, theme, fleet, posture, &copal, demo) {
+            if let Err(e) = gui_loop(win, theme, fleet, posture, &copal, &ssh_user, demo) {
                 eprintln!("orrery: {}", e);
                 std::process::exit(1);
             }
@@ -564,6 +587,8 @@ fn gui_loop<S: surface::Surface>(
     fleet: Arc<Fleet>,
     posture: lab::Posture,
     copal: &str,
+    // The account on the node. See `--user`.
+    ssh_user: &str,
     demo_fixture: bool,
 ) -> Result<(), String> {
     use std::time::Duration;
@@ -589,6 +614,16 @@ fn gui_loop<S: surface::Surface>(
     // A verb may take three minutes, so it runs on a thread too and the pane
     // says "running" until it lands.
     let results: Arc<Mutex<Option<lab::Results>>> = Arc::new(Mutex::new(None));
+
+    // A shell on a node. It lives here rather than in `lab.rs` for the same
+    // reason the verbs do: lab.rs draws, and opening a socket is not drawing.
+    // Connecting takes a second or two -- a key exchange, a certificate check
+    // and an authentication -- so it happens on a thread and the pane appears
+    // when it is ready.
+    let mut shell: Option<media::Job> = None;
+    let opening: Arc<Mutex<Option<Result<media::Job, String>>>> = Arc::new(Mutex::new(None));
+    let mut connecting: Option<String> = None;
+    let mut shell_size = (0u32, 0u32);
 
     let mut ui_state = ui::UiState::default();
     let mut lab_state = lab::Lab::new(posture);
@@ -622,16 +657,61 @@ fn gui_loop<S: surface::Surface>(
         if let Some(j) = media.job.as_mut() {
             j.pump();
         }
+        if let Some(j) = shell.as_mut() {
+            j.pump();
+        }
+        if let Some(done) = opening.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            connecting = None;
+            match done {
+                Ok(j) => {
+                    shell = Some(j);
+                    // The "connecting" pane has served its purpose; leaving it
+                    // set would put it behind the shell, waiting to reappear.
+                    *results.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    lab_state.results = None;
+                }
+                // A refusal is the interesting case and it is shown in the
+                // results pane, which is where every other verb's failure
+                // already goes -- a certificate that did not check out is a
+                // sentence, not a silence.
+                Err(e) => {
+                    let node = lab_state.selection.first().cloned().unwrap_or_default();
+                    *results.lock().unwrap_or_else(|err| err.into_inner()) = Some(lab::Results {
+                        verb: "Terminal".to_string(),
+                        running: false,
+                        items: vec![lab::Outcome { node, code: 1, output: e }],
+                    });
+                }
+            }
+        }
         media.note_fleet(&model.nodes.iter().map(|n| n.id.clone()).collect::<Vec<_>>());
 
         let (w, h) = s.size();
         let mut action = None;
+        let mut close_shell = false;
         {
             let mut c = draw::Canvas::new(s.pixels(), w, h);
             let mut u = ui::Ui::begin(&mut c, theme, &inputs, &mut ui_state);
-            match view {
-                nav::View::Lab => action = lab::draw(&mut u, &model, &mut lab_state),
-                nav::View::Media => {
+            match (shell.as_mut(), view) {
+                // A SHELL IS IN FRONT OF EVERYTHING. It is the only face that
+                // takes every keystroke, so leaving the lab's own keys live
+                // underneath it would mean typing `p` at a prompt powered a
+                // node off.
+                (Some(j), _) => {
+                    let at = ui::rect(0, 0, w as i32, h as i32);
+                    let want = media::pane_size(at);
+                    if want != shell_size {
+                        j.resize(want.0, want.1);
+                        shell_size = want;
+                    }
+                    match media::draw_pane(&mut u, at, j) {
+                        media::Pane::Stop => j.stop(),
+                        media::Pane::Close => close_shell = true,
+                        media::Pane::Stay => {}
+                    }
+                }
+                (None, nav::View::Lab) => action = lab::draw(&mut u, &model, &mut lab_state),
+                (None, nav::View::Media) => {
                     if let Some(v) = media::draw(&mut u, &mut media) {
                         action = Some(lab::Action::Go(v));
                     }
@@ -652,11 +732,73 @@ fn gui_loop<S: surface::Surface>(
         }
         s.present()?;
 
-        if let Some(lab::Action::Verb { name, nodes }) = action {
-            run_verb(name, nodes, Arc::clone(&fleet), Arc::clone(&results));
+        if close_shell {
+            shell = None;
+            shell_size = (0, 0);
         }
+        if let Some(lab::Action::Verb { name, nodes }) = action {
+            if name == "Terminal" {
+                // One node, because a shell is a conversation with one
+                // machine -- `Arity::One` in the verb table already says so,
+                // and this is the second place that has to agree.
+                if let Some(node) = nodes.first().cloned() {
+                    if shell.is_none() && connecting.is_none() {
+                        let address = model
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == node)
+                            .map(|n| n.address.clone())
+                            .unwrap_or_default();
+                        connecting = Some(node.clone());
+                        // The same "running" pane every slow verb shows. A
+                        // handshake takes a second or two and a console that
+                        // looked frozen for it would be a console people click
+                        // twice.
+                        *results.lock().unwrap_or_else(|e| e.into_inner()) = Some(lab::Results {
+                            verb: "Terminal".to_string(),
+                            running: true,
+                            items: Vec::new(),
+                        });
+                        open_shell(
+                            model.fleet.clone(),
+                            node,
+                            address,
+                            ssh_user.to_string(),
+                            Arc::clone(&opening),
+                        );
+                    }
+                }
+            } else {
+                run_verb(name, nodes, Arc::clone(&fleet), Arc::clone(&results));
+            }
+        }
+
         thread::sleep(frame);
     }
+}
+
+/// Open a shell on a node, on a thread, and hand back the pane when it is up.
+///
+/// EVERY REFUSAL IN `ssh.rs` ARRIVES HERE AS A SENTENCE. A certificate from an
+/// unknown CA, one that expired, one for another node, a node that cannot
+/// prove it holds the key -- each is a string the operator can read, and none
+/// of them is a prompt asking whether to continue anyway.
+fn open_shell(
+    fleet: String,
+    node: String,
+    address: String,
+    user: String,
+    out: Arc<Mutex<Option<Result<media::Job, String>>>>,
+) {
+    thread::spawn(move || {
+        let home = match std::env::var("HOME") {
+            Ok(h) => std::path::PathBuf::from(h).join(".copal"),
+            Err(_) => std::path::PathBuf::from("/etc/copal"),
+        };
+        let job = ssh::Dial::for_node(&home, &fleet, &node, &address, &user)
+            .and_then(|d| media::Job::remote(format!("{} — shell", node), &d, 100, 30));
+        *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(job);
+    });
 }
 
 /// Run a verb on a thread and post its per-node results.

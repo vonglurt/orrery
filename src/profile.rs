@@ -168,7 +168,12 @@ pub fn sshd_config(p: &Profile) -> String {
     out.push_str("PasswordAuthentication no\n");
     out.push_str("KbdInteractiveAuthentication no\n");
     out.push_str("ChallengeResponseAuthentication no\n");
-    out.push_str("GSSAPIAuthentication no\n");
+    // NOT `GSSAPIAuthentication no`, AND THIS WAS FOUND BY RUNNING IT. Alpine
+    // builds OpenSSH without GSSAPI, so sshd reads that line as an unsupported
+    // option and says so -- twice per connection, in the node's log, forever.
+    // Turning off a thing that is not compiled in buys nothing and costs a
+    // node's log being full of complaints about its own configuration. If a
+    // node ever runs an sshd built with GSSAPI, the line comes back.
     out.push_str("HostbasedAuthentication no\n");
     out.push_str("PermitEmptyPasswords no\n");
     out.push_str("PermitRootLogin no\n");
@@ -281,13 +286,18 @@ mod tests {
             "PasswordAuthentication no",
             "KbdInteractiveAuthentication no",
             "ChallengeResponseAuthentication no",
-            "GSSAPIAuthentication no",
             "HostbasedAuthentication no",
             "PermitEmptyPasswords no",
             "PermitRootLogin no",
         ] {
             assert!(cfg.contains(off), "the sshd block does not say {:?}", off);
         }
+        // And nothing sshd will refuse to parse. `tools/ssh-check.sh` runs a
+        // real sshd against this block, which is how the GSSAPI line was found.
+        assert!(
+            !cfg.contains("GSSAPI"),
+            "Alpine's sshd has no GSSAPI and logs a complaint about the line"
+        );
         // And it names the profile it came from, so a node can be read.
         assert!(cfg.contains("crypto profile 1"));
     }

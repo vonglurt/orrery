@@ -184,6 +184,12 @@ which is [wire.md](wire.md)'s subject, and it inherits the certificate's
 validity as its ceiling — the status line shows the remaining hours because a
 session that will stop working at 17:00 should say so at 09:00.
 
+**Built, in phase 5.** `ssh.rs` is the client; the pane is the one the card
+writer already had, because `media::Job` now holds either a local `Pty` or an
+`ssh::Session` and the drawing never asked which. The first line of the
+scrollback names the host certificate that let the operator in, since "which
+certificate opened this door" is the question an operator actually asks.
+
 ### Message needs a node-side verb, and does not pretend otherwise
 
 `verbs.rs` currently refuses to offer Message, with a comment that is correct:

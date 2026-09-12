@@ -143,20 +143,41 @@ in §6 of `wire.md`: that number is a constraint on phase 7, not a footnote.
 
 ---
 
-## Phase 5 · `ssh.rs` and Terminal
+## Phase 5 · `ssh.rs` and Terminal — **built**
 
 | | |
 |---|---|
-| adds | `src/ssh.rs` ~1,400, `ssh::fake` ~400, `lab.rs` +200 |
-| does | transport, kex, CA host-certificate verification, publickey auth with the operator cert, session channel with pty + shell, rekey |
-| proves | `ssh::fake` on a real socket, as `rfb::fake` already does; **and `sshd` in an Alpine container**, which is the row that matters |
+| adds | `src/ssh.rs` 2,000 lines with `ssh::fake` inside it, `tools/ssh-check.sh`, `media.rs` +150, `main.rs` +80 |
+| does | transport, curve25519 kex, CA host-certificate verification, publickey auth with the operator certificate, a session channel with a pty and a shell, `exec`, window management, rekey |
+| proves | `ssh::fake` on a real socket — including four ways a host certificate can lie — **and a real `sshd` in an Alpine container**, which is the row that matters |
 
-Terminal appears in the verb bar. A `term` widget over a real shell.
+**Terminal is `built: true`.** The verb bar went from six absent verbs to five,
+and the pane it opens is the pane the card writer already had: `media::Job` now
+holds either a `Pty` or an `ssh::Session`, because a card write and a shell are
+the same picture — a thing that prints, sometimes asks, and eventually stops.
+`pty.rs` said this was coming two phases before there was a socket to make it
+true.
 
-**Gate, and it is a hard one:** the seat's "Still open" entry is the lesson —
-*"what that does not prove is x11vnc's own choices."* A fake server proves
-`ssh.rs` agrees with `ssh.rs`. The container test is the phase's real acceptance
-criterion, and it is written before the fake, not after.
+**What the container run proved that the fake could not.** `tools/ssh-check.sh`
+builds the fleet shape `copal-prep.sh` builds — a CA, a host certificate for
+`museum-01`, an operator certificate carrying `fleet-operator` and
+`fleet-human`, a principals file — and points a real `sshd` at the output of
+`orrery --profile-sshd`. It logged:
+
+    Accepted certificate ID "operator" (serial 0) signed by ED25519 CA ...
+    Starting session: shell on pts/0 for copal
+
+and it found a bug nothing else would have: **`GSSAPIAuthentication no` is an
+unsupported option on Alpine**, whose OpenSSH is built without GSSAPI, so every
+connection logged a complaint about the node's own configuration. The line is
+gone and `profile.rs` has a test that it stays gone.
+
+**The narrowing, stated once more because this is where it becomes real.** The
+client offers ChaCha alone although the profile accepts AES too — in SSH the
+client's preference decides, so this is the same session against any node in
+the fleet and a refusal against a server that lacks it, which is the right
+answer given R4. The host key must be a certificate: there is no
+trust-on-first-use path, no prompt, and no bare-key branch to fall back to.
 
 ---
 

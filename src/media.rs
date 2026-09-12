@@ -183,10 +183,61 @@ pub fn parse_manifest(text: &str) -> BTreeMap<String, String> {
 /// A `make` running on a terminal, with its output.
 pub struct Job {
     pub title: String,
-    pty: Pty,
+    source: Source,
     pub lines: Vec<String>,
     partial: String,
     pub done: Option<i32>,
+}
+
+/// Where a pane's conversation is happening.
+///
+/// THE PANE DOES NOT CARE, AND THAT IS THE WHOLE POINT. A card write is a
+/// child process on a terminal here; a shell on a node is a channel on a
+/// socket there. Both are a thing that prints, sometimes asks, and eventually
+/// stops -- so both are drawn by the same code, and `pty.rs` said this was
+/// coming before `ssh.rs` existed to make it true.
+enum Source {
+    Local(Pty),
+    Remote(Box<crate::ssh::Session>),
+}
+
+impl Source {
+    fn read(&mut self) -> Vec<u8> {
+        match self {
+            Source::Local(p) => p.read(),
+            // A read error on a session is the session ending. It is reported
+            // as the last line of output rather than swallowed, because "the
+            // node went away" is the answer to the question the operator is
+            // looking at the pane to ask.
+            Source::Remote(s) => match s.read() {
+                Ok(b) => b,
+                Err(e) => format!("\r\n[{}]\r\n", e).into_bytes(),
+            },
+        }
+    }
+
+    fn write(&mut self, text: &str) {
+        match self {
+            Source::Local(p) => p.write(text),
+            Source::Remote(s) => {
+                let _ = s.write(text.as_bytes());
+            }
+        }
+    }
+
+    fn finished(&mut self) -> Option<i32> {
+        match self {
+            Source::Local(p) => p.finished(),
+            Source::Remote(s) => s.finished(),
+        }
+    }
+
+    fn kill(&mut self) {
+        match self {
+            Source::Local(p) => p.kill(),
+            Source::Remote(s) => s.close(),
+        }
+    }
 }
 
 /// The colour a terminal wants and a canvas does not.
@@ -222,11 +273,50 @@ impl Job {
         let pty = Pty::spawn(argv, &OsString::from(dir))?;
         Ok(Job {
             title,
-            pty,
+            source: Source::Local(pty),
             lines: vec![format!("$ {}", argv.join(" "))],
             partial: String::new(),
             done: None,
         })
+    }
+
+    /// A shell on a node: the same pane, the same scrollback, a socket where
+    /// the child was.
+    ///
+    /// The size is asked for in characters because that is what a terminal
+    /// measures in, and the pane works out how many of them fit -- a window
+    /// that grew after the shell started sends `window-change` rather than
+    /// reopening anything.
+    pub fn remote(
+        title: String,
+        dial: &crate::ssh::Dial,
+        cols: u32,
+        rows: u32,
+    ) -> Result<Job, String> {
+        let mut s = crate::ssh::Session::open(dial)?;
+        s.pty("xterm-256color", cols, rows)?;
+        s.shell()?;
+        let first = match s.cert() {
+            Some(c) => format!("$ ssh {}@{}  [{}]", dial.user, dial.host, c.key_id),
+            None => format!("$ ssh {}@{}", dial.user, dial.host),
+        };
+        Ok(Job {
+            title,
+            source: Source::Remote(Box::new(s)),
+            lines: vec![first],
+            partial: String::new(),
+            done: None,
+        })
+    }
+
+    /// Tell the far end the pane changed size. A local child is told by the
+    /// kernel; a remote one has to be sent a message, and a shell that thinks
+    /// it has eighty columns in a pane that has two hundred draws its line
+    /// editing in the wrong place.
+    pub fn resize(&mut self, cols: u32, rows: u32) {
+        if let Source::Remote(s) = &mut self.source {
+            let _ = s.resize(cols, rows);
+        }
     }
 
     /// The most an unterminated line may hold before its head is dropped.
@@ -239,7 +329,7 @@ impl Job {
 
     /// Drain the terminal into lines. Called once a frame.
     pub fn pump(&mut self) {
-        let bytes = self.pty.read();
+        let bytes = self.source.read();
         if !bytes.is_empty() {
             let text = strip_ansi(&String::from_utf8_lossy(&bytes));
             self.partial.push_str(&text);
@@ -273,7 +363,7 @@ impl Job {
         }
 
         if self.done.is_none() {
-            self.done = self.pty.finished();
+            self.done = self.source.finished();
         }
     }
 
@@ -288,12 +378,12 @@ impl Job {
 
     pub fn send(&mut self, s: &str) {
         if self.done.is_none() {
-            self.pty.write(s);
+            self.source.write(s);
         }
     }
 
     pub fn stop(&mut self) {
-        self.pty.kill();
+        self.source.kill();
         self.done = Some(-1);
     }
 }
@@ -754,16 +844,33 @@ fn draw_foot(ui: &mut Ui, m: &mut Media, at: Rect) {
     }
 }
 
-fn draw_job(ui: &mut Ui, m: &mut Media, at: Rect) {
+/// What the operator did to a pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    /// Nothing; keep drawing it.
+    Stay,
+    /// Stop what is running.
+    Stop,
+    /// It has stopped and the operator has dismissed it.
+    Close,
+}
+
+/// Draw a running conversation, and give it what was typed.
+///
+/// ONE PANE FOR BOTH KINDS OF JOB. The card writer and the node's shell are
+/// the same picture -- a title, a status word, a scrollback, a prompt with a
+/// cursor on it, and a button that says Stop until there is nothing left to
+/// stop. Keeping them one function means the shell inherits everything the
+/// card writer learned the hard way: the tail of a long prompt rather than its
+/// head, an unconditional trim, and nothing ever answered on the operator's
+/// behalf.
+pub fn draw_pane(ui: &mut Ui, at: Rect, job: &mut Job) -> Pane {
     let t = ui.t;
     let (head, body) = at.cut_top(26);
     ui.panel(head, t.panel);
     ui.hrule(head.x, head.bottom() - 1, head.w);
 
-    let (title, done) = {
-        let j = m.job.as_ref().expect("draw_job with no job");
-        (j.title.clone(), j.done)
-    };
+    let done = job.done;
     let word = match done {
         None => "running".to_string(),
         Some(0) => "done".to_string(),
@@ -774,23 +881,21 @@ fn draw_job(ui: &mut Ui, m: &mut Media, at: Rect) {
         Some(0) => t.up,
         Some(_) => t.alarm,
     };
-    ui.label_in(head.x + PAD, head.y + 6, head.w - 200, &title, &F8X13, t.ink);
+    ui.label_in(head.x + PAD, head.y + 6, head.w - 200, &job.title, &F8X13, t.ink);
     ui.label_right(head.right() - 90, head.y + 6, &word, &F8X13, colour);
 
     let stop = rect(head.right() - 78, head.y + 3, 68, 20);
     let pressed = ui.button(stop, if done.is_some() { "Close" } else { "Stop" }, true);
 
     // The output. A card write is a conversation, so the last unterminated
-    // line -- which is where `copal-prep.sh` puts its question -- is drawn as
-    // well as the completed ones.
+    // line -- which is where `copal-prep.sh` puts its question, and where a
+    // shell puts its prompt -- is drawn as well as the completed ones.
     ui.panel(body, t.tile);
     let inner = body.inset(PAD);
     let rows = ((inner.h - 4) / 14).max(1) as usize;
-    let (lines, prompt) = {
-        let j = m.job.as_ref().unwrap();
-        let start = j.lines.len().saturating_sub(rows.saturating_sub(1));
-        (j.lines[start..].to_vec(), j.prompt().to_string())
-    };
+    let start = job.lines.len().saturating_sub(rows.saturating_sub(1));
+    let lines: Vec<String> = job.lines[start..].to_vec();
+    let prompt = job.prompt().to_string();
     let mut y = inner.y;
     for line in &lines {
         ui.label_in(inner.x, y, inner.w, line, &F8X13, t.ink);
@@ -805,36 +910,54 @@ fn draw_job(ui: &mut Ui, m: &mut Media, at: Rect) {
         ui.c.rect(inner.x, y, 8, 13, t.accent);
     }
 
-    // Typing goes to the terminal. THIS IS HOW `ERASE` REACHES copal-prep.sh,
-    // and nothing here answers on the operator's behalf.
+    // Typing goes to the far end, wherever that is. THIS IS HOW `ERASE`
+    // REACHES copal-prep.sh, and nothing here answers on the operator's
+    // behalf.
     let text = ui.f.text.clone();
-    let typed_return = ui.f.pressed(Sym::Return);
-    let typed_back = ui.f.pressed(Sym::Backspace);
-    let interrupt = ui.f.keys.iter().any(|(s, mo)| *s == Sym::Char('c') && mo.ctrl);
-
-    if let Some(j) = m.job.as_mut() {
-        if !text.is_empty() {
-            j.send(&text);
-        }
-        if typed_return {
-            j.send("\n");
-        }
-        if typed_back {
-            j.send("\u{7f}");
-        }
-        if interrupt {
-            j.send("\u{3}");
-        }
+    if !text.is_empty() {
+        job.send(&text);
+    }
+    if ui.f.pressed(Sym::Return) {
+        job.send("\n");
+    }
+    if ui.f.pressed(Sym::Backspace) {
+        job.send("\u{7f}");
+    }
+    if ui.f.keys.iter().any(|(s, mo)| *s == Sym::Char('c') && mo.ctrl) {
+        job.send("\u{3}");
     }
 
     if pressed {
-        if let Some(j) = m.job.as_mut() {
-            if j.done.is_none() {
+        return if done.is_some() { Pane::Close } else { Pane::Stop };
+    }
+    Pane::Stay
+}
+
+/// How many characters fit in a pane of this size, which is what a remote
+/// terminal has to be told.
+pub fn pane_size(at: Rect) -> (u32, u32) {
+    let inner = at.cut_top(26).1.inset(PAD);
+    (
+        (inner.w / 8).clamp(20, 500) as u32,
+        (inner.h / 14).clamp(5, 200) as u32,
+    )
+}
+
+fn draw_job(ui: &mut Ui, m: &mut Media, at: Rect) {
+    let what = match m.job.as_mut() {
+        Some(j) => draw_pane(ui, at, j),
+        None => return,
+    };
+    match what {
+        Pane::Stay => {}
+        Pane::Stop => {
+            if let Some(j) = m.job.as_mut() {
                 j.stop();
-            } else {
-                m.job = None;
-                m.reload();
             }
+        }
+        Pane::Close => {
+            m.job = None;
+            m.reload();
         }
     }
 }

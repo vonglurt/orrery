@@ -284,15 +284,19 @@ pub struct Face {
 
 /// The lab report's table, and the state of each row in this build.
 ///
-/// Observe, Control, Terminal, Exchange, Send and Message are `built: false`
-/// because their transports are docs/wire.md's phases 5 to 8 and none of them
+/// Terminal became `built: true` when `ssh.rs` was written -- that is what a
+/// phase looks like from in here, one row of a table changing and a pane
+/// appearing that was not there before.
+///
+/// Observe, Control, Exchange, Send and Message are still `built: false`
+/// because their transports are docs/wire.md's phases 6 to 8 and none of those
 /// is written yet. They are listed rather than omitted so that the interface
 /// can say what it is missing and why, which is the difference between a
 /// console that is honest about being unfinished and one that looks finished.
 pub const FACES: &[Face] = &[
     Face { name: "Observe",  key: 'o', arity: Arity::Many, built: false },
     Face { name: "Control",  key: 'c', arity: Arity::One,  built: false },
-    Face { name: "Terminal", key: 't', arity: Arity::One,  built: false },
+    Face { name: "Terminal", key: 't', arity: Arity::One,  built: true },
     Face { name: "Exchange", key: 'e', arity: Arity::One,  built: false },
     Face { name: "Send",     key: 's', arity: Arity::Many, built: false },
     Face { name: "Message",  key: 'm', arity: Arity::Many, built: false },
@@ -1053,9 +1057,16 @@ mod tests {
     #[test]
     fn an_unbuilt_verb_is_absent_rather_than_drawn() {
         let names: Vec<&str> = visible(Posture::Operator, 1).iter().map(|f| f.name).collect();
-        for unbuilt in ["Observe", "Control", "Terminal", "Exchange", "Send", "Message"] {
+        for unbuilt in ["Observe", "Control", "Exchange", "Send", "Message"] {
             assert!(!names.contains(&unbuilt), "{} was offered with no transport", unbuilt);
         }
+        // And the one that phase 5 built. This assertion is the difference the
+        // phase made, stated where a future phase will have to come and change
+        // it again.
+        assert!(
+            names.contains(&"Terminal"),
+            "Terminal has a transport now and is still not offered"
+        );
     }
 
     #[test]
