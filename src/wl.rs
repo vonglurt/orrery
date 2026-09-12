@@ -531,6 +531,12 @@ pub struct Window {
     pub height: usize,
     /// Set between a configure that changed the size and the next `paint`.
     pending_size: Option<(usize, usize)>,
+    /// How many screen pixels one drawn pixel occupies, per side. See
+    /// `surface::expand`: the interface is bitmap glyphs, so on a dense panel
+    /// it is drawn smaller and repeated rather than scaled.
+    zoom: usize,
+    /// What the interface draws into, before it is blown up into the mapping.
+    logical: Vec<u8>,
     closed: bool,
     /// True while the compositor holds the buffer. Painting into a buffer the
     /// compositor is still reading is the classic Wayland tear.
@@ -566,9 +572,21 @@ struct Globals {
 
 impl Window {
     /// Open a window of `w` by `h` and give it a title.
-    pub fn open(title: &str, w: usize, h: usize) -> Result<Window, Error> {
+    pub fn open(title: &str, w: usize, h: usize, zoom: usize) -> Result<Window, Error> {
         let conn = Conn::connect()?;
-        Window::on(conn, title, w, h)
+        let mut win = Window::on(conn, title, w, h)?;
+        // A compositor reports its own scale through wl_output, which this
+        // client does not read: a node's screen is 1x and the flag is here for
+        // the operator's own 4K panel. Nothing to guess, so the default is 1.
+        win.set_zoom(zoom.max(1));
+        Ok(win)
+    }
+
+    /// Change how large a drawn pixel is. Called once, before the first paint.
+    pub fn set_zoom(&mut self, zoom: usize) {
+        self.zoom = zoom.max(1);
+        let (lw, lh) = (self.width / self.zoom, self.height / self.zoom);
+        self.logical = vec![0; lw * lh * 4];
     }
 
     /// The same, on a connection someone else made -- which is how the tests
@@ -640,6 +658,8 @@ impl Window {
             width: w,
             height: h,
             pending_size: None,
+            zoom: 1,
+            logical: Vec::new(),
             closed: false,
             buffer_busy: false,
             seat: g.seat,
@@ -757,6 +777,11 @@ impl Window {
                     let _serial = a.uint();
                     let _surface = a.uint();
                     if let (Some(x), Some(y)) = (a.fixed(), a.fixed()) {
+                        // DIVIDED HERE AND NOWHERE ELSE. The compositor reports
+                        // surface pixels; the interface was drawn at a zoom, so
+                        // a click has to be mapped back through exactly the
+                        // factor that drew it.
+                        let (x, y) = self.logical_point(x, y);
                         self.at = (x, y);
                         self.inputs.push(Input::Motion { x, y });
                     }
@@ -764,6 +789,7 @@ impl Window {
                 pointer::EV_MOTION => {
                     let _time = a.uint();
                     if let (Some(x), Some(y)) = (a.fixed(), a.fixed()) {
+                        let (x, y) = self.logical_point(x, y);
                         self.at = (x, y);
                         self.inputs.push(Input::Motion { x, y });
                     }
@@ -932,8 +958,30 @@ impl Window {
     }
 
     /// The pixels, as `width * height` words of `0x00RRGGBB`.
+    ///
+    /// At a zoom of 1 this is the mapping itself and there is no copy. Above
+    /// that it is the logical buffer, and `present` expands it.
     pub fn pixels(&mut self) -> &mut [u8] {
-        self.map.as_mut()
+        if self.zoom <= 1 {
+            return self.map.as_mut();
+        }
+        let need = (self.width / self.zoom) * (self.height / self.zoom) * 4;
+        if self.logical.len() != need {
+            self.logical.resize(need, 0);
+        }
+        &mut self.logical
+    }
+
+    /// A surface pixel as the interface's own coordinate.
+    fn logical_point(&self, x: i32, y: i32) -> (i32, i32) {
+        let z = self.zoom.max(1) as i32;
+        (x / z, y / z)
+    }
+
+    /// The size the interface draws at, which is the window divided by the
+    /// zoom.
+    pub fn logical_size(&self) -> (usize, usize) {
+        (self.width / self.zoom.max(1), self.height / self.zoom.max(1))
     }
 
     /// Fill the whole window with one colour. Phase 1's entire drawing API;
@@ -957,6 +1005,10 @@ impl Window {
             Some(s) => s,
             None => return Ok(()),
         };
+        if self.zoom > 1 {
+            self.logical
+                .resize((w / self.zoom) * (h / self.zoom) * 4, 0);
+        }
         let need = w * h * 4;
 
         if need > self.pool_bytes {
@@ -995,6 +1047,16 @@ impl Window {
 
     /// Hand the current buffer to the compositor.
     pub fn present(&mut self) -> Result<(), Error> {
+        if self.zoom > 1 {
+            let (lw, lh) = self.logical_size();
+            let (w, h, zoom) = (self.width, self.height, self.zoom);
+            // The logical buffer is moved out and back so that both it and the
+            // mapping can be borrowed at once; it is the same allocation
+            // either side of the call.
+            let logical = std::mem::take(&mut self.logical);
+            crate::surface::expand(&logical, lw, lh, self.map.as_mut(), w, h, zoom);
+            self.logical = logical;
+        }
         self.conn.send(
             Msg::new(self.surface, surface::ATTACH)
                 .object(self.pool_buffer)
@@ -1074,7 +1136,7 @@ impl Surface for Window {
         Window::pixels(self)
     }
     fn size(&self) -> (usize, usize) {
-        (self.width, self.height)
+        Window::logical_size(self)
     }
     fn poll(&mut self) -> Result<Vec<Input>, String> {
         Window::poll(self).map_err(|e| e.to_string())
@@ -1445,6 +1507,36 @@ mod tests {
     }
 
     #[test]
+    fn a_zoom_draws_into_half_the_buffer_and_fills_the_whole_window() {
+        if !compositor_present() {
+            eprintln!("skipped: no compositor (set WAYLAND_DISPLAY to run this)");
+            return;
+        }
+        let mut win = Window::open("orrery (zoom)", 640, 400, 2).expect("opened");
+        let (w, h) = (win.width, win.height);
+        assert_eq!(win.logical_size(), (w / 2, h / 2));
+        assert_eq!(
+            Window::pixels(&mut win).len(),
+            (w / 2) * (h / 2) * 4,
+            "the interface is drawn into the logical buffer, not the mapping"
+        );
+
+        // Paint one recognisable pixel and require it to arrive as a 2x2
+        // block in the mapping -- which is the whole of what the zoom does.
+        {
+            let px = Window::pixels(&mut win);
+            px[..4].copy_from_slice(&0x00ff_7f3fu32.to_ne_bytes());
+        }
+        Window::present(&mut win).expect("presented");
+        let map = win.map.as_mut();
+        let word = |i: usize| u32::from_ne_bytes([map[i], map[i + 1], map[i + 2], map[i + 3]]);
+        for (x, y) in [(0usize, 0usize), (1, 0), (0, 1), (1, 1)] {
+            assert_eq!(word((y * w + x) * 4), 0x00ff_7f3f, "({}, {}) was not filled", x, y);
+        }
+        assert_ne!(word((2 * w + 2) * 4), 0x00ff_7f3f, "the block bled past 2x2");
+    }
+
+    #[test]
     fn a_display_error_becomes_a_sentence() {
         let (_, _, body) = body_of(Msg::new(DISPLAY, 0).uint(12).uint(3).string("bad surface"));
         let e = Event { object: DISPLAY, opcode: display::EV_ERROR, body };
@@ -1488,7 +1580,7 @@ mod tests {
             eprintln!("skipped: no compositor (set WAYLAND_DISPLAY to run this)");
             return;
         }
-        let mut win = Window::open("orrery (test)", 640, 400).expect("the window opened");
+        let mut win = Window::open("orrery (test)", 640, 400, 1).expect("the window opened");
         assert!(win.width > 0 && win.height > 0, "configured to {}x{}", win.width, win.height);
 
         win.fill(0xfc, 0xe2, 0xab);
@@ -1521,7 +1613,7 @@ mod tests {
         // Deliberately bigger than the headless output, so the compositor has
         // to answer with a size of its own and the resize path runs for real
         // rather than being simulated.
-        let mut win = Window::open("orrery (resize)", 2400, 1600).expect("opened");
+        let mut win = Window::open("orrery (resize)", 2400, 1600, 1).expect("opened");
         win.fill(0x12, 0x34, 0x56);
         win.present().expect("presented");
 

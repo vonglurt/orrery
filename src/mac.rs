@@ -294,6 +294,16 @@ pub struct Window {
     w: usize,
     h: usize,
     scale: f64,
+    /// How many device pixels one drawn pixel occupies, per side.
+    ///
+    /// THE INTERFACE IS DRAWN IN BITMAP GLYPHS and the canvas is allocated in
+    /// device pixels, so on a Retina panel every letter comes out half the
+    /// size it was designed at. The drawing happens into a logical buffer and
+    /// `present` repeats each pixel `zoom` times in both directions --
+    /// integer, nearest neighbour, every edge where it was put.
+    zoom: usize,
+    /// What `lab.rs` actually draws into.
+    logical: Vec<u8>,
     /// Set when the content view's frame no longer matches the canvas.
     pending: Option<(usize, usize)>,
     closed: bool,
@@ -304,7 +314,10 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn open(title: &str, w: usize, h: usize) -> Result<Window, String> {
+    /// `zoom` of 0 means "whatever this panel needs": the backing scale
+    /// factor, rounded, so a Retina Mac draws at 2 and an old panel at 1 and
+    /// the interface is the same physical size on both.
+    pub fn open(title: &str, w: usize, h: usize, zoom: usize) -> Result<Window, String> {
         unsafe {
             let app: Id = send(class("NSApplication"), sel("sharedApplication"));
             if app.is_null() {
@@ -354,6 +367,12 @@ impl Window {
             let scale: f64 = send(window, sel("backingScaleFactor"));
             let scale = if scale >= 1.0 { scale } else { 1.0 };
             let (dw, dh) = ((w as f64 * scale) as usize, (h as f64 * scale) as usize);
+            let zoom = if zoom == 0 {
+                (scale.round() as usize).max(1)
+            } else {
+                zoom
+            };
+            let (lw, lh) = (dw / zoom, dh / zoom);
 
             let distant_past: Id = send(class("NSDate"), sel("distantPast"));
 
@@ -366,6 +385,8 @@ impl Window {
                 w: dw,
                 h: dh,
                 scale,
+                zoom,
+                logical: vec![0; lw * lh * 4],
                 pending: None,
                 closed: false,
                 last_image: std::ptr::null_mut(),
@@ -408,8 +429,8 @@ impl Window {
             let p: CgPoint = send(e, sel("locationInWindow"));
             let r: CgRect = send(self.view, sel("frame"));
             (
-                (p.x * self.scale) as i32,
-                ((r.size.height - p.y) * self.scale) as i32,
+                (p.x * self.scale / self.zoom as f64) as i32,
+                ((r.size.height - p.y) * self.scale / self.zoom as f64) as i32,
             )
         };
 
@@ -494,11 +515,11 @@ impl Window {
 
 impl Surface for Window {
     fn pixels(&mut self) -> &mut [u8] {
-        &mut self.px
+        &mut self.logical
     }
 
     fn size(&self) -> (usize, usize) {
-        (self.w, self.h)
+        (self.w / self.zoom, self.h / self.zoom)
     }
 
     fn poll(&mut self) -> Result<Vec<Input>, String> {
@@ -542,11 +563,23 @@ impl Surface for Window {
             self.w = w;
             self.h = h;
             self.px.resize(w * h * 4, 0);
+            self.logical
+                .resize((w / self.zoom) * (h / self.zoom) * 4, 0);
         }
         Ok(())
     }
 
     fn present(&mut self) -> Result<(), String> {
+        let (lw, lh) = (self.w / self.zoom, self.h / self.zoom);
+        crate::surface::expand(
+            &self.logical,
+            lw,
+            lh,
+            &mut self.px,
+            self.w,
+            self.h,
+            self.zoom,
+        );
         unsafe {
             let provider = CGDataProviderCreateWithData(
                 std::ptr::null_mut(),

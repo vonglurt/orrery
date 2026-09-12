@@ -18,6 +18,16 @@ export XDG_RUNTIME_DIR=/tmp/xdg
 weston --backend=headless --socket=wayland-1 --width=960 --height=600 >/tmp/weston.log 2>&1 &
 i=0; while [ ! -S /tmp/xdg/wayland-1 ] && [ $i -lt 40 ]; do sleep 0.25; i=$((i+1)); done
 export WAYLAND_DISPLAY=wayland-1
-cargo test 2>&1 | grep -E "^test wl::|test result|running|note:|skipped" | tail -30
+# THE GREP USED TO HIDE A BUILD FAILURE. A Linux-only test that stopped
+# compiling produced no "test result" line at all, and the filtered output
+# looked like a quiet success -- so the status is taken from cargo rather than
+# from what survived the filter, and an error is printed in full.
+cargo test > /tmp/orrery-test.log 2>&1; status=$?
+grep -E "^test wl::|test result|running|skipped" /tmp/orrery-test.log | tail -30
+if [ "$status" -ne 0 ]; then
+    printf '\n=== cargo failed (%s) ===\n' "$status"
+    grep -E "^error|^error\[|-->" /tmp/orrery-test.log | head -20
+fi
 echo "=== weston complaints ==="
 grep -iE "error in client|invalid|protocol err" /tmp/weston.log | tail -5 || echo "(none)"
+exit $status

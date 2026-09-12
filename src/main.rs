@@ -114,6 +114,7 @@ fn main() {
     let mut dark = false;
     let mut copal = String::new();
     let mut ssh_user = String::from("copal");
+    let mut zoom = 0usize;
     let mut specimen_frame = false;
     let mut frame_view = String::new();
     let mut frame_select: Vec<String> = Vec::new();
@@ -190,6 +191,27 @@ fn main() {
             "--half-block" => { seat_opts.paint = Some(paint::Mode::HalfBlock); i += 1 }
             "--demo" => { demo = true; i += 1 }
             "--quiet" => { quiet = true; i += 1 }
+            // HOW BIG A DRAWN PIXEL IS, in screen pixels, per side.
+            //
+            // The interface is drawn in 8x13 and 10x20 bitmap glyphs, and the
+            // canvas is allocated in DEVICE pixels -- so on a Retina panel or
+            // a 4K screen every letter comes out half the size it was designed
+            // at. Scaling the glyphs is not an option: they are bitmaps, and a
+            // bitmap font at 1.5x is a smear. So the whole interface is drawn
+            // smaller and each pixel is repeated, at an integer factor, nearest
+            // neighbour. `--scale 0` (the default) means whatever the panel
+            // needs: the Mac's backing scale factor, and 1 on Wayland.
+            "--scale" => {
+                let v = need(i, "--scale");
+                match v.parse::<usize>() {
+                    Ok(n) if n <= 6 => zoom = n,
+                    _ => {
+                        eprintln!("orrery: --scale takes 0 to 6 (0 means whatever the panel needs)");
+                        std::process::exit(2)
+                    }
+                }
+                i += 2
+            }
             // The node's sshd lines, rendered from the same whitelist the
             // client builds its offer from. This is how the two ends stay in
             // step: `copal-prep.sh` writes what this prints, so a profile that
@@ -298,7 +320,7 @@ fn main() {
 
         #[cfg(target_os = "macos")]
         {
-            let win = match mac::Window::open("orrery", 960, 600) {
+            let win = match mac::Window::open("orrery", 960, 600, zoom) {
                 Ok(w) => w,
                 Err(e) => {
                     eprintln!("orrery: {}", e);
@@ -319,7 +341,7 @@ fn main() {
         }
         #[cfg(target_os = "linux")]
         {
-            let win = match wl::Window::open("orrery", 960, 600) {
+            let win = match wl::Window::open("orrery", 960, 600, zoom) {
                 Ok(w) => w,
                 Err(e) => {
                     eprintln!("orrery: {}", e);
@@ -1221,14 +1243,20 @@ fn usage() {
     --vnc-port N         default 5900
     --fps N              frames to ask the node for, 1-60; default 6, because
                          frame rate is the axis III-B found expensive
-  the native window (Linux/Wayland)
+  the native window (Wayland on a node, AppKit on a Mac)
 
-    --gui                open a window instead of serving one. Phase 2: it
-                         draws the specimen -- both faces, the palette and
-                         every primitive the wall is made of.
+    --gui                open a window instead of serving one: the room of
+                         machines, the verbs, and the panes they open.
+    --scale N            how many screen pixels one drawn pixel is, per side.
+                         0 (the default) means whatever the panel needs -- the
+                         Mac's backing scale factor, 1 on Wayland. The letters
+                         are bitmaps, so this repeats pixels rather than
+                         scaling glyphs: 2 is twice the size and just as crisp.
     --frame PATH         render one frame to a PPM and exit. Needs no
                          compositor, so it works on a headless node.
+    --frame-view V       lab, media or files -- which face to render.
     --dark               the night palette, for either of those.
+    --user NAME          the account on a node; copal-prep.sh's PI_USER.
 
   the seat, continued
 
