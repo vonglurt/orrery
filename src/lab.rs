@@ -684,6 +684,14 @@ fn draw_rail(ui: &mut Ui, l: &Layout, m: &Model, lab: &mut Lab) {
             ui.label_in(l.rail.x + 6, y, RAIL_W - 12, &s.id, &F8X13, t.dim);
             y += 16;
         }
+        // THE CAPTION GOES WHERE THE THING IT EXPLAINS IS. It used to sit at
+        // the bottom of the lab, five hundred pixels from the list, where it
+        // read as a caption for the tiles -- which is the opposite of what it
+        // says. A screenshot is how that kind of mistake is noticed.
+        y += 2;
+        ui.label_in(l.rail.x + 6, y, RAIL_W - 12, "seen, never", &F8X13, t.dim);
+        y += 13;
+        ui.label_in(l.rail.x + 6, y, RAIL_W - 12, "contacted", &F8X13, t.dim);
     }
 }
 
@@ -756,17 +764,6 @@ fn draw_lab(ui: &mut Ui, l: &Layout, m: &Model, lab: &mut Lab) {
         }
     }
 
-    if !m.strangers.is_empty() {
-        let y = l.lab.bottom() - 18;
-        ui.hrule(l.lab.x + PAD, y, l.lab.w - PAD * 2);
-        ui.label(
-            l.lab.x + PAD,
-            y + 4,
-            "seen, never contacted",
-            &F8X13,
-            ui.t.dim,
-        );
-    }
 }
 
 /// The results pane. Returns true when the operator dismissed it.

@@ -27,6 +27,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 
 const PAD: i32 = 10;
+/// What the footer says before anything has happened.
+const HELP: &str = "Tab switches sides · Return opens a directory · Escape closes";
 const ROW: i32 = 16;
 const HEAD: i32 = 26;
 const FOOT: i32 = 40;
@@ -164,7 +166,7 @@ impl Files {
         };
         f.read_here();
         f.note = if f.one_node() {
-            format!("{} — files", f.nodes[0])
+            HELP.to_string()
         } else {
             format!("choose a file, then copy it to all {} nodes", f.nodes.len())
         };
@@ -224,10 +226,13 @@ impl Files {
                 }
             };
             match ev {
-                Ev::Ready(cwd, cert) => {
+                Ev::Ready(cwd, _title) => {
                     self.connected = true;
                     self.there_dir = cwd.clone();
-                    self.note = cert;
+                    // The header already says which node this is. The footer
+                    // is the only line with room for how to drive it, so it
+                    // says that until something happens worth reporting.
+                    self.note = HELP.to_string();
                     if let Some(tx) = &self.tx {
                         let _ = tx.send(Cmd::List(cwd));
                     }
@@ -590,9 +595,10 @@ fn column(
     // where you are, and the beginning is the part everybody already knows.
     ui.label_right(bar.right() - 6, bar.y + 5, path, &F8X13, t.dim);
     ui.panel(list, if focused { t.tile } else { t.panel });
-    if focused {
-        ui.outline(list, t.accent);
-    }
+    // BOTH SIDES ARE BOXES; only one of them is the one you are typing in.
+    // Without the second outline the unfocused column read as rows floating on
+    // the background rather than as the other half of a pair.
+    ui.outline(list, if focused { t.accent } else { t.line });
 
     let inner = list.inset(6);
     let mut y = inner.y;

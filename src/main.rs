@@ -504,6 +504,15 @@ fn specimen(c: &mut draw::Canvas, t: &draw::Theme) {
     c.text(12, y, "abcdefghijklmnopqrstuvwxyz .,:;!?-+/", &F8X13, t.ink);
     y += 15;
     c.text(12, y, "45\u{b0}C \u{b7} scene show \u{b7} agent 1s \u{b7} warden", &F8X13, t.dim);
+    y += 15;
+    // EVERY CHARACTER BAKED PAST LATIN-1, at both sizes. `font.rs` returns a
+    // blank cell for anything it does not carry, which is right and which
+    // means a missing glyph is invisible until somebody looks -- and this is
+    // the sheet somebody looks at. A button once shipped reading "copy" where
+    // it should have read "← copy" for exactly this reason.
+    c.text(12, y, "extras  \u{2192} \u{2190} \u{2014} \u{2026} \u{25cf} \u{25cb} \u{2580}", &F8X13, t.ink);
+    y += 22;
+    c.text(12, y, "\u{2192} \u{2190} \u{2014} \u{2026} \u{25cf} \u{25cb} \u{2580}", &F10X20, t.ink);
 
     // The palette, named -- a swatch nobody can name is decoration.
     y += 26;
@@ -591,7 +600,11 @@ fn write_frame(
                         state.ask = Some(lab::Ask {
                             verb: face.name,
                             nodes: select.clone(),
-                            field: ui::Field::new("please stand back"),
+                            field: ui::Field::new(if face.name == "Message" {
+                                "please stand back"
+                            } else {
+                                "show"
+                            }),
                             prompt: verbs::lookup(&face.name.to_ascii_lowercase())
                                 .and_then(|v| verbs::prompt_for(v.arg))
                                 .unwrap_or("word:"),
