@@ -40,7 +40,17 @@ extern "C" {
     ) -> c_int;
     fn close(fd: c_int) -> c_int;
     fn dup(fd: c_int) -> c_int;
-    fn fcntl(fd: c_int, cmd: c_int, arg: c_int) -> c_int;
+    /// VARIADIC, AND THAT IS NOT A DETAIL. C declares this as
+    /// `int fcntl(int, int, ...)`. Declared here with a fixed third argument
+    /// it compiles, links and runs -- and on aarch64 Darwin the variadic
+    /// calling convention passes that argument on the STACK while a fixed one
+    /// goes in a register, so the callee reads whatever was on the stack.
+    /// `F_SETFL` then sets flags nobody asked for and `O_NONBLOCK` never
+    /// arrives: every read that was supposed to return immediately blocks
+    /// until the far end says something instead. That was true here for two
+    /// phases and only showed up when something read a pipe BEFORE asking it
+    /// a question.
+    fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
 }
 
 const F_GETFL: c_int = 3;
@@ -284,6 +294,25 @@ mod tests {
         p.write("erase\n");
         let seen = wait_for(&mut p, "REFUSED", 5);
         assert!(seen.contains("REFUSED"), "case-insensitive confirmation: {:?}", seen);
+    }
+
+    #[test]
+    fn reading_a_quiet_child_comes_back_at_once() {
+        // The same property `sftp.rs` depends on, tested where the flag is
+        // actually set. A pane pumps this once a frame: if a read blocks until
+        // the child says something, a card writer that is thinking for ten
+        // seconds freezes the whole console for ten seconds.
+        let argv = ["/bin/sh".into(), "-c".into(), "sleep 5".into()];
+        let mut p = Pty::spawn(&argv, &here()).expect("spawned");
+        let start = Instant::now();
+        let out = p.read();
+        assert!(out.is_empty());
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "reading a quiet child took {:?} -- the terminal is blocking",
+            start.elapsed()
+        );
+        p.kill();
     }
 
     #[test]

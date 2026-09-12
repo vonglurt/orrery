@@ -1,0 +1,574 @@
+<title>Orrery, Eleven Phases</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+/* ---------------------------------------------------------------------------
+   Palette: src/draw.rs LIGHT and DARK, verbatim. Those values are the two
+   blocks at the top of assets/wall.html and nothing new, so this page uses
+   them rather than inventing a second set.
+   ------------------------------------------------------------------------ */
+:root {
+  --base:   #fce2ab;
+  --panel:  #f7d79a;
+  --tile:   #fff2d4;
+  --ink:    #121212;
+  --dim:    #6b5836;
+  --line:   #c4a870;
+  --accent: #87704f;
+  --up:     #4a7c4e;
+  --warn:   #b06a24;
+  --alarm:  #ff723e;
+
+  --term-bg:   #1c1a16;
+  --term-ink:  #f0e3c4;
+  --term-dim:  #8a7d63;
+  --term-line: #35302a;
+
+  --rule: color-mix(in srgb, var(--line) 70%, transparent);
+  --shadow: 0 1px 0 color-mix(in srgb, var(--line) 60%, transparent);
+
+  --measure: 66ch;
+  --step--1: clamp(.78rem, .76rem + .1vw, .84rem);
+  --step-0:  clamp(1rem, .97rem + .16vw, 1.09rem);
+  --step-1:  clamp(1.2rem, 1.13rem + .33vw, 1.4rem);
+  --step-2:  clamp(1.5rem, 1.36rem + .62vw, 1.95rem);
+  --step-3:  clamp(1.95rem, 1.7rem + 1.14vw, 2.75rem);
+}
+:root:not([data-theme="light"]) {
+  @media (prefers-color-scheme: dark) {
+    --base:   #181818;
+    --panel:  #121212;
+    --tile:   #1f1f1f;
+    --ink:    #d0daed;
+    --dim:    #87704f;
+    --line:   #2a2a2a;
+    --accent: #fccf8a;
+    --up:     #8fbf7a;
+    --warn:   #fccf8a;
+    --alarm:  #ff723e;
+
+    --term-bg:   #0e0e0e;
+    --term-ink:  #d0daed;
+    --term-dim:  #7c705c;
+    --term-line: #262626;
+
+    --rule: color-mix(in srgb, var(--line) 160%, transparent);
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --base:   #181818;
+  --panel:  #121212;
+  --tile:   #1f1f1f;
+  --ink:    #d0daed;
+  --dim:    #87704f;
+  --line:   #2a2a2a;
+  --accent: #fccf8a;
+  --up:     #8fbf7a;
+  --warn:   #fccf8a;
+  --alarm:  #ff723e;
+
+  --term-bg:   #0e0e0e;
+  --term-ink:  #d0daed;
+  --term-dim:  #7c705c;
+  --term-line: #262626;
+
+  --rule: color-mix(in srgb, var(--line) 160%, transparent);
+  --shadow: none;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--base);
+  color: var(--ink);
+  font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+  font-size: var(--step-0);
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  padding: 0 20px;
+}
+
+.wrap { max-width: 1100px; margin: 0 auto; }
+
+/* ---- top bar ----------------------------------------------------------- */
+.bar {
+  position: sticky; top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--base) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+  margin: 0 -20px 0;
+  padding: 0 20px;
+}
+.bar-in {
+  max-width: 1100px; margin: 0 auto;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px;
+  padding-block: 10px;
+  font-family: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  font-size: var(--step--1);
+}
+.bar-in strong {
+  font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--accent); margin-right: auto;
+}
+.bar-in a { color: var(--dim); text-decoration: none; border-bottom: 1px solid transparent; }
+.bar-in a:hover, .bar-in a:focus-visible { color: var(--ink); border-bottom-color: var(--accent); }
+
+/* ---- masthead ---------------------------------------------------------- */
+header.mast { padding-block: clamp(40px, 7vw, 80px) clamp(28px, 4vw, 44px); }
+.eyebrow {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--step--1); letter-spacing: .13em; text-transform: uppercase;
+  color: var(--accent); margin: 0 0 18px;
+}
+h1 {
+  font-family: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700; font-size: var(--step-3); line-height: 1.04;
+  letter-spacing: -.015em; text-wrap: balance; margin: 0 0 20px; max-width: 20ch;
+}
+.standfirst {
+  max-width: var(--measure); font-size: var(--step-1); line-height: 1.5;
+  color: color-mix(in srgb, var(--ink) 86%, var(--dim)); margin: 0;
+}
+.mast-meta {
+  margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--rule);
+  display: flex; flex-wrap: wrap; gap: 8px 28px;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--step--1); color: var(--dim);
+}
+.mast-meta b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* ---- sections ---------------------------------------------------------- */
+section { padding-block: clamp(30px, 4.5vw, 54px); border-top: 1px solid var(--rule); }
+h2 {
+  font-family: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700; font-size: var(--step-2); line-height: 1.12;
+  letter-spacing: -.01em; text-wrap: balance; margin: 0 0 6px; max-width: 24ch;
+}
+h3 {
+  font-family: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 600; font-size: var(--step-1); line-height: 1.25;
+  text-wrap: balance; margin: 0 0 8px;
+}
+.kicker {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--accent); margin: 0 0 14px;
+}
+p { max-width: var(--measure); margin: 0 0 1em; }
+p:last-child { margin-bottom: 0; }
+.lede { font-size: var(--step-1); line-height: 1.5; color: color-mix(in srgb, var(--ink) 88%, var(--dim)); }
+strong { font-weight: 600; }
+em { font-style: italic; }
+a { color: var(--ink); text-underline-offset: 3px; text-decoration-color: var(--accent); }
+
+code, .mono {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .88em;
+}
+p code, li code, td code, th code { color: var(--accent); word-break: break-word; }
+
+.stack { display: flex; flex-direction: column; gap: 22px; }
+.stack-lg { display: flex; flex-direction: column; gap: 34px; }
+
+/* ---- the terminal figure ---------------------------------------------- */
+figure { margin: 0; }
+.term {
+  background: var(--term-bg); color: var(--term-ink);
+  border: 1px solid var(--term-line); border-radius: 3px;
+  overflow-x: auto; max-width: 100%;
+}
+.term-head {
+  display: flex; gap: 14px; align-items: baseline;
+  padding: 9px 14px; border-bottom: 1px solid var(--term-line);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .72rem; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--term-dim);
+}
+.term pre {
+  margin: 0; padding: 16px 14px 18px;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: clamp(.6rem, .3rem + 1.05vw, .78rem);
+  line-height: 1.42; white-space: pre; color: var(--term-ink);
+}
+figcaption {
+  margin-top: 10px; max-width: var(--measure);
+  font-size: var(--step--1); color: var(--dim); line-height: 1.5;
+}
+
+/* code block, lighter weight than the terminal figure */
+pre.code {
+  background: var(--tile); border: 1px solid var(--rule); border-left: 2px solid var(--accent);
+  border-radius: 2px; padding: 14px; margin: 0; overflow-x: auto; max-width: 100%;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--step--1); line-height: 1.55; white-space: pre; color: var(--ink);
+}
+
+/* ---- tables ------------------------------------------------------------ */
+.tablewrap { overflow-x: auto; max-width: 100%; }
+table {
+  border-collapse: collapse; width: 100%; min-width: 520px;
+  font-family: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  font-size: var(--step--1); line-height: 1.45;
+}
+caption {
+  text-align: left; padding-bottom: 10px; color: var(--dim);
+  font-size: var(--step--1);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: .1em; text-transform: uppercase;
+}
+th {
+  text-align: left; font-weight: 700; color: var(--accent);
+  letter-spacing: .07em; text-transform: uppercase; font-size: .74rem;
+  padding: 0 14px 7px 0; border-bottom: 1px solid var(--rule); white-space: nowrap;
+}
+td { padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td.num, th.num { font-variant-numeric: tabular-nums; text-align: right; padding-right: 0; }
+td.mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: .8rem; }
+.nowrap { white-space: nowrap; }
+
+/* ---- finding blocks ---------------------------------------------------- */
+.findings { display: grid; gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+.finding { background: var(--tile); padding: 22px; }
+.finding h3 { margin-bottom: 8px; }
+.finding p { font-size: var(--step--1); line-height: 1.6; max-width: 62ch; }
+.finding .tag {
+  display: inline-block; margin-bottom: 10px;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .68rem; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--term-ink); background: var(--accent);
+  padding: 3px 7px; border-radius: 2px;
+}
+@media (min-width: 820px) { .findings { grid-template-columns: repeat(3, 1fr); } }
+
+/* ---- document list ----------------------------------------------------- */
+.docs { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.doc {
+  background: var(--tile); display: grid; gap: 2px 20px; padding: 15px 16px;
+  grid-template-columns: 1fr auto;
+}
+.doc .name {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .86rem; font-weight: 500; color: var(--ink);
+}
+.doc .lines {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .78rem; color: var(--dim); font-variant-numeric: tabular-nums;
+  grid-row: 1 / span 2; align-self: center; text-align: right;
+}
+.doc .what { grid-column: 1; font-size: var(--step--1); color: var(--dim); line-height: 1.5; max-width: 60ch; }
+
+/* ---- risk severity ----------------------------------------------------- */
+.sev { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-weight: 600; }
+.sev::before { content: ""; width: 3px; height: 1.05em; border-radius: 1px; background: var(--up); }
+.sev.high::before { background: var(--alarm); }
+.sev.med::before  { background: var(--warn); }
+.sev.low::before  { background: var(--up); }
+
+/* ---- callout ----------------------------------------------------------- */
+.callout {
+  background: var(--tile); border: 1px solid var(--rule);
+  border-left: 3px solid var(--alarm); border-radius: 2px;
+  padding: 20px 22px; max-width: 78ch;
+}
+.callout .kicker { color: var(--alarm); }
+.callout p { font-size: var(--step--1); line-height: 1.6; }
+.callout.quiet { border-left-color: var(--accent); }
+.callout.quiet .kicker { color: var(--accent); }
+
+/* ---- arithmetic list --------------------------------------------------- */
+dl.arith { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 0; max-width: 70ch; }
+dl.arith dt { padding: 9px 16px 9px 0; border-bottom: 1px solid var(--rule); font-size: var(--step--1); }
+dl.arith dd {
+  margin: 0; padding: 9px 0; border-bottom: 1px solid var(--rule); text-align: right;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .82rem; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+dl.arith dd.hot { color: var(--alarm); font-weight: 500; }
+
+ul.plain { margin: 0; padding-left: 1.15em; max-width: var(--measure); }
+ul.plain li { margin-bottom: .5em; }
+ul.plain li::marker { color: var(--accent); }
+
+footer {
+  border-top: 1px solid var(--rule); padding-block: 30px 50px;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--step--1); color: var(--dim);
+}
+footer p { max-width: 68ch; line-height: 1.6; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+<div class="bar">
+  <div class="bar-in">
+    <strong>orrery</strong>
+    <a href="#what">what it is</a>
+    <a href="#phases">the phases</a>
+    <a href="#wire">the wire</a>
+    <a href="#found">what running it found</a>
+    <a href="#refused">what was refused</a>
+    <a href="#open">still open</a>
+  </div>
+</div>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Orrery · the build, end to end</p>
+  <h1>A console for a room of machines, written without a single dependency</h1>
+  <p class="lede">Eleven phases turned a read-only web wall into the thing an operator
+  stands in front of: a room of eight machines you select from, a row of verbs that act
+  on the selection, and five protocols underneath them that were all written by hand —
+  because the one machine this has to run on cannot reach the internet to fetch a crate.</p>
+  <div class="mast-meta">
+    <span><b>25,700</b> lines of Rust</span>
+    <span><b>0</b> dependencies</span>
+    <span><b>319</b> tests · <b>340</b> on Linux</span>
+    <span><b>817 KB</b> binary</span>
+    <span><b>11</b> phases, <b>1</b> refused</span>
+  </div>
+</header>
+
+<section id="what">
+  <p class="kicker">What it is now</p>
+  <h2>Three faces on one read model</h2>
+  <p>Every screen renders <code>copal fleet state</code> and nothing else. A node that is
+  not in that document cannot be dialled, and there is no second way of learning anything —
+  a console that discovered nodes for itself would be a second fleet.</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>and what each one is for</caption>
+    <thead><tr><th>face</th><th>command</th><th>what it is</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap"><b>the wall</b></td><td class="mono nowrap">orrery --listen</td>
+          <td>a page the gallery screen and a phone can open</td></tr>
+      <tr><td class="nowrap"><b>the seat</b></td><td class="mono nowrap">orrery --seat ID</td>
+          <td>one node, full screen, in the terminal you are already in</td></tr>
+      <tr><td class="nowrap"><b>the museum interface</b></td><td class="mono nowrap">orrery --gui</td>
+          <td>a native window on a Mac or a node: the lab, the verbs, the panes</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p style="margin-top:1.4em">The verb bar under the lab shows only what can apply to the
+  current selection, and the footer counts what cannot. <strong>A verb with no transport is
+  absent rather than greyed</strong> — the count went 6 → 5 → 3 → 2 → 1 as the phases landed,
+  and the one that remains is a decision rather than a gap.</p>
+</section>
+
+<section id="phases">
+  <p class="kicker">The schedule, as it actually went</p>
+  <h2>Eleven phases, and what proved each one</h2>
+  <p>The order was chosen so the riskiest thing was found out early and the useful thing was
+  usable long before the end. Stopping after phase 3 would have left a working console.</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>#</th><th>phase</th><th>proved against</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">0–3</td><td>the seams, input, the Mac backend, the museum interface</td>
+          <td>a real compositor (weston, headless) and a rendered frame</td></tr>
+      <tr><td class="mono">4</td><td><code>crypto.rs</code> — the primitives</td>
+          <td>published vectors: RFC 7748, 8032, 8439, FIPS 180-4 and 197, NIST GCM</td></tr>
+      <tr><td class="mono">5</td><td><code>ssh.rs</code> and Terminal</td>
+          <td><b>a real <code>sshd</code></b>, plus a hand-written server for the lies a real one will not tell</td></tr>
+      <tr><td class="mono">6</td><td><code>sftp.rs</code>, Exchange and Send</td>
+          <td><b>OpenSSH’s own <code>sftp-server</code></b> — no fake at all</td></tr>
+      <tr><td class="mono">7</td><td><code>tls.rs</code> and <code>x509.rs</code></td>
+          <td><b><code>openssl s_server</code></b>, including mutual TLS</td></tr>
+      <tr><td class="mono">8</td><td><code>rdp.rs</code> and Control</td>
+          <td><b>xrdp</b> — 1024×768, 137 rectangles, every one RLE compressed</td></tr>
+      <tr><td class="mono">9</td><td>the media pane and the card writer</td>
+          <td><code>copal-prep.sh</code> on a real terminal, typed <code>ERASE</code> and all</td></tr>
+      <tr><td class="mono">10</td><td>the node’s half, in the other repository</td>
+          <td><code>make lint</code>, which checks every embedded script under dash</td></tr>
+      <tr><td class="mono">11</td><td>the truth pass</td>
+          <td>this page, and a README that no longer promises what it cannot do</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout quiet" style="margin-top:1.6em">
+    <p class="kicker">The rule that shaped every phase</p>
+    <p><strong>No fake where a real server exists.</strong> A hand-written server agrees with
+    the client’s own reading of the specification, including wherever that reading is wrong.
+    Four of the five protocol phases ended up proved against somebody else’s implementation,
+    and each of those found something a fake never would have.</p>
+  </div>
+</section>
+
+<section id="wire">
+  <p class="kicker">The wire</p>
+  <h2>Five protocols, one whitelist</h2>
+  <p><code>profile.rs</code> names one key exchange, one host-key algorithm, one signature
+  algorithm and one cipher to offer. A test fails the build if <code>sha1</code>,
+  <code>cbc</code>, <code>rc4</code>, <code>ssh-rsa</code> or <code>ecdsa</code> ever appears
+  on a list — and <code>orrery --profile-sshd</code> prints the same list as
+  <code>sshd_config</code> lines, which the node writes into its own configuration and whose
+  drift <code>make lint</code> refuses.</p>
+
+  <div class="findings">
+    <div class="finding">
+      <p class="tag">the gate</p>
+      <h3>A certificate, never known_hosts</h3>
+      <p>The host key must be an <code>ssh-ed25519-cert-v01</code> from the fleet CA, of the
+      host kind, naming that node, valid now — and then the node has to prove it holds the
+      certified key. No trust-on-first-use, no prompt, no bare-key branch. The signature is
+      checked <em>before</em> the principals and the dates, because until then they are text
+      an attacker chose.</p>
+    </div>
+    <div class="finding">
+      <p class="tag">the lockdown</p>
+      <h3>Mutual TLS is what stops a standard client</h3>
+      <p>The node demands a client certificate from the fleet CA. <code>mstsc</code> and
+      FreeRDP have none and cannot be given one, so their handshake ends before RDP begins.
+      Proved against <code>s_server -Verify 1</code>: in with the certificate, out without it.</p>
+    </div>
+    <div class="finding">
+      <p class="tag">the narrowing</p>
+      <h3>One suite offered, two accepted</h3>
+      <p>In SSH the client’s preference decides, so offering ChaCha first and offering it
+      alone are the same session. In TLS the <em>server</em> picks — so the ClientHello names
+      exactly one suite, because the alternative runs at half a megabyte a second.</p>
+    </div>
+  </div>
+</section>
+
+<section id="found">
+  <p class="kicker">What running it found</p>
+  <h2>Six things no amount of reading would have caught</h2>
+
+  <div class="stack">
+    <div>
+      <h3>1 · <code>GSSAPIAuthentication no</code> is an error on Alpine</h3>
+      <p>OpenSSH there is built without GSSAPI, so the line the profile rendered made every
+      connection log a complaint about the node’s own configuration. Found on the first run of
+      <code>ssh-check.sh</code> against a real <code>sshd</code>; the line is gone and a test
+      keeps it gone.</p>
+    </div>
+    <div>
+      <h3>2 · The bitsliced AES costs 370×, not “a few”</h3>
+      <p>Measured rather than assumed: <span class="mono">186.1 MB/s</span> for
+      ChaCha20-Poly1305 against <span class="mono">0.5 MB/s</span> for AES-256-GCM. Since a TLS
+      server picks the cipher and rustls prefers AES, offering both would have handed a Raspberry
+      Pi the slow one. That is why <code>tls.rs</code> offers one suite — and why a test now runs
+      an AES-only server and requires the console to refuse it.</p>
+    </div>
+    <div>
+      <h3>3 · The transcript bug that only appears with a client certificate</h3>
+      <p>TLS 1.3’s application keys come from the transcript up to the server’s
+      <code>Finished</code> and nothing after it. Working that point out by arithmetic at the end
+      of the handshake was right while the client sent only a <code>Finished</code>, and silently
+      wrong the moment it also sent a certificate: a handshake that completes and then cannot
+      decrypt a byte.</p>
+    </div>
+    <div>
+      <h3>4 · FreeRDP will not serve an Ed25519 certificate</h3>
+      <p>It derives its channel bindings by hashing the certificate with the digest named in the
+      signature algorithm, and Ed25519 names none. <span class="mono">unable to retrieve
+      bindings</span>, and the connection drops before RDP starts. That is a finding about the
+      fleet’s one-algorithm-everywhere decision rather than about this code — and it is why the
+      RDP suite runs against xrdp instead.</p>
+    </div>
+    <div>
+      <h3>5 · <code>fcntl</code> is variadic, and declaring it otherwise is silent</h3>
+      <p>C declares it <span class="mono">int fcntl(int, int, ...)</span>. Declared with a fixed
+      third argument it compiles, links and runs — and on aarch64 Darwin the variadic convention
+      passes that argument on the <em>stack</em> while a fixed one goes in a register, so
+      <span class="mono">O_NONBLOCK</span> never arrived. Every read meant to return immediately
+      blocked until the far end spoke. It hid for two phases because every read happened
+      <em>after</em> a question had been asked, and appeared the instant something read a pipe
+      before asking one. Two tests now ask for nothing and require an answer anyway.</p>
+    </div>
+    <div>
+      <h3>6 · Three drawing bugs that a green test run cannot see</h3>
+      <p><code>Rect::cut_bottom</code> returns the piece it <em>took</em> first, the opposite of
+      <code>cut_top</code> — the whole file browser drew inside a forty-pixel strip. The gutter
+      between its columns was never painted, so it showed the canvas’s own zeroes as a black hole.
+      And a button labelled <span class="mono">← copy</span> drew as <span class="mono">copy</span>,
+      because the font baked U+2192 and not U+2190 and a missing glyph is a blank cell rather than
+      a panic. All three were found by rendering a frame to a file and looking at it.</p>
+    </div>
+  </div>
+</section>
+
+<section id="refused">
+  <p class="kicker">What was refused</p>
+  <h2>The absences are the design</h2>
+  <ul class="plain">
+    <li><strong>Observe.</strong> It wanted a thumbnail from every node. Nothing produces one and
+    nothing will: a node capturing its screen every few seconds is a capture daemon on every
+    machine in the museum, running whether or not anybody is looking, and — unlike the screen
+    verb — it cannot be bounded by a deadline. Refused, with the shape that would fit written
+    down instead.</li>
+    <li><strong>NLA.</strong> CredSSP means SPNEGO means NTLM: MD4, RC4, and a design whose whole
+    purpose is to carry a credential to a machine before that machine has proved anything.</li>
+    <li><strong>H.264.</strong> A video codec has no small correct subset and
+    <code>libavcodec</code> is not on an Alpine node, so RDP negotiates plain bitmaps with RLE —
+    the same trade the VNC client made in asking for Raw.</li>
+    <li><strong>Drawing orders.</strong> The RDP capability set advertises support for not one of
+    them, which obliges the server to send bitmaps. A drawing-order interpreter is a second
+    rendering engine to keep correct.</li>
+    <li><strong>Wildcard certificates, passphrases on keys, minting credentials, caching the read
+    model, Control on a selection.</strong> Each has a sentence in the code saying why.</li>
+  </ul>
+</section>
+
+<section id="numbers">
+  <p class="kicker">The arithmetic</p>
+  <h2>What it costs to run</h2>
+  <dl class="arith">
+    <dt>Binary, release, stripped</dt><dd>817 KB</dd>
+    <dt>Resident, serving the wall</dt><dd>1.1 MB</dd>
+    <dt>The Python prototype it replaced</dt><dd>22 MB</dd>
+    <dt>ChaCha20-Poly1305</dt><dd>186.1 MB/s</dd>
+    <dt>AES-256-GCM, constant-time circuit</dt><dd class="hot">0.5 MB/s</dd>
+    <dt>SHA-256</dt><dd>129.8 MB/s</dd>
+    <dt>Ed25519 sign · verify</dt><dd>0.97 ms · 0.42 ms</dd>
+    <dt>X25519 exchange</dt><dd>0.15 ms</dd>
+    <dt>Tests, macOS · Linux</dt><dd>319 · 340</dd>
+  </dl>
+</section>
+
+<section id="open">
+  <p class="kicker">Still open</p>
+  <h2>What this does not prove</h2>
+  <p>The truth pass exists to keep this list accurate rather than to shorten it.</p>
+  <ul class="plain">
+    <li><strong>Nothing has run on a Raspberry Pi.</strong> The whole program cross-compiles to
+    <code>aarch64-unknown-linux-musl</code> and its Linux suite passes in a container on a Mac,
+    which is not the same claim.</li>
+    <li><strong>No node has run <code>hypr-rdp</code>.</strong> The RDP client is proved against
+    xrdp — a different implementation by other people, and not the one a Wayland node will run.</li>
+    <li><strong>The operator has no X.509 certificate yet.</strong> Mutual TLS works; the fleet CA
+    is an SSH CA, and issuing X.509 from it needs an ASN.1 writer beside the signing path. Until
+    then Control refuses with a sentence naming the file it wanted.</li>
+    <li><strong>Hand-written cryptography is not reviewed cryptography.</strong> Narrowness reduces
+    the surface; it does not make this <code>rustls</code>. The risk is kept where it can be read.</li>
+  </ul>
+
+  <div class="callout" style="margin-top:1.6em">
+    <p class="kicker">And the next five days of work, priced</p>
+    <p>One SSH connection per node instead of one per verb (a second saved per session, eight per
+    fan-out); row-wise blitting instead of per-pixel (the reason Control feels heavy); one byte
+    writer instead of three (150 lines, and three places to get a length wrong becomes one); one
+    pane lifecycle; one fixture script for the container suites. Each is written up with what it
+    costs today and what the fix costs, because a refactoring list with no prices on it is a wish
+    list.</p>
+  </div>
+</section>
+
+<footer>
+  <p>orrery · the Copal fleet’s console · MIT · Copyright © 2026 Paul Richeson.
+  The design set, the schedule and the refactor list live in <span class="mono">docs/</span>;
+  the node’s half lives in <span class="mono">copal-alpine-linux/docs/fleet-control.md</span>.
+  Every number on this page came out of a test run or a measurement in the repository, and the
+  ones that are still assumptions say so.</p>
+</footer>
+
+</div>

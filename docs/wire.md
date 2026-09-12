@@ -403,7 +403,8 @@ else's server. The description this design
 was given — IronRDP, VA-API H.264, PipeWire audio, wlr-screencopy-v1, Hyprland
 0.54+ — is detailed and coherent, and there is no reference to it anywhere in
 `copal-alpine-linux`, it is not in Alpine's package index as far as this
-checkout knows, and nothing here has talked to one. Every claim in this
+checkout knows, and nothing here has talked to one -- still true after phase 8,
+which is why `rdp.rs` was proved against xrdp instead. Every claim in this
 document about what it will accept is therefore an assumption. Phase 8 begins
 by installing it on a node and reading what it actually negotiates.
 

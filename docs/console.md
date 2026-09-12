@@ -132,14 +132,14 @@ The lab report's table, with the two columns it always had, and a third saying
 what actually runs. **Every row is either a command a person could have typed or
 a session aimed at one node** — there is no third kind.
 
-| verb | one node | a selection | what it does |
-|---|---|---|---|
-| **Observe** `o` | view-only screen | the wall *is* observe-many | RDP or RFB, input never sent |
-| **Control** `c` | screen, keyboard, pointer | **refused** | RDP where the node is Wayland, RFB where it is X11 |
-| **Terminal** `t` | a shell | **refused** | SSH as the login user, `fleet-human` principal |
-| **Exchange** `e` | two-pane file browser | **refused** | SFTP over the same connection — **built** |
-| **Send** `s` | push a file | push to all | SFTP put, per-node result |
-| **Message** `m` | banner | banner on all | `copal fleet run message`, once the node has the verb |
+| verb | one node | a selection | what it does | built |
+|---|---|---|---|---|
+| **Observe** `o` | view-only screen | the wall *is* observe-many | RDP or RFB, input never sent | **refused**, §5 |
+| **Control** `c` | screen, keyboard, pointer | **refused** | RDP where the node is Wayland; RFB is the seat's today | ✓ |
+| **Terminal** `t` | a shell | **refused** | SSH as the login user, `fleet-human` principal | ✓ |
+| **Exchange** `e` | two-pane file browser | **refused** | SFTP over the same connection | ✓ |
+| **Send** `s` | push a file | push to all | SFTP put, per-node result | ✓ |
+| **Message** `m` | banner | banner on all | `copal fleet run message`, and the node has the verb now | ✓ |
 | **Run** `r` | one verb | fan-out, a result each | `copal fleet run --node ID …` |
 | **Scene** `S` | — | apply | `copal fleet scene --node ID apply NAME` |
 | **Snapshot** `k` | restore | restore each | `copal fleet run --node ID snapshot restore` |
@@ -277,5 +277,7 @@ to say so.* That sentence is already in `fleet.rs`; this is where it is drawn.
 - **The keymap is baked.** See [surface.md](surface.md) §5. A non-US operator
   gets the wrong letters into Terminal and Control until `--keymap` grows more
   than one table.
-- **Message is drawn against a verb that does not exist yet**, and the node-side
+- ~~**Message is drawn against a verb that does not exist yet**~~ — it exists:
+  phase 10 put a `message` case in `copal-fleet-exec` and `copal-notify` beside
+  it. What follows was the argument for adding it, and the node-side
   half is the larger half.

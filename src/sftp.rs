@@ -342,29 +342,56 @@ impl<T: Stream> Sftp<T> {
         Ok(id)
     }
 
+    /// A packet out of what has already arrived, or nothing.
+    fn buffered(&mut self) -> Result<Option<(u8, Vec<u8>)>, String> {
+        if self.inbuf.len() < 4 {
+            return Ok(None);
+        }
+        let len = u32::from_be_bytes([
+            self.inbuf[0],
+            self.inbuf[1],
+            self.inbuf[2],
+            self.inbuf[3],
+        ]) as usize;
+        // A length nobody could mean. The number is the server's and arrives
+        // before anything has been parsed, so it is checked rather than used
+        // to size an allocation.
+        if len == 0 || len > 4 * 1024 * 1024 {
+            return Err(format!("an SFTP packet claiming to be {} bytes", len));
+        }
+        if self.inbuf.len() < 4 + len {
+            return Ok(None);
+        }
+        let kind = self.inbuf[4];
+        let body = self.inbuf[5..4 + len].to_vec();
+        self.inbuf.drain(..4 + len);
+        Ok(Some((kind, body)))
+    }
+
+    /// Whatever has already arrived. NEVER WAITS, and that is what it is for:
+    /// a writer that fills the pipe without ever reading it can deadlock
+    /// against a server whose own answers have filled the pipe back the other
+    /// way. Eight 32 KB writes in flight is a quarter of a megabyte against a
+    /// 64 KB pipe buffer, so this is not a hypothetical.
+    fn try_packet(&mut self) -> Result<Option<(u8, Vec<u8>)>, String> {
+        loop {
+            if let Some(p) = self.buffered()? {
+                return Ok(Some(p));
+            }
+            let got = self.t.read()?;
+            if got.is_empty() {
+                return Ok(None);
+            }
+            self.inbuf.extend_from_slice(&got);
+        }
+    }
+
     /// One packet, waiting for it.
     fn packet(&mut self) -> Result<(u8, Vec<u8>), String> {
         let start = Instant::now();
         loop {
-            if self.inbuf.len() >= 4 {
-                let len = u32::from_be_bytes([
-                    self.inbuf[0],
-                    self.inbuf[1],
-                    self.inbuf[2],
-                    self.inbuf[3],
-                ]) as usize;
-                // A length nobody could mean. The number is the server's and
-                // arrives before anything has been parsed, so it is checked
-                // rather than used to size an allocation.
-                if len == 0 || len > 4 * 1024 * 1024 {
-                    return Err(format!("an SFTP packet claiming to be {} bytes", len));
-                }
-                if self.inbuf.len() >= 4 + len {
-                    let kind = self.inbuf[4];
-                    let body = self.inbuf[5..4 + len].to_vec();
-                    self.inbuf.drain(..4 + len);
-                    return Ok((kind, body));
-                }
+            if let Some(p) = self.buffered()? {
+                return Ok(p);
             }
             let got = self.t.read()?;
             if got.is_empty() {
@@ -734,6 +761,19 @@ impl<T: Stream> Sftp<T> {
         let result = (|| -> Result<u64, String> {
             loop {
                 while inflight.len() < DEPTH && !eof {
+                    // Take any answer that is already here before adding
+                    // another quarter-megabyte to the pipe. See `try_packet`.
+                    while let Some((kind, body)) = self.try_packet()? {
+                        if body.len() < 4 {
+                            return Err("an SFTP answer with no request id".into());
+                        }
+                        let id = u32::from_be_bytes([body[0], body[1], body[2], body[3]]);
+                        if let Some(n) = inflight.remove(&id) {
+                            check_write(kind, &body, remote)?;
+                            done += n as u64;
+                            progress(done, total);
+                        }
+                    }
                     let mut buf = vec![0u8; CHUNK];
                     let mut n = 0;
                     while n < CHUNK {
@@ -764,15 +804,7 @@ impl<T: Stream> Sftp<T> {
                 let Some(n) = inflight.remove(&id) else {
                     continue;
                 };
-                if kind != fxp::STATUS {
-                    return Err(format!("{}: message {} during a write", remote, kind));
-                }
-                let mut c = Cur::new(&body);
-                let _id = c.u32()?;
-                let code = c.u32()?;
-                if code != OK {
-                    return Err(format!("{}: {}", remote, status_word(code)));
-                }
+                check_write(kind, &body, remote)?;
                 done += n as u64;
                 progress(done, total);
             }
@@ -783,6 +815,20 @@ impl<T: Stream> Sftp<T> {
         closed?;
         Ok(sent)
     }
+}
+
+/// One write's answer: a status, and it has to be OK.
+fn check_write(kind: u8, body: &[u8], remote: &str) -> Result<(), String> {
+    if kind != fxp::STATUS {
+        return Err(format!("{}: message {} during a write", remote, kind));
+    }
+    let mut c = Cur::new(body);
+    let _id = c.u32()?;
+    let code = c.u32()?;
+    if code != OK {
+        return Err(format!("{}: {}", remote, status_word(code)));
+    }
+    Ok(())
 }
 
 /// Send one local file to many nodes, and say what happened to each.
@@ -997,6 +1043,26 @@ mod tests {
         let messy = format!("{}/./", dir.to_string_lossy());
         let clean = s.realpath(&messy).unwrap();
         assert!(!clean.contains("/./"), "realpath left {:?}", clean);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reading_an_idle_server_comes_back_at_once() {
+        // THE TEST THAT WOULD HAVE CAUGHT THE `fcntl` BUG. Every read before
+        // this one happened after a question had been asked, so a blocking
+        // descriptor looked exactly like a non-blocking one -- the answer was
+        // always on its way. This asks for nothing and requires the read to
+        // come back anyway, which is the property the pipelined writer depends
+        // on: it drains answers between writes, and a drain that blocks is a
+        // deadlock against a server whose own pipe is full.
+        let Some((mut s, dir)) = server() else { return };
+        let start = std::time::Instant::now();
+        assert!(s.try_packet().unwrap().is_none());
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "reading an idle server took {:?} -- the descriptor is blocking",
+            start.elapsed()
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

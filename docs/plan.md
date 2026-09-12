@@ -13,7 +13,9 @@ the design. The node's half is
 
 ## The board
 
-**Every phase has a state, and this table is where it is kept.** A plan whose
+**Every phase is done, and one of them is done by being refused.** The table
+below is where each one's state is kept; it is left in place rather than
+deleted, because a plan that erases its own history is a plan nobody can check. A plan whose
 status lives in prose is a plan nobody can read at a glance, and a phase that
 is neither done nor listed is a phase that quietly stops existing. Each heading
 below carries the same word as its row here; if the two ever disagree, this
@@ -34,7 +36,7 @@ work.
 | 8b | Observe | **refused** | — | phase 10 decided against a capture daemon; `fleet-control.md` §9 |
 | 9 | The media pane | **done** | `media.rs`, `pty.rs`, the card ledger | writing SD cards from the console |
 | 10 | The `copal-alpine-linux` side | **done** | the node's verbs and readings, and the crypto profile written into it | Message; the node enforcing what the console speaks |
-| 11 | The truth pass | **next** | the README and every "not built" line re-read | shipping without a lie in the documentation |
+| 11 | The truth pass | **done** | the README rewritten, `refactor.md`, `writeup.html` | shipping without a lie in the documentation |
 
 **Backlog means chosen and not started, not "maybe".** Nothing on this list is
 optional to the design; what is optional is stopping — after 3 the console
@@ -385,13 +387,36 @@ Control for a screen nobody is serving is a tile that lies.
 
 ---
 
-## Phase 11 · The truth pass — **next**
+## Phase 11 · The truth pass — **done**
 
-Documentation last, and specifically **the corrections**, because three things
-this repository currently says will have stopped being true:
-
-| says | becomes |
+| | |
 |---|---|
+| touches | `README.md` (rewritten), `docs/console.md`, `docs/wire.md`, `docs/README.md`, and this board |
+| does | every "not built", "unresolved" and "cannot" re-read against what is now there |
+| proves | nothing, and that is the point — this is the phase that makes the other ten honest |
+
+**The README said four things that had stopped being true.** Terminal was "not
+a console decision" — it was built in phase 5. Nothing on a node could start
+`x11vnc` — phase 10 gave the forced command a `remote` verb. `--gui` and the
+seat's Control "want opposite session types, unresolved" — the session word
+resolved it. And the measurements were the ones from before the seat existed.
+
+**Two claims in the architectural rule were retired deliberately rather than
+quietly.** `copal-fleet-console.py`'s test was that the console opens no socket
+and holds no credential; the seat opens one and the museum interface holds the
+operator's certificate. What is intact is the half that mattered — how the
+console *learns* things — and the README now says which two changed and why,
+instead of repeating a rule it no longer follows.
+
+**One promise became a refusal.** Observe's row on the board reads **refused**,
+not backlog, and `console.md` carries the argument rather than a note saying it
+is coming.
+
+Also written: [`refactor.md`](refactor.md), five things worth doing with a
+price on each and three that look like refactors and are not; and
+[`writeup.html`](writeup.html), the account of the whole build.
+
+---|---|
 | *"Terminal is a fleet decision, not a console one."* | it was a console one; the node built the door in stage 16 — [fleet-control.md](../../copal-alpine-linux/docs/fleet-control.md) §1 |
 | *"the GUI and the seat's Control want opposite session types. Unresolved."* | resolved: the session word selects the server — §2, ibid. |
 | *"Nothing on a node can start `x11vnc`."* | the `remote` verb, bounded four ways — §4, ibid. |
