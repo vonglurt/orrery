@@ -29,8 +29,8 @@ work.
 | 4 | `crypto.rs` | **done** | the primitives, 35 vector tests | phases 5–8, all of them |
 | 5 | `ssh.rs` and Terminal | **done** | the transport, the CA check, a shell in a pane | Terminal; phase 6 rides the same connection |
 | 6 | `sftp.rs`, Exchange and Send | **done** | SFTP v3, the file browser, fan-out send | Exchange, Send |
-| 7 | `tls.rs` | **next** | TLS 1.3 client, ChaCha only (R4) | phase 8 |
-| 8 | `rdp.rs`, Control and Observe | **backlog** | the RDP client, mutual TLS to the node | Control, Observe — the last two verbs |
+| 7 | `tls.rs`, `x509.rs` | **done** | TLS 1.3 client, ChaCha only (R4); the certificate reader | phase 8 |
+| 8 | `rdp.rs`, Control and Observe | **next** | the RDP client, mutual TLS to the node | Control, Observe — the last two verbs |
 | 9 | The media pane | **done** | `media.rs`, `pty.rs`, the card ledger | writing SD cards from the console |
 | 10 | The `copal-alpine-linux` side | **backlog** | `copal-prep.sh`, `copal-fleet-view`, `make sync-profile` | the node enforcing what the console speaks |
 | 11 | The truth pass | **backlog** | the README and every "not built" line re-read | shipping without a lie in the documentation |
@@ -261,20 +261,44 @@ Message is waiting for a node-side verb that does not exist.
 
 ---
 
-## Phase 7 · `tls.rs` — **next**
+## Phase 7 · `tls.rs` and `x509.rs` — **done**
 
 | | |
 |---|---|
-| adds | `src/tls.rs` ~1,100 |
-| does | TLS 1.3 client, X25519, two suites, certificate parsing and pinning |
-| proves | against `openssl s_server -tls1_3` — an implementation nobody here wrote |
+| adds | `src/tls.rs` 1,034, `src/x509.rs` 845, `tools/tls-check.sh` |
+| does | TLS 1.3 client, one version, one group, one suite, one signature algorithm; certificate chain verification; **mutual TLS**; key update; alerts as sentences |
+| proves | **`openssl s_server -tls1_3` in a container** — eight tests, including the AES-only server being refused and the client certificate being demanded |
 
-Independent of phase 8's risk, and cheap to verify, so it goes first and
-separately.
+**`x509.rs` was not in this plan and had to be.** The fleet's CA is an SSH CA
+and `ssh.rs` reads its certificates in ninety lines; TLS will not accept those,
+so a node's RDP server presents X.509 and this console has to read one. The
+parser is the dangerous part of any TLS client, and the mitigation is the one
+the rest of the program uses: one signature algorithm, one public-key
+algorithm, definite lengths only, no RSA, no ECDSA, no wildcards, no name
+constraints, no OCSP. Every one of those is a feature the fleet does not use
+and a parser somebody has had a CVE in.
+
+**The AES refusal is R4 as a test.** `tools/tls-check.sh` runs a third server
+with `-ciphersuites TLS_AES_256_GCM_SHA384`, and the console refuses it rather
+than crawling to it at half a megabyte a second. That is the whole argument of
+R4 turned into something that fails the build if somebody widens the offer.
+
+**Mutual TLS works, against a real server that demands it.** `s_server -Verify 1`
+with the fleet CA lets the console in with its operator certificate and turns
+it away without one — which is `docs/lockdown.md` §3's control, working: mstsc
+has no fleet certificate and cannot be given one.
+
+**Two bugs worth recording.** The application traffic secrets are derived from
+the transcript up to the server's `Finished` **and nothing after it**; working
+that point out by arithmetic at the end of the handshake was right when the
+client sent only a `Finished` and silently wrong the moment it also sent a
+certificate — a handshake that completes and then cannot decrypt a byte. And a
+certificate date before 1970 wrapped through `as u64` into the year 584
+billion, which reads as a certificate that is permanently not valid yet.
 
 ---
 
-## Phase 8 · `rdp.rs`, Control and Observe — **backlog**
+## Phase 8 · `rdp.rs`, Control and Observe — **next**
 
 **Every risk in this plan is in this phase.**
 

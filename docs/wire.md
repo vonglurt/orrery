@@ -223,8 +223,8 @@ encrypt to get wrong. A server that cannot do 1.3 is refused with a sentence.
 | | |
 |---|---|
 | key share | X25519 only |
-| suites | `TLS_CHACHA20_POLY1305_SHA256`, `TLS_AES_128_GCM_SHA256` |
-| signature algorithms | `ed25519`, `ecdsa_secp256r1_sha256`, `rsa_pss_rsae_sha256` |
+| suites | `TLS_CHACHA20_POLY1305_SHA256` — **alone**, and R4 above is why |
+| signature algorithms | `ed25519` — the fleet's CA signs nothing else |
 | not implemented | resumption, 0-RTT, client certificates, ALPN, OCSP, revocation, session tickets |
 
 `ecdsa_secp256r1` and `rsa_pss` are offered because a self-signed server

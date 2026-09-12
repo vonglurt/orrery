@@ -59,7 +59,11 @@ mod sftp;
 #[allow(dead_code)]
 mod ssh;
 mod surface;
+#[allow(dead_code)]
+mod tls;
 mod ui;
+#[allow(dead_code)]
+mod x509;
 mod verbs;
 // The native GUI. Wayland is a Linux protocol and `sys.rs` declares Linux
 // system calls, so both are absent elsewhere -- the seat and the wall still
