@@ -296,7 +296,7 @@ pub struct Face {
 /// console that is honest about being unfinished and one that looks finished.
 pub const FACES: &[Face] = &[
     Face { name: "Observe",  key: 'o', arity: Arity::Many, built: false },
-    Face { name: "Control",  key: 'c', arity: Arity::One,  built: false },
+    Face { name: "Control",  key: 'c', arity: Arity::One,  built: true },
     Face { name: "Terminal", key: 't', arity: Arity::One,  built: true },
     Face { name: "Exchange", key: 'e', arity: Arity::One,  built: true },
     Face { name: "Send",     key: 's', arity: Arity::Many, built: true },
@@ -1058,13 +1058,13 @@ mod tests {
     #[test]
     fn an_unbuilt_verb_is_absent_rather_than_drawn() {
         let names: Vec<&str> = visible(Posture::Operator, 1).iter().map(|f| f.name).collect();
-        for unbuilt in ["Observe", "Control", "Message"] {
+        for unbuilt in ["Observe", "Message"] {
             assert!(!names.contains(&unbuilt), "{} was offered with no transport", unbuilt);
         }
         // And the ones phases 5 and 6 built. These assertions are the
         // difference those phases made, stated where a later phase will have
         // to come and change them again.
-        for built in ["Terminal", "Exchange"] {
+        for built in ["Terminal", "Exchange", "Control"] {
             assert!(
                 names.contains(&built),
                 "{} has a transport now and is still not offered",

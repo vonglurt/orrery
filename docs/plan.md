@@ -30,9 +30,10 @@ work.
 | 5 | `ssh.rs` and Terminal | **done** | the transport, the CA check, a shell in a pane | Terminal; phase 6 rides the same connection |
 | 6 | `sftp.rs`, Exchange and Send | **done** | SFTP v3, the file browser, fan-out send | Exchange, Send |
 | 7 | `tls.rs`, `x509.rs` | **done** | TLS 1.3 client, ChaCha only (R4); the certificate reader | phase 8 |
-| 8 | `rdp.rs`, Control and Observe | **next** | the RDP client, mutual TLS to the node | Control, Observe — the last two verbs |
+| 8 | `rdp.rs`, Control | **done** | the RDP client, and a node's desktop in a pane | Control |
+| 8b | Observe | **backlog** | enlarged tiles with thumbnails | waits on the read model carrying `thumb` — phase 10 |
 | 9 | The media pane | **done** | `media.rs`, `pty.rs`, the card ledger | writing SD cards from the console |
-| 10 | The `copal-alpine-linux` side | **backlog** | `copal-prep.sh`, `copal-fleet-view`, `make sync-profile` | the node enforcing what the console speaks |
+| 10 | The `copal-alpine-linux` side | **next** | `copal-prep.sh`, `copal-fleet-view`, `make sync-profile` | the node enforcing what the console speaks |
 | 11 | The truth pass | **backlog** | the README and every "not built" line re-read | shipping without a lie in the documentation |
 
 **Backlog means chosen and not started, not "maybe".** Nothing on this list is
@@ -298,34 +299,38 @@ billion, which reads as a certificate that is permanently not valid yet.
 
 ---
 
-## Phase 8 · `rdp.rs`, Control and Observe — **next**
-
-**Every risk in this plan is in this phase.**
-
-It does **not** begin with code. It begins with:
-
-1. **Find hypr-rdp.** It is not in this repository, not in Alpine's index as far
-   as these checkouts know, and has never been run here — H2 of
-   [fleet-control.md](../../copal-alpine-linux/docs/fleet-control.md) §5. If it
-   cannot be obtained and built, stop and re-plan.
-2. **Run it on a node** with Hyprland, and capture a real connection with a
-   known-good client (FreeRDP with `/log-level:TRACE`).
-3. **Read what it negotiates.** Specifically: does it accept `PROTOCOL_SSL`
-   without `PROTOCOL_HYBRID`, and will it send bitmap updates to a client whose
-   `Confirm Active` advertises no EGFX and no RemoteFX?
-
-Only if (3) answers yes does the rest of the phase happen:
+## Phase 8 · `rdp.rs` and Control — **done**; Observe — **backlog**
 
 | | |
 |---|---|
-| adds | `src/rdp.rs` ~2,200, `lab.rs` +250 |
-| does | X.224, MCS/GCC, client info, licensing, capability exchange, finalisation, fastpath in and out, interleaved RLE decode, `cliprdr` text |
-| proves | against hypr-rdp on a node, and nothing else — see [wire.md](wire.md) §8 |
+| adds | `src/rdp.rs` 1,500, `src/screen.rs` 230, `tools/rdp-check.sh`, `ui.rs` +30 |
+| does | TPKT/X.224 with `PROTOCOL_SSL` alone, MCS and the T.124 conference, the capability exchange, bitmap updates, interleaved RLE, fast-path input, and the desktop in a pane |
+| proves | **xrdp in a container** — a server written by other people — 17 tests, of which three are a live session |
 
-**If (3) answers no**, the fallback is stated in advance and is not a defeat:
-install `wayvnc` beside Hyprland and point Control at `rfb.rs`, which is written
-and tested. The cost is the clipboard and some bandwidth. **Phase 8 is the only
-phase whose failure is survivable by design**, and that is deliberate.
+**The plan said "hypr-rdp on a node, and nothing else", and that was wrong.**
+There is no node here and there may never be one during this build, but there
+*is* a third-party server that speaks the same MS-RDPBCGR, and a client proved
+against somebody else's implementation is worth far more than a client proved
+against a fake of its own assumptions. The live session reported **1024×768,
+137 rectangles, 137 of them compressed** — which means the RLE decoder is
+exercised by a real server rather than only by tests written from the same
+reading of the specification that produced it.
+
+**FreeRDP's sample server was the first choice and cannot be used**: it refuses
+to complete a TLS handshake with an Ed25519 certificate. That is R5 in
+`wire.md`, and it is a finding about the fleet rather than about this code.
+
+**Control is built; Observe is not, and for a reason that is not a transport.**
+`console.md` §5 says Observe enlarges tiles and shows the read model's `thumb`
+field — and the read model has no such field. It is waiting on the node's half,
+which is phase 10. A verb waiting on somebody else's work is still absent from
+the bar, and the bar now says **2 not built**.
+
+**One capability set is doing the real work.** The order capability advertises
+support for not one drawing order, which obliges the server to send bitmaps
+rather than drawing commands. That is the same trade `rfb.rs` made in asking
+for Raw: a drawing-order interpreter is a second rendering engine to keep
+correct, and the fleet's screens are a desktop rather than a video.
 
 ---
 
@@ -340,7 +345,7 @@ phase whose failure is survivable by design**, and that is deliberate.
 
 ---
 
-## Phase 10 · The `copal-alpine-linux` side — **backlog**
+## Phase 10 · The `copal-alpine-linux` side — **next**
 
 | | |
 |---|---|

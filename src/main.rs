@@ -52,7 +52,11 @@ mod mac;
 mod paint;
 mod profile;
 mod pty;
+#[allow(dead_code)]
+mod rdp;
 mod rfb;
+#[allow(dead_code)]
+mod screen;
 mod seat;
 #[allow(dead_code)]
 mod sftp;
@@ -654,6 +658,12 @@ fn gui_loop<S: surface::Surface>(
     // The file browser. Exchange and Send are the same pane aimed at one node
     // or at several, so there is one of these rather than two.
     let mut browser: Option<files::Files> = None;
+    // A node's desktop. One at a time -- console.md §III-B priced eight live
+    // sessions on 512 MB boards and refused them, and the verb table says
+    // Control is Arity::One for the same reason.
+    let mut desktop: Option<screen::Screen> = None;
+    let opening_desktop: Arc<Mutex<Option<Result<screen::Screen, String>>>> =
+        Arc::new(Mutex::new(None));
     let opening: Arc<Mutex<Option<Result<media::Job, String>>>> = Arc::new(Mutex::new(None));
     let mut connecting: Option<String> = None;
     let mut shell_size = (0u32, 0u32);
@@ -696,6 +706,31 @@ fn gui_loop<S: surface::Surface>(
         if let Some(b) = browser.as_mut() {
             b.pump();
         }
+        if let Some(d) = desktop.as_mut() {
+            d.pump();
+        }
+        if let Some(done) = opening_desktop
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            connecting = None;
+            match done {
+                Ok(scr) => {
+                    desktop = Some(scr);
+                    *results.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    lab_state.results = None;
+                }
+                Err(e) => {
+                    let node = lab_state.selection.first().cloned().unwrap_or_default();
+                    *results.lock().unwrap_or_else(|err| err.into_inner()) = Some(lab::Results {
+                        verb: "Control".to_string(),
+                        running: false,
+                        items: vec![lab::Outcome { node, code: 1, output: e }],
+                    });
+                }
+            }
+        }
         if let Some(done) = opening.lock().unwrap_or_else(|e| e.into_inner()).take() {
             connecting = None;
             match done {
@@ -726,6 +761,7 @@ fn gui_loop<S: surface::Surface>(
         let mut action = None;
         let mut close_shell = false;
         let mut close_browser = false;
+        let mut close_desktop = false;
         {
             let mut c = draw::Canvas::new(s.pixels(), w, h);
             let mut u = ui::Ui::begin(&mut c, theme, &inputs, &mut ui_state);
@@ -745,6 +781,13 @@ fn gui_loop<S: surface::Surface>(
                         media::Pane::Stop => j.stop(),
                         media::Pane::Close => close_shell = true,
                         media::Pane::Stay => {}
+                    }
+                }
+                (None, _) if desktop.is_some() => {
+                    let d = desktop.as_mut().expect("checked");
+                    let at = ui::rect(0, 0, w as i32, h as i32);
+                    if screen::draw(&mut u, at, d) == screen::Pane::Close {
+                        close_desktop = true;
                     }
                 }
                 (None, _) if browser.is_some() => {
@@ -784,6 +827,12 @@ fn gui_loop<S: surface::Surface>(
         if close_browser {
             browser = None;
         }
+        if close_desktop {
+            if let Some(d) = desktop.as_mut() {
+                d.session.close();
+            }
+            desktop = None;
+        }
         if let Some(lab::Action::Verb { name, nodes }) = action {
             if name == "Terminal" {
                 // One node, because a shell is a conversation with one
@@ -813,6 +862,30 @@ fn gui_loop<S: surface::Surface>(
                             address,
                             ssh_user.to_string(),
                             Arc::clone(&opening),
+                        );
+                    }
+                }
+            } else if name == "Control" {
+                if let Some(node) = nodes.first().cloned() {
+                    if desktop.is_none() && shell.is_none() && connecting.is_none() {
+                        let address = model
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == node)
+                            .map(|n| n.address.clone())
+                            .unwrap_or_default();
+                        connecting = Some(node.clone());
+                        *results.lock().unwrap_or_else(|e| e.into_inner()) = Some(lab::Results {
+                            verb: "Control".to_string(),
+                            running: true,
+                            items: Vec::new(),
+                        });
+                        open_desktop(
+                            model.fleet.clone(),
+                            node,
+                            address,
+                            ssh_user.to_string(),
+                            Arc::clone(&opening_desktop),
                         );
                     }
                 }
@@ -885,6 +958,67 @@ fn dials_for(
         return Err("nothing was selected".into());
     }
     Ok(out)
+}
+
+/// Open a node's desktop, on a thread.
+///
+/// THE CREDENTIALS ARE X.509 AND THE FLEET'S ARE NOT, YET. `ssh.rs` uses the
+/// CA's OpenSSH certificates; TLS will not accept those, so this looks for an
+/// X.509 pair beside them -- `<fleet>_ca.crt` for the node's certificate, and
+/// `operator.crt`/`operator.key` for the client certificate the lockdown says
+/// the node will demand. Issuing those is the CA's job and phase 10's work.
+/// Until then this refuses with a sentence that names the missing file, which
+/// is the same treatment every other missing credential gets.
+fn open_desktop(
+    fleet: String,
+    node: String,
+    address: String,
+    user: String,
+    out: Arc<Mutex<Option<Result<screen::Screen, String>>>>,
+) {
+    thread::spawn(move || {
+        let home = match std::env::var("HOME") {
+            Ok(h) => std::path::PathBuf::from(h).join(".copal"),
+            Err(_) => std::path::PathBuf::from("/etc/copal"),
+        };
+        let result = (|| -> Result<screen::Screen, String> {
+            let ca_path = home.join("ca").join(format!("{}_ca.crt", fleet));
+            let ca_text = std::fs::read_to_string(&ca_path)
+                .map_err(|e| format!("{}: {}", ca_path.display(), e))?;
+            let cas: Vec<[u8; 32]> = x509::from_pem(&ca_text)?.iter().map(|c| c.key).collect();
+
+            // The operator's own certificate, if the CA has issued one.
+            let cert_path = home.join("fleets").join(&fleet).join("operator.crt");
+            let key_path = home.join("fleets").join(&fleet).join("operator.key");
+            let client = match (
+                std::fs::read_to_string(&cert_path),
+                std::fs::read_to_string(&key_path),
+            ) {
+                (Ok(c), Ok(k)) => Some((x509::from_pem(&c)?, x509::key_from_pem(&k)?)),
+                _ => None,
+            };
+
+            let addr = if address.is_empty() {
+                format!("{}.local:3389", node)
+            } else if address.contains(':') {
+                address.clone()
+            } else {
+                format!("{}:3389", address)
+            };
+            let session = rdp::Session::connect(&rdp::Dial {
+                addr,
+                host: node.clone(),
+                user,
+                domain: String::new(),
+                cas,
+                client,
+                width: 1280,
+                height: 720,
+            })?;
+            Ok(screen::Screen::open(node.clone(), session))
+        })();
+        *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+    });
 }
 
 /// Open a shell on a node, on a thread, and hand back the pane when it is up.

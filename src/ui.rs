@@ -86,8 +86,20 @@ pub struct Frame {
     presses: Vec<((i32, i32), Button, Mods)>,
     releases: Vec<((i32, i32), Button, Mods)>,
     pub keys: Vec<(Sym, Mods)>,
+    /// Every key event, with its scancode and its direction.
+    ///
+    /// `keys` is what a widget wants: presses, with the modifiers, in a form
+    /// that reads like a shortcut. CONTROL WANTS THE OPPOSITE -- the set-1
+    /// scancode and whether it went down or up, because that is what travels
+    /// on an RDP wire and because a far end that never sees a release has a
+    /// key held down for ever. `keymap.rs` produces those numbers, which is
+    /// the reason it produces them.
+    pub raw_keys: Vec<(u16, Sym, bool, Mods)>,
     pub text: String,
     pub scroll: (i32, i32),
+    /// Did the pointer move this frame? A remote desktop only wants to be told
+    /// about a position that changed.
+    pub motion: bool,
     pub resized: Option<(usize, usize)>,
     pub closed: bool,
 }
@@ -98,7 +110,10 @@ impl Frame {
         let mut f = Frame::default();
         for ev in events {
             match *ev {
-                Input::Motion { x, y } => state.pointer = (x, y),
+                Input::Motion { x, y } => {
+                    f.motion = state.pointer != (x, y);
+                    state.pointer = (x, y);
+                }
                 Input::Button { x, y, button, down } => {
                     state.pointer = (x, y);
                     if button == Button::Left {
@@ -120,7 +135,8 @@ impl Frame {
                     f.scroll.0 += dx;
                     f.scroll.1 += dy;
                 }
-                Input::Key { sym, down, mods, .. } => {
+                Input::Key { scancode, sym, down, mods } => {
+                    f.raw_keys.push((scancode, sym, down, mods));
                     if down {
                         f.keys.push((sym, mods));
                     }
@@ -142,6 +158,22 @@ impl Frame {
     /// Was this key pressed with the platform's command modifier?
     pub fn chord(&self, sym: Sym) -> bool {
         self.keys.iter().any(|(s, m)| *s == sym && m.toggling())
+    }
+
+    /// Every button that went down or up this frame, with where it happened.
+    ///
+    /// Widgets use `button_hit`, which is press-then-release over the same
+    /// rectangle. A remote desktop cannot: it has to forward the down and the
+    /// up separately, because the far end is drawing the drag.
+    pub fn button_events(&self) -> Vec<((i32, i32), Button, bool)> {
+        let mut out: Vec<((i32, i32), Button, bool)> = Vec::new();
+        for (at, b, _) in &self.presses {
+            out.push((*at, *b, true));
+        }
+        for (at, b, _) in &self.releases {
+            out.push((*at, *b, false));
+        }
+        out
     }
 
     /// The modifiers held at the most recent click, for the widget that got it.

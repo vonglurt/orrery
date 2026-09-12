@@ -354,16 +354,52 @@ So phase 7 has a decision it did not have before, and only two answers:
 The honest summary: AES-256-GCM in this console is a compatibility path, not a
 transport.
 
+### R5 — an Ed25519 certificate is not universally acceptable to RDP servers
+
+**Found by running phase 8, and it cost an afternoon's assumption.** The
+obvious server to test the client against was FreeRDP's own sample server,
+which takes a certificate and a key on the command line. It refuses ours:
+
+    [ERROR][com.freerdp.crypto] - [freerdp_tls_handshake]: unable to retrieve bindings
+    [ERROR][com.freerdp.core.peer] - CONNECTION_STATE_NEGO - rdp_server_accept_nego() fail
+
+FreeRDP derives the `tls-server-end-point` channel bindings by hashing the
+server certificate with the digest named inside its signature algorithm.
+**Ed25519 names no digest** — the signature scheme has one built in — so the
+lookup fails and the connection is dropped before RDP begins.
+
+What this does and does not mean:
+
+* It is **not** a problem with this console's TLS: `xrdp`, configured with the
+  same Ed25519 certificate and `ssl_protocols=TLSv1.3`, completes the
+  handshake and serves a desktop. `tools/rdp-check.sh` uses it, and says why
+  in its own header.
+* It **is** a constraint on which RDP server a node may run. If hypr-rdp
+  computes channel bindings the way FreeRDP does, the fleet's Ed25519-only
+  decision collides with it, and the answer is either an RSA or P-256
+  certificate for the RDP listener alone — which `x509.rs` cannot currently
+  read — or a patch upstream. **This is now the second question to ask a real
+  node**, after R1's.
+
+That is the shape of the risk generally: the fleet chose one algorithm
+everywhere, and the cost of that choice shows up at the edges where somebody
+else's code has to accept it.
+
 ### The two risks, named
 
-**R1 — hypr-rdp may not offer the bitmap path.** A server written around
-H.264/EGFX may negotiate EGFX or nothing. If it does, the options are: a patch
+**R1 — hypr-rdp may not offer the bitmap path.** Still open, and now with a
+client ready to find out: `rdp.rs` advertises no drawing orders and 16bpp
+bitmaps, and against xrdp that produced 137 rectangles, every one of them
+interleaved-RLE compressed. A server written around H.264/EGFX may negotiate
+EGFX or nothing. If it does, the options are: a patch
 upstream to fall back to bitmap updates, configuring it to prefer the legacy
 path, or running `wayvnc` beside it and using `rfb.rs`, which already works.
 **This must be tested against a real hypr-rdp before `rdp.rs` is written**, and
 the plan puts that test first for exactly this reason.
 
-**R2 — hypr-rdp has not been verified to exist.** The description this design
+**R2 — hypr-rdp has not been verified to exist.** Still true, word for word,
+and the client that will go and ask is now written and proved against somebody
+else's server. The description this design
 was given — IronRDP, VA-API H.264, PipeWire audio, wlr-screencopy-v1, Hyprland
 0.54+ — is detailed and coherent, and there is no reference to it anywhere in
 `copal-alpine-linux`, it is not in Alpine's package index as far as this

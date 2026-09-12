@@ -275,6 +275,15 @@ impl Conn {
     /// Connect, handshake, and refuse anything that is not exactly right.
     pub fn connect(addr: &str, cfg: &Config) -> Result<Conn, String> {
         let s = TcpStream::connect(addr).map_err(|e| format!("cannot reach {}: {}", addr, e))?;
+        Conn::start(s, cfg)
+    }
+
+    /// Take over a socket that has already been talked on.
+    ///
+    /// RDP NEEDS THIS AND NOTHING ELSE DOES. Its X.224 negotiation happens in
+    /// the clear on the same connection, and only then does the stack upgrade
+    /// -- so the socket arrives here with bytes already sent on it.
+    pub fn start(s: TcpStream, cfg: &Config) -> Result<Conn, String> {
         s.set_nodelay(true).ok();
         s.set_read_timeout(Some(Duration::from_millis(20))).ok();
         let mut c = Conn {
