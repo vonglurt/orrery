@@ -1209,8 +1209,11 @@ NOT_OURS='ignored'
         )
         .expect("started");
 
+        // Until the WHOLE question is there: the shell's output can arrive in
+        // two reads, and stopping at the first left half a prompt to assert
+        // on -- one run in ten, under the full suite's load.
         let start = std::time::Instant::now();
-        while j.prompt().is_empty() && start.elapsed() < std::time::Duration::from_secs(5) {
+        while !j.prompt().contains("Type ERASE:") && start.elapsed() < std::time::Duration::from_secs(5) {
             j.pump();
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
