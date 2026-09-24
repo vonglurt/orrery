@@ -439,6 +439,9 @@ struct Frame {
 
 pub struct Opts {
     pub port: u16,
+    /// The fleet's screen password, from answers.txt, for a node whose
+    /// copal-remote asks for one.
+    pub password: Option<String>,
     pub paint: Option<Paint>,
     /// Frames per second to *ask* for. The node decides what it can give.
     pub fps: u32,
@@ -449,7 +452,7 @@ impl Default for Opts {
         // Six is enough to see a menu open and cheap enough that a board
         // running the exhibit does not notice. §III-B's whole finding is that
         // frame rate is the expensive axis, so this is the knob that is low.
-        Opts { port: DEFAULT_PORT, paint: None, fps: 6 }
+        Opts { port: DEFAULT_PORT, password: None, paint: None, fps: 6 }
     }
 }
 
@@ -457,7 +460,8 @@ pub fn run(fleet: &Fleet, id: &str, opts: Opts) -> Result<(), String> {
     let node = resolve(fleet, id)?;
 
     eprintln!("orrery: dialling {} at {}:{}", node.id, node.address, opts.port);
-    let rfb = Rfb::connect(&node.address, opts.port).map_err(|e| e.to_string())?;
+    let rfb = Rfb::connect(&node.address, opts.port, opts.password.as_deref())
+        .map_err(|e| e.to_string())?;
     let info_name = rfb.info.name.clone();
     let (fw, fh) = (rfb.info.w, rfb.info.h);
     let input = rfb.input();

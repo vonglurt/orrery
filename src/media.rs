@@ -88,7 +88,10 @@ impl Answers {
     pub fn is_secret(key: &str) -> bool {
         matches!(
             key,
-            "COPAL_ROOT_PW_HASH" | "COPAL_FLEET_TOKEN" | "COPAL_FLEET_PSK"
+            "COPAL_ROOT_PW_HASH"
+                | "COPAL_FLEET_TOKEN"
+                | "COPAL_FLEET_PSK"
+                | "COPAL_FLEET_REMOTE_PASSWORD"
         )
     }
 }

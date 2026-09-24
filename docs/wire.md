@@ -14,8 +14,11 @@ typed.**
 
 `rfb.rs` was the first exception and it was argued narrowly. The seat opens a
 socket, but to an address that came out of `copal fleet state` and nowhere else;
-it holds no credential, because it speaks RFB security type `none` only; and
+it held no credential, because it spoke RFB security type `none` only; and
 what it carries is pixels, not knowledge. Three clauses of four survived.
+(Since then it holds one: the fleet's screen password from `answers.txt`,
+because a node's screen with no password was open to the whole LAN while it
+was shared.)
 
 Terminal, Exchange, Send and Control do not survive that argument. A shell needs
 a key. SFTP needs a key. RDP needs a TLS session and an account. So the rule is

@@ -16,7 +16,8 @@
 //! the thing being known, looked at directly.
 //!
 //! NO DEPENDENCIES, STILL. RFB is a small protocol and the subset a seat needs
-//! is smaller: the 3.8 handshake, one security type, a pixel format we choose
+//! is smaller: the 3.8 handshake, `none` or the fleet's screen password (VNC's
+//! DES challenge, the one cipher here RFB obliges), a pixel format we choose
 //! ourselves, and two encodings. Raw is a memcpy and CopyRect is a blit. The
 //! compressed encodings (Tight, ZRLE) all want zlib, which is a dependency or
 //! six hundred lines of inflate, and on a LAN carrying one session neither is
@@ -108,6 +109,157 @@ impl Screen {
 const SEC_NONE: u8 = 1;
 const SEC_VNC_AUTH: u8 = 2;
 
+/// VNC authentication's answer to a 16-byte challenge: the challenge
+/// encrypted with DES, keyed by the password -- its first eight bytes,
+/// zero-padded, each byte's bits reversed (RFB 6143 7.2.2 leaves that last
+/// quirk unsaid; every server since the original does it).
+fn vnc_response(password: &str, challenge: &[u8]) -> [u8; 16] {
+    let mut key = [0u8; 8];
+    for (k, b) in key.iter_mut().zip(password.bytes()) {
+        *k = b.reverse_bits();
+    }
+    let key = u64::from_be_bytes(key);
+    let mut out = [0u8; 16];
+    for (i, half) in challenge.chunks(8).take(2).enumerate() {
+        let mut block = [0u8; 8];
+        block[..half.len()].copy_from_slice(half);
+        let c = des::encrypt(key, u64::from_be_bytes(block));
+        out[i * 8..i * 8 + 8].copy_from_slice(&c.to_be_bytes());
+    }
+    out
+}
+
+/// DES, encryption only, one block -- AND ONLY HERE, BECAUSE RFB REQUIRES IT.
+///
+/// It is not one of the fleet's ciphers and never will be: profile.rs's
+/// whitelist forbids it on every list, and nothing else calls this. VNC
+/// authentication is DES or nothing, a node's screen asks for it, and the
+/// alternative was a screen any machine on the LAN could open. Proved
+/// against FIPS 46's worked example and against a real x11vnc
+/// (tools/vnc-check.sh). The screen's pixels still cross the LAN in the
+/// clear; that is the LAN rule's business, not this function's.
+mod des {
+    const IP: [u8; 64] = [
+        58, 50, 42, 34, 26, 18, 10, 2, 60, 52, 44, 36, 28, 20, 12, 4,
+        62, 54, 46, 38, 30, 22, 14, 6, 64, 56, 48, 40, 32, 24, 16, 8,
+        57, 49, 41, 33, 25, 17, 9, 1, 59, 51, 43, 35, 27, 19, 11, 3,
+        61, 53, 45, 37, 29, 21, 13, 5, 63, 55, 47, 39, 31, 23, 15, 7,
+    ];
+    const FP: [u8; 64] = [
+        40, 8, 48, 16, 56, 24, 64, 32, 39, 7, 47, 15, 55, 23, 63, 31,
+        38, 6, 46, 14, 54, 22, 62, 30, 37, 5, 45, 13, 53, 21, 61, 29,
+        36, 4, 44, 12, 52, 20, 60, 28, 35, 3, 43, 11, 51, 19, 59, 27,
+        34, 2, 42, 10, 50, 18, 58, 26, 33, 1, 41, 9, 49, 17, 57, 25,
+    ];
+    const E: [u8; 48] = [
+        32, 1, 2, 3, 4, 5, 4, 5, 6, 7, 8, 9, 8, 9, 10, 11, 12, 13, 12, 13, 14, 15, 16, 17,
+        16, 17, 18, 19, 20, 21, 20, 21, 22, 23, 24, 25, 24, 25, 26, 27, 28, 29, 28, 29, 30, 31, 32, 1,
+    ];
+    const P: [u8; 32] = [
+        16, 7, 20, 21, 29, 12, 28, 17, 1, 15, 23, 26, 5, 18, 31, 10,
+        2, 8, 24, 14, 32, 27, 3, 9, 19, 13, 30, 6, 22, 11, 4, 25,
+    ];
+    const PC1: [u8; 56] = [
+        57, 49, 41, 33, 25, 17, 9, 1, 58, 50, 42, 34, 26, 18,
+        10, 2, 59, 51, 43, 35, 27, 19, 11, 3, 60, 52, 44, 36,
+        63, 55, 47, 39, 31, 23, 15, 7, 62, 54, 46, 38, 30, 22,
+        14, 6, 61, 53, 45, 37, 29, 21, 13, 5, 28, 20, 12, 4,
+    ];
+    const PC2: [u8; 48] = [
+        14, 17, 11, 24, 1, 5, 3, 28, 15, 6, 21, 10, 23, 19, 12, 4,
+        26, 8, 16, 7, 27, 20, 13, 2, 41, 52, 31, 37, 47, 55, 30, 40,
+        51, 45, 33, 48, 44, 49, 39, 56, 34, 53, 46, 42, 50, 36, 29, 32,
+    ];
+    const SHIFTS: [u32; 16] = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1];
+    const S: [[u8; 64]; 8] = [
+        [14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7,
+         0, 15, 7, 4, 14, 2, 13, 1, 10, 6, 12, 11, 9, 5, 3, 8,
+         4, 1, 14, 8, 13, 6, 2, 11, 15, 12, 9, 7, 3, 10, 5, 0,
+         15, 12, 8, 2, 4, 9, 1, 7, 5, 11, 3, 14, 10, 0, 6, 13],
+        [15, 1, 8, 14, 6, 11, 3, 4, 9, 7, 2, 13, 12, 0, 5, 10,
+         3, 13, 4, 7, 15, 2, 8, 14, 12, 0, 1, 10, 6, 9, 11, 5,
+         0, 14, 7, 11, 10, 4, 13, 1, 5, 8, 12, 6, 9, 3, 2, 15,
+         13, 8, 10, 1, 3, 15, 4, 2, 11, 6, 7, 12, 0, 5, 14, 9],
+        [10, 0, 9, 14, 6, 3, 15, 5, 1, 13, 12, 7, 11, 4, 2, 8,
+         13, 7, 0, 9, 3, 4, 6, 10, 2, 8, 5, 14, 12, 11, 15, 1,
+         13, 6, 4, 9, 8, 15, 3, 0, 11, 1, 2, 12, 5, 10, 14, 7,
+         1, 10, 13, 0, 6, 9, 8, 7, 4, 15, 14, 3, 11, 5, 2, 12],
+        [7, 13, 14, 3, 0, 6, 9, 10, 1, 2, 8, 5, 11, 12, 4, 15,
+         13, 8, 11, 5, 6, 15, 0, 3, 4, 7, 2, 12, 1, 10, 14, 9,
+         10, 6, 9, 0, 12, 11, 7, 13, 15, 1, 3, 14, 5, 2, 8, 4,
+         3, 15, 0, 6, 10, 1, 13, 8, 9, 4, 5, 11, 12, 7, 2, 14],
+        [2, 12, 4, 1, 7, 10, 11, 6, 8, 5, 3, 15, 13, 0, 14, 9,
+         14, 11, 2, 12, 4, 7, 13, 1, 5, 0, 15, 10, 3, 9, 8, 6,
+         4, 2, 1, 11, 10, 13, 7, 8, 15, 9, 12, 5, 6, 3, 0, 14,
+         11, 8, 12, 7, 1, 14, 2, 13, 6, 15, 0, 9, 10, 4, 5, 3],
+        [12, 1, 10, 15, 9, 2, 6, 8, 0, 13, 3, 4, 14, 7, 5, 11,
+         10, 15, 4, 2, 7, 12, 9, 5, 6, 1, 13, 14, 0, 11, 3, 8,
+         9, 14, 15, 5, 2, 8, 12, 3, 7, 0, 4, 10, 1, 13, 11, 6,
+         4, 3, 2, 12, 9, 5, 15, 10, 11, 14, 1, 7, 6, 0, 8, 13],
+        [4, 11, 2, 14, 15, 0, 8, 13, 3, 12, 9, 7, 5, 10, 6, 1,
+         13, 0, 11, 7, 4, 9, 1, 10, 14, 3, 5, 12, 2, 15, 8, 6,
+         1, 4, 11, 13, 12, 3, 7, 14, 10, 15, 6, 8, 0, 5, 9, 2,
+         6, 11, 13, 8, 1, 4, 10, 7, 9, 5, 0, 15, 14, 2, 3, 12],
+        [13, 2, 8, 4, 6, 15, 11, 1, 10, 9, 3, 14, 5, 0, 12, 7,
+         1, 15, 13, 8, 10, 3, 7, 4, 12, 5, 6, 11, 0, 14, 9, 2,
+         7, 11, 4, 1, 9, 12, 14, 2, 0, 6, 10, 13, 15, 3, 5, 8,
+         2, 1, 14, 7, 4, 10, 8, 13, 15, 12, 9, 0, 3, 5, 6, 11],
+    ];
+
+    /// Pick bits out of `input` (`width` bits wide) in the table's order. The
+    /// tables number bits from 1, most significant first, as FIPS 46 does.
+    fn permute(input: u64, width: u32, table: &[u8]) -> u64 {
+        table.iter().fold(0, |out, &b| (out << 1) | ((input >> (width - b as u32)) & 1))
+    }
+
+    fn f(r: u64, k: u64) -> u64 {
+        let e = permute(r, 32, &E) ^ k;
+        let mut out = 0u64;
+        for (i, sbox) in S.iter().enumerate() {
+            let six = (e >> (42 - 6 * i)) & 0x3f;
+            let row = ((six & 0x20) >> 4) | (six & 1);
+            let col = (six >> 1) & 0xf;
+            out = (out << 4) | sbox[(row * 16 + col) as usize] as u64;
+        }
+        permute(out, 32, &P)
+    }
+
+    pub fn encrypt(key: u64, block: u64) -> u64 {
+        let k = permute(key, 64, &PC1);
+        let (mut c, mut d) = (k >> 28, k & 0x0fff_ffff);
+        let mut subkeys = [0u64; 16];
+        for (sub, &n) in subkeys.iter_mut().zip(SHIFTS.iter()) {
+            c = ((c << n) | (c >> (28 - n))) & 0x0fff_ffff;
+            d = ((d << n) | (d >> (28 - n))) & 0x0fff_ffff;
+            *sub = permute((c << 28) | d, 56, &PC2);
+        }
+        let ip = permute(block, 64, &IP);
+        let (mut l, mut r) = (ip >> 32, ip & 0xffff_ffff);
+        for sub in subkeys {
+            let next = l ^ f(r, sub);
+            l = r;
+            r = next;
+        }
+        permute((r << 32) | l, 64, &FP)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::encrypt;
+
+        #[test]
+        fn fips_46_worked_example() {
+            assert_eq!(encrypt(0x1334_5779_9BBC_DFF1, 0x0123_4567_89AB_CDEF), 0x85E8_1354_0F0A_B405);
+        }
+
+        #[test]
+        fn a_second_published_vector() {
+            // The weak-looking one every DES tutorial ends on: it encrypts to zero.
+            assert_eq!(encrypt(0x0E32_9232_EA6D_0D73, 0x8787_8787_8787_8787), 0);
+        }
+    }
+}
+
 /// What the server said it is, kept for the header line the seat draws.
 pub struct ServerInfo {
     pub name: String,
@@ -183,7 +335,10 @@ impl Rfb {
     /// `addr` comes from the read model's `address` field. It is never taken
     /// from a request body or a page -- see `seat.rs`, which looks the node up
     /// in the state document before it gets here.
-    pub fn connect(addr: &str, port: u16) -> Result<Rfb, Error> {
+    /// `password` answers a server that asks for VNC authentication: the
+    /// fleet's COPAL_FLEET_REMOTE_PASSWORD. A server that offers none is
+    /// spoken to without it.
+    pub fn connect(addr: &str, port: u16, password: Option<&str>) -> Result<Rfb, Error> {
         let target = (addr, port);
         let mut resolved = match target.to_socket_addrs() {
             Ok(it) => it,
@@ -224,7 +379,7 @@ impl Rfb {
         }
         sock.write_all(b"RFB 003.008\n")?;
 
-        Self::security(&mut sock)?;
+        Self::security(&mut sock, password)?;
 
         // ClientInit. 1 means "shared": do not disconnect anyone else who is
         // already looking. On a gallery machine the other viewer may be a
@@ -267,17 +422,13 @@ impl Rfb {
 
     /// Choose a security type and satisfy it.
     ///
-    /// ONLY `None` IS SUPPORTED, AND THAT IS A DECISION WITH A BOUNDARY ROUND
-    /// IT. VNC's own authentication is a DES challenge-response with a 56-bit
-    /// key and an 8-character password truncation -- it is not security, it is
-    /// a speed bump, and implementing DES here would mean writing a cipher in
-    /// a program whose README boasts about having no cryptography to get
-    /// wrong. Invariant 6 puts the fleet on a LAN that never reaches the
-    /// internet, and the node-side gate is the forced command and the
-    /// certificate, not a VNC password. So: the seat requires x11vnc to be
-    /// started with `-nopw`, and refuses in a sentence that says so rather
-    /// than half-implementing a cipher.
-    fn security(sock: &mut TcpStream) -> Result<(), Error> {
+    /// `None` when the server offers it, else VNC authentication with the
+    /// fleet's screen password. copal-remote starts x11vnc with that password
+    /// from answers.txt, so a screen on the LAN is not a screen anyone on the
+    /// LAN can open. VNC's scheme is weak -- DES, and an eight-character
+    /// password -- but it is the lock the protocol has, and the node's other
+    /// bounds (LAN address only, a deadline) still stand behind it.
+    fn security(sock: &mut TcpStream, password: Option<&str>) -> Result<(), Error> {
         let count = read_n(sock, 1)?[0];
         if count == 0 {
             // A zero count means refusal, and the reason follows as a string.
@@ -290,21 +441,29 @@ impl Rfb {
             return fail(format!("the node refused the session: {}", why));
         }
         let offered = read_n(sock, count as usize)?;
-        if !offered.contains(&SEC_NONE) {
-            let names: Vec<String> = offered
-                .iter()
-                .map(|t| match *t {
-                    SEC_VNC_AUTH => "VNC password".to_string(),
-                    other => format!("type {}", other),
-                })
-                .collect();
+        let mut sent_password = false;
+        if offered.contains(&SEC_NONE) {
+            sock.write_all(&[SEC_NONE])?;
+        } else if offered.contains(&SEC_VNC_AUTH) {
+            let Some(pw) = password.filter(|p| !p.is_empty()) else {
+                return fail(
+                    "this node's screen wants a VNC password and none is set here. \
+                     It is COPAL_FLEET_REMOTE_PASSWORD in the copal checkout's answers.txt \
+                     (make answers)."
+                        .to_string(),
+                );
+            };
+            sock.write_all(&[SEC_VNC_AUTH])?;
+            let challenge = read_n(sock, 16)?;
+            sock.write_all(&vnc_response(pw, &challenge))?;
+            sent_password = true;
+        } else {
+            let names: Vec<String> = offered.iter().map(|t| format!("type {}", t)).collect();
             return fail(format!(
-                "this VNC server wants {} and the seat only speaks 'none'. \
-                 Start x11vnc with -nopw; the fleet's gate is the certificate, not a VNC password.",
+                "this VNC server offers only {}, and the seat speaks 'none' or a VNC password.",
                 names.join(" or ")
             ));
         }
-        sock.write_all(&[SEC_NONE])?;
 
         // SecurityResult. 3.8 sends this even for `None`, which is exactly why
         // the seat does not try to speak to anything older.
@@ -312,6 +471,13 @@ impl Rfb {
         if result != 0 {
             let len = be32(&read_n(sock, 4)?) as usize;
             let why = String::from_utf8_lossy(&read_n(sock, len.min(4096))?).to_string();
+            if sent_password {
+                return fail(format!(
+                    "the node refused the screen password ({}). answers.txt's \
+                     COPAL_FLEET_REMOTE_PASSWORD must match the one its card was written with.",
+                    why
+                ));
+            }
             return fail(format!("the node refused the session: {}", why));
         }
         Ok(())
@@ -682,7 +848,23 @@ pub mod fake {
             if s.read_exact(&mut chosen).is_err() {
                 return Vec::new();
             }
-            if !sec.contains(&1) {
+            if chosen[0] == 2 && sec.contains(&2) {
+                // VNC authentication: challenge 0..16, and only the answer a
+                // real x11vnc accepted for "fleetpw1" gets in.
+                let challenge: Vec<u8> = (0u8..16).collect();
+                s.write_all(&challenge).unwrap();
+                let mut answer = [0u8; 16];
+                if s.read_exact(&mut answer).is_err() {
+                    return Vec::new();
+                }
+                if answer != FLEETPW1_ANSWER {
+                    let why = b"Authentication failed";
+                    s.write_all(&1u32.to_be_bytes()).unwrap();
+                    s.write_all(&(why.len() as u32).to_be_bytes()).unwrap();
+                    s.write_all(why).unwrap();
+                    return Vec::new();
+                }
+            } else if !sec.contains(&1) {
                 return Vec::new();
             }
             s.write_all(&0u32.to_be_bytes()).unwrap(); // SecurityResult: ok
@@ -755,6 +937,13 @@ pub mod fake {
         (Fake { port, w, h }, handle)
     }
 
+    /// vnc_response("fleetpw1", 0..16), pinned after tools/vnc-check.sh proved
+    /// the same code against a real x11vnc.
+    pub const FLEETPW1_ANSWER: [u8; 16] = [
+        0x85, 0x15, 0x53, 0xce, 0x7e, 0x68, 0xb9, 0xdd,
+        0xf5, 0x4b, 0xb5, 0xe6, 0x3b, 0xfa, 0xaf, 0xef,
+    ];
+
     /// One FramebufferUpdate carrying one full-screen Raw rectangle.
     fn send_raw(s: &mut TcpStream, w: usize, h: usize, paint: fn(usize, usize) -> (u8, u8, u8)) {
         let mut msg = vec![0u8, 0]; // FramebufferUpdate, padding
@@ -787,7 +976,7 @@ mod wire_tests {
     #[test]
     fn it_handshakes_and_decodes_a_real_raw_frame() {
         let (fake, handle) = fake::serve(16, 8, &[1], gradient);
-        let mut rfb = Rfb::connect("127.0.0.1", fake.port).expect("connect");
+        let mut rfb = Rfb::connect("127.0.0.1", fake.port, None).expect("connect");
         assert_eq!(rfb.info.w, 16);
         assert_eq!(rfb.info.h, 8);
         assert_eq!(rfb.info.name, "museum-01:0");
@@ -810,7 +999,7 @@ mod wire_tests {
     #[test]
     fn it_asks_for_the_encodings_it_can_actually_decode() {
         let (fake, handle) = fake::serve(4, 4, &[1], gradient);
-        let rfb = Rfb::connect("127.0.0.1", fake.port).expect("connect");
+        let rfb = Rfb::connect("127.0.0.1", fake.port, None).expect("connect");
         drop(rfb);
         let said = handle.join().unwrap();
 
@@ -835,7 +1024,7 @@ mod wire_tests {
     #[test]
     fn input_lands_on_the_wire_as_rfb_says_it_should() {
         let (fake, handle) = fake::serve(4, 4, &[1], gradient);
-        let rfb = Rfb::connect("127.0.0.1", fake.port).expect("connect");
+        let rfb = Rfb::connect("127.0.0.1", fake.port, None).expect("connect");
         let input = rfb.input();
         input.key(0x0061, true).unwrap(); // 'a' down
         input.pointer(300, 200, 1).unwrap();
@@ -865,7 +1054,7 @@ mod wire_tests {
     #[test]
     fn dropping_the_session_releases_every_modifier() {
         let (fake, handle) = fake::serve(4, 4, &[1], gradient);
-        let rfb = Rfb::connect("127.0.0.1", fake.port).expect("connect");
+        let rfb = Rfb::connect("127.0.0.1", fake.port, None).expect("connect");
         drop(rfb);
         let said = handle.join().unwrap();
 
@@ -878,15 +1067,43 @@ mod wire_tests {
     }
 
     #[test]
-    fn a_server_that_wants_a_password_is_refused_in_words() {
-        // Security type 2 only: VNC authentication, which the seat does not do.
+    fn a_password_server_with_no_password_here_says_where_it_lives() {
         let (fake, handle) = fake::serve(4, 4, &[2], gradient);
-        let e = match Rfb::connect("127.0.0.1", fake.port) {
+        let e = match Rfb::connect("127.0.0.1", fake.port, None) {
             Err(e) => e,
-            Ok(_) => panic!("a password-only server must be refused"),
+            Ok(_) => panic!("there is no password to give"),
         };
-        assert!(e.0.contains("VNC password"), "{}", e.0);
-        assert!(e.0.contains("-nopw"), "the error must say how to fix it: {}", e.0);
+        assert!(e.0.contains("COPAL_FLEET_REMOTE_PASSWORD"), "the error must say how to fix it: {}", e.0);
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn the_right_password_opens_the_screen() {
+        let (fake, handle) = fake::serve(4, 4, &[2], gradient);
+        let rfb = Rfb::connect("127.0.0.1", fake.port, Some("fleetpw1")).expect("connect");
+        assert_eq!((rfb.info.w, rfb.info.h), (4, 4));
+        drop(rfb);
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn a_wrong_password_is_refused_in_words() {
+        let (fake, handle) = fake::serve(4, 4, &[2], gradient);
+        let e = match Rfb::connect("127.0.0.1", fake.port, Some("fleetpw2")) {
+            Err(e) => e,
+            Ok(_) => panic!("a wrong password got in"),
+        };
+        assert!(e.0.contains("refused the screen password"), "{}", e.0);
+        assert!(e.0.contains("Authentication failed"), "the node's reason is kept: {}", e.0);
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn none_is_preferred_when_offered() {
+        // Both on offer: the seat takes None and never sends the password --
+        // a wrong one, so choosing type 2 would fail this test.
+        let (fake, handle) = fake::serve(4, 4, &[2, 1], gradient);
+        Rfb::connect("127.0.0.1", fake.port, Some("fleetpw2")).expect("connect");
         let _ = handle.join();
     }
 
@@ -894,10 +1111,42 @@ mod wire_tests {
     fn nothing_listening_says_so_plainly() {
         // Port 1 on loopback: nothing is there, and the sentence should name
         // x11vnc rather than reciting an errno.
-        let e = match Rfb::connect("127.0.0.1", 1) {
+        let e = match Rfb::connect("127.0.0.1", 1, None) {
             Err(e) => e,
             Ok(_) => panic!("something answered on port 1"),
         };
         assert!(e.0.contains("x11vnc"), "{}", e.0);
+    }
+}
+
+/// Against a real x11vnc, the server a node runs: tools/vnc-check.sh starts
+/// one with a password on a stand-in framebuffer and sets these. Without them
+/// the tests pass by doing nothing, as the RDP ones do.
+#[cfg(test)]
+mod live {
+    use super::*;
+
+    fn server() -> Option<(u16, String)> {
+        let port = std::env::var("ORRERY_VNC_PORT").ok()?.parse().ok()?;
+        Some((port, std::env::var("ORRERY_VNC_PASSWORD").ok()?))
+    }
+
+    #[test]
+    fn a_real_x11vnc_takes_the_password() {
+        let Some((port, pw)) = server() else { return };
+        let rfb = Rfb::connect("127.0.0.1", port, Some(&pw)).expect("x11vnc should let us in");
+        assert!(rfb.info.w > 0 && rfb.info.h > 0);
+    }
+
+    #[test]
+    fn a_real_x11vnc_refuses_a_wrong_one() {
+        let Some((port, pw)) = server() else { return };
+        // Different within the first eight characters, the only ones VNC reads.
+        let wrong = if pw == "wrongpwx" { "wrongpwy" } else { "wrongpwx" };
+        let e = match Rfb::connect("127.0.0.1", port, Some(wrong)) {
+            Err(e) => e,
+            Ok(_) => panic!("x11vnc let a wrong password in"),
+        };
+        assert!(e.0.contains("refused the screen password"), "{}", e.0);
     }
 }

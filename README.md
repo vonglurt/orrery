@@ -154,9 +154,13 @@ sixel where the terminal has it. `--fps` asks the node for a frame rate; the
 default is 6, because §III-B's finding is that frame rate is the expensive
 axis.
 
-The seat speaks RFB security type `none` only — VNC's own authentication is
-56-bit DES and an eight-character password, which is not security — and asks
-for Raw and CopyRect only, because every compressed encoding wants zlib.
+The seat speaks RFB security type `none`, or VNC authentication with the
+fleet's screen password: `COPAL_FLEET_REMOTE_PASSWORD` in the copal checkout's
+`answers.txt`, the one copal-remote starts x11vnc with. That scheme is 56-bit
+DES and an eight-character password — a lock, not security — so it lives in
+`rfb.rs` alone, off every list in `profile.rs`, proved against a real x11vnc by
+`tools/vnc-check.sh`. It asks for Raw and CopyRect only, because every
+compressed encoding wants zlib.
 
 ## The native window, underneath
 

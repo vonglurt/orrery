@@ -375,6 +375,16 @@ fn main() {
     // routes, one node. It shares the read model and nothing else, which is
     // the whole reason it lives here rather than in a second crate.
     if !seat.is_empty() {
+        // The screen password, where the cards' answers are: the copal
+        // checkout's answers.txt (--copal, else where Media looks for it).
+        // A node that offers no password is spoken to without it.
+        if let Some(root) = media::Media::find_root(&copal) {
+            let text = std::fs::read_to_string(root.join("answers.txt")).unwrap_or_default();
+            let pw = media::Answers::parse(&text).get("COPAL_FLEET_REMOTE_PASSWORD").to_string();
+            if !pw.is_empty() {
+                seat_opts.password = Some(pw);
+            }
+        }
         let fleet = Fleet::new(cmd, fleet_name, demo);
         if let Err(e) = seat::run(&fleet, &seat, seat_opts) {
             eprintln!("orrery: {}", e);
