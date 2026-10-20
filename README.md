@@ -21,6 +21,8 @@ model. This repository is two of them and then some:
 All three render the same read model, and that model is `copal fleet state` and
 nothing else.
 
+[docs/FEATURE_GUIDE.md](docs/FEATURE_GUIDE.md) is a tour of all three in pictures, taken from the demo fixture.
+
 ## The rule it inherits
 
 `copal-fleet-console.py`'s acceptance test was architectural: it opens no
