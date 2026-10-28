@@ -243,6 +243,42 @@ filter that dropped every `bash` without a `.sh`), and listed its own `sed`;
 the environment's `SSH_CONNECTION`, a filter for bare shells only, and
 skipping its own session fixed all three. The whole panel takes about 1.3 s.
 
+### `topnotch`
+
+Paul named the panel **topnotch** ("like the simple script to show me system
+resources ... especially if they are more than 10% CPU"), and asked for
+copal-tm beside it: copal-tm (vonglurt/copal-tm) is the Copal task manager,
+a full-screen instrument panel and process browser; topnotch is the glance.
+
+What changed from `fleet-status`:
+
+- **CPU now, measured.** `ps`'s `%CPU` is a process's average over its
+  life, so a job that went flat out a minute ago after an hour idle barely
+  shows. topnotch reads every process's CPU ticks (`/proc/PID/stat`, utime
+  plus stime, parsed after the `)` that ends a name that may hold spaces)
+  twice, half a second apart, as htop does.
+- **Busy now:** every process over 10% of a core in that half second,
+  busiest first, with its user, memory, and the address it was started
+  from if an SSH session started it.
+- the SSH table shows CPU now, sorted by it.
+- a hint for copal-tm: the command if it is installed, else how to install
+  it (`cargo install copal-tm`; installing from crates.io on the node was left
+  to Paul, who wrote it).
+
+Tested on calber with two CPU-bound jobs started over SSH from the Mac:
+
+```
+  Busy now (over 10% of a core, measured over half a second)
+    PID     USER        CPU    MEM  FROM             COMMAND
+    46953   user       102%   0.0%  192.168.8.143    bash -c while :; do :; done
+    46888   user       102%   0.0%  192.168.8.143    yes
+```
+
+(Half a second is a coarse window, so a single-threaded process can read a
+little over 100%.) `fleet-login.sh` installs it as `/usr/local/bin/topnotch`,
+removes the old `fleet-status`, and the banner runs it; rehearsed on calber
+in a scratch tree, install and undo.
+
 ## VI. Discussion
 
 **Ubuntu's installer did half the work.** "Third-party" put in the right

@@ -3,7 +3,7 @@
 # Copal fleet branding, what this node is for, hints, and none of Ubuntu's
 # advertising. Run ON THE NODE, as root:
 #
-#   scp tools/fleet-login.sh tools/fleet-status.sh user@NODE:  &&  ssh -t user@NODE sudo bash fleet-login.sh --role cuda
+#   scp tools/fleet-login.sh tools/topnotch.sh user@NODE:  &&  ssh -t user@NODE sudo bash fleet-login.sh --role cuda
 #   ssh -t user@NODE sudo bash fleet-login.sh --undo        # put Ubuntu's back
 #
 # Ubuntu builds its login message from the scripts in /etc/update-motd.d/.
@@ -49,7 +49,7 @@ SILENCE='10-help-text 50-landscape-sysinfo 50-motd-news 90-updates-available 91-
 if [ "$UNDO" = 1 ]; then
     for f in $SILENCE; do [ -e "$M/$f" ] && chmod +x "$M/$f" && echo "on again: $f"; done
     rm -f "$D"/motd-silenced*
-    rm -f "$M/01-copal-fleet" /usr/local/bin/fleet-status
+    rm -f "$M/01-copal-fleet" /usr/local/bin/topnotch /usr/local/bin/fleet-status
     [ -f /etc/default/motd-news ] && sed -i 's/^ENABLED=0/ENABLED=1/' /etc/default/motd-news
     command -v pro >/dev/null 2>&1 && pro config set apt_news=true >/dev/null 2>&1 || true
     echo "Ubuntu's login message is back. (Prompt= in /etc/update-manager/release-upgrades is left as it is.)"
@@ -99,20 +99,21 @@ CONF
     echo "wrote $D/node.conf"
 fi
 
-# ---- the banner: fleet-status, at each login ----------------------------------
-# fleet-status (tools/fleet-status.sh, copied beside this script) is the
-# panel: the node, CPU/memory/disk bars, the GPU and what runs on it, who is
-# in over SSH and what each connection started, the busiest processes, the
-# hints. Installed as a command too: run it any time, or watch -c fleet-status.
+# ---- the banner: topnotch, at each login --------------------------------------
+# topnotch (tools/topnotch.sh, copied beside this script) is the panel: the
+# node, CPU/memory/disk bars, the GPU and what runs on it, every process busy
+# now (over 10% of a core), who is in over SSH and what each connection
+# started, the hints. A command too: run it any time, or watch -c topnotch.
 _here=$(cd "$(dirname "$0")" && pwd)
-[ -f "$_here/fleet-status.sh" ] || { echo "fleet-status.sh is not beside $0: copy both (see the header)" >&2; exit 1; }
-install -m 0755 "$_here/fleet-status.sh" /usr/local/bin/fleet-status
-echo "installed /usr/local/bin/fleet-status"
+[ -f "$_here/topnotch.sh" ] || { echo "topnotch.sh is not beside $0: copy both (see the header)" >&2; exit 1; }
+install -m 0755 "$_here/topnotch.sh" /usr/local/bin/topnotch
+rm -f /usr/local/bin/fleet-status   # its first name
+echo "installed /usr/local/bin/topnotch"
 cat > "$M/01-copal-fleet" <<'MOTD'
 #!/bin/sh
-# Copal fleet login banner (orrery's tools/fleet-login.sh): the fleet-status
-# panel. Settings: /etc/copal-fleet/node.conf. Remove: sudo bash fleet-login.sh --undo
-[ -x /usr/local/bin/fleet-status ] && exec /usr/local/bin/fleet-status
+# Copal fleet login banner (orrery's tools/fleet-login.sh): topnotch.
+# Settings: /etc/copal-fleet/node.conf. Remove: sudo bash fleet-login.sh --undo
+[ -x /usr/local/bin/topnotch ] && exec /usr/local/bin/topnotch
 MOTD
 chmod +x "$M/01-copal-fleet"
 echo "wrote $M/01-copal-fleet"

@@ -1,17 +1,23 @@
 #!/bin/bash
-# fleet-status: a fleet node at a glance, htop-like, in one screen of text.
-# Installed by tools/fleet-login.sh as /usr/local/bin/fleet-status and run by
-# the login banner (/etc/update-motd.d/01-copal-fleet); run it any time, or
-# keep it live:  watch -c -n 2 fleet-status
+# topnotch: a fleet node at a glance, htop-like, in one screen of text.
+# Installed by tools/fleet-login.sh as /usr/local/bin/topnotch and run by the
+# login banner (/etc/update-motd.d/01-copal-fleet); run it any time, or keep
+# it live:  watch -c -n 2 topnotch    (copal-tm is the full task manager;
+# topnotch is the glance.)
 #
 #   the node      its name, role (/etc/copal-fleet/node.conf), system, uptime,
 #                 and address
-#   the machine   CPU (measured over 0.2 s), memory and disk, as bars
+#   the machine   CPU, memory and disk, as bars
 #   the GPU       load, memory and temperature, and what is running on it
+#   busy now      every process using more than 10% of a core NOW
 #   remote work   who is in over SSH and from where; and what each SSH
 #                 connection has started -- a script, a build, a training run
-#                 -- with its user, source address, age and CPU
-#   busiest       the five processes using the most CPU
+#                 -- with its user, source address, age and CPU now
+#
+# "Now" is measured: every process's CPU time is read twice, half a second
+# apart, as htop does. ps's %CPU is a process's average over its whole life,
+# so a job that went flat out a minute ago, after an hour of waiting, barely
+# shows there.
 #
 # As root (the login banner runs as root) every process can be tied to its
 # SSH connection; as an ordinary user, connections whose sshd is not yours
@@ -52,8 +58,16 @@ addr=$(ip -4 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/"); prin
 printf '  addr  %s\n' "${addr:-no IPv4 address}"
 
 # ---- the machine ---------------------------------------------------------------
-read -r _ a1 b1 c1 d1 e1 f1 g1 _ < /proc/stat; sleep 0.2
+# Every process's CPU ticks (utime + stime, fields 14 and 15 of
+# /proc/PID/stat, read after the ")" that ends the name, which may hold
+# spaces), and the machine's, twice, half a second apart.
+ticks() { awk '{ l = $0; sub(/^.*\) /, "", l); split(l, a, " "); split(FILENAME, f, "/"); print f[3], a[12] + a[13] }' /proc/[0-9]*/stat 2>/dev/null; }
+declare -A T0 NOW
+while read -r p t; do T0[$p]=$t; done < <(ticks)
+read -r _ a1 b1 c1 d1 e1 f1 g1 _ < /proc/stat; sleep 0.5
 read -r _ a2 b2 c2 d2 e2 f2 g2 _ < /proc/stat
+HZ=$(getconf CLK_TCK 2>/dev/null || echo 100)
+while read -r p t; do [ -n "${T0[$p]:-}" ] && NOW[$p]=$(( (t - T0[$p]) * 100 * 2 / HZ )); done < <(ticks)
 busy=$(( (a2+b2+c2+f2+g2) - (a1+b1+c1+f1+g1) )); idle=$(( (d2+e2) - (d1+e1) ))
 cpu=$(( busy + idle > 0 ? 100 * busy / (busy + idle) : 0 ))
 read -r l1 l5 l15 _ < /proc/loadavg
@@ -144,33 +158,51 @@ while read -r pid sid user et pc args; do
     # sshd itself, and bare interactive shells: their children are what counts
     case "$args" in
         sshd*|"sshd-session"*|"/usr/lib/openssh/"*|-bash|-sh|-zsh|bash|sh|zsh|/bin/bash|/bin/sh) continue ;;
-        *fleet-status*|*01-copal-fleet*|*run-parts*|*update-motd*) continue ;;
+        *topnotch*|*fleet-status*|*01-copal-fleet*|*run-parts*|*update-motd*) continue ;;
     esac
     under_sshd "$pid" || continue
     from=$(conn_of "$pid"); from=${from:-?}
     h=$(( et / 3600 )); m=$(( et % 3600 / 60 )); s=$(( et % 60 ))
     age=$( [ $h -gt 0 ] && printf '%dh%02dm' $h $m || printf '%dm%02ds' $m $s )
-    rows+=$(printf '    %-7s %-8s %-16s %7s %5s%%  %s' "$pid" "$user" "$from" "$age" "${pc%.*}" "${args:0:60}")$'\n'
-done < <(ps -eo pid=,sess=,user=,etimes=,pcpu=,args= --sort=-pcpu)
+    now=${NOW[$pid]:-0}
+    rows+=$(printf '%06d    %-7s %-8s %-16s %7s %5s%%  %s' "$now" "$pid" "$user" "$from" "$age" "$now" "${args:0:60}")$'\n'
+done < <(ps -eo pid=,sess=,user=,etimes=,pcpu=,args=)
 printf '\n  %sStarted over SSH%s %s(scripts, builds, runs; not the shells themselves)%s\n' "$B" "$Z" "$DIM" "$Z"
 if [ -n "$rows" ]; then
-    printf '    %s%-7s %-8s %-16s %7s %6s  %s%s\n' "$DIM" PID USER FROM AGE CPU COMMAND "$Z"
-    printf '%s' "$rows" | head -n 12
+    printf '    %s%-7s %-8s %-16s %7s %6s  %s%s\n' "$DIM" PID USER FROM AGE NOW COMMAND "$Z"
+    printf '%s' "$rows" | sort -r | cut -c7- | head -n 12
 else
     printf '    %snothing running from a remote session%s\n' "$DIM" "$Z"
 fi
 
-if [ "$BRIEF" = 0 ]; then
-    printf '\n  %sBusiest%s\n' "$B" "$Z"
-    printf '    %s%-7s %-8s %5s %5s  %s%s\n' "$DIM" PID USER CPU MEM COMMAND "$Z"
-    ps -eo pid=,user=,pcpu=,pmem=,args= --sort=-pcpu | awk -v me="$me" '$1 != me && $5 !~ /^\[/ && $5 !~ /^ps$/' | head -n 5 \
-        | while read -r pid user pc pm args; do printf '    %-7s %-8s %4s%% %4s%%  %s\n' "$pid" "$user" "${pc%.*}" "${pm}" "${args:0:60}"; done
+# ---- busy now --------------------------------------------------------------------
+# Every process over 10% of a core in the half second measured, busiest first.
+busy=''
+for p in "${!NOW[@]}"; do
+    [ "${NOW[$p]}" -ge 10 ] || continue
+    [ "$p" = "$me" ] && continue
+    read -r u pm a < <(ps -o user=,pmem=,args= -p "$p" 2>/dev/null) || continue
+    case "$a" in *topnotch*|"ps "*) continue ;; esac
+    f=$(under_sshd "$p" && conn_of "$p")
+    busy+=$(printf '%06d    %-7s %-8s %5s%% %5s%%  %-16s %s' "${NOW[$p]}" "$p" "$u" "${NOW[$p]}" "$pm" "${f:--}" "${a:0:56}")$'\n'
+done
+printf '\n  %sBusy now%s %s(over 10%% of a core, measured over half a second)%s\n' "$B" "$Z" "$DIM" "$Z"
+if [ -n "$busy" ]; then
+    printf '    %s%-7s %-8s %6s %6s  %-16s %s%s\n' "$DIM" PID USER CPU MEM FROM COMMAND "$Z"
+    printf '%s' "$busy" | sort -r | cut -c7- | head -n "$([ "$BRIEF" = 1 ] && echo 5 || echo 10)"
+else
+    printf '    %snothing above 10%% of a core%s\n' "$DIM" "$Z"
 fi
 
 if [ "${#HINTS[@]}" -gt 0 ]; then
     printf '\n  Hints\n'
     for h in "${HINTS[@]}"; do printf '    %s\n' "$h"; done
-    printf '    %-32s %s\n' "watch -c -n 2 fleet-status" "this screen, live"
+    printf '    %-32s %s\n' "watch -c -n 2 topnotch" "this screen, live"
+    if command -v copal-tm >/dev/null 2>&1 || ls /home/*/.cargo/bin/copal-tm >/dev/null 2>&1; then
+        printf '    %-32s %s\n' "copal-tm" "the full task manager: every process, signals, ports"
+    else
+        printf '    %-32s %s\n' "cargo install copal-tm" "the full task manager (not installed yet)"
+    fi
 fi
 [ -n "$WARN" ] && printf '\n  %s%s%s\n' "$Y" "$WARN" "$Z"
 printf '\n'
