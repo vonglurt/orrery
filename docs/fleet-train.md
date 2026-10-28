@@ -179,6 +179,41 @@ treadcore's: `ssh://git@ssh.github.com:443/treadcore/treadcore.git main`,
 from the Mac. A machine with no key that can push may still run the queue's
 censuses, but not promote.
 
+### The keeper, and flags: orrery runs itself
+
+**Everything the fleet does runs inside orrery's keeper** (`fleet-queue.py
+$Q ensure`, or Start the queue). No outside script waits on it. The band of
+the Training view says what the keeper is doing: its pid, since when, the last
+and next sync, and whether it is keeping this Mac awake.
+
+On a Mac the keeper starts `caffeinate -dimsu -w PID`, which ends with the
+keeper, so the Mac stays awake exactly while the queue runs. Set
+`"keep_awake": false` in config.json to leave the Mac to its own settings.
+
+**Flags.** When something needs a person, the keeper and the plan raise a
+**flag**:
+- a trial past both held-out reads (a candidate);
+- a candidate under a family's floor;
+- a promotion prepared and waiting for Approve;
+- a run finished or failed;
+- a machine lost;
+- the breaker;
+- push not permitted;
+- a failed sync or planner;
+- the shutdown report.
+
+**Where flags show:**
+- **In the window:** the Flags tab carries their count in red, and the Flags
+  page lists them with Acknowledge and Acknowledge all.
+- **On the command line:** `fleet-queue.py $Q flags [--all] [--brief]`, and
+  `ack ID|all [--by NAME]`.
+- **Files:** each flag is `$Q/flags/SEQ-KIND.json`, one a key.
+
+**For an agent working with you** (Claude Code), a `UserPromptSubmit` hook
+that runs `fleet-queue.py $Q flags --brief` puts every flag not yet
+acknowledged in front of it with each message, so it needs no process of its
+own to watch. treadcore's is in `.claude/settings.local.json`.
+
 ### 3. Gathering: sync
 
 **The keeper runs `PLANNER sync` every `sync_s` seconds, and once more at

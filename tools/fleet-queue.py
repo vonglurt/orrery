@@ -27,6 +27,11 @@ a keeper that keeps it all running, and two ways to stop.
                                              jobs leave the queue
     tools/fleet-queue.py DIR approve RID     a prepared promotion becomes main
     tools/fleet-queue.py DIR push-check      can this machine push the project's branch?
+    tools/fleet-queue.py DIR flags [--all] [--brief]
+                                             what needs attention: the flags not yet
+                                             acknowledged (--all: every one)
+    tools/fleet-queue.py DIR ack ID|all [--by NAME]
+                                             mark a flag (or all) acknowledged
     tools/fleet-queue.py DIR status [--json]
     tools/fleet-queue.py DIR add JOB.json    put a job on the queue by hand
 
@@ -61,10 +66,13 @@ queue knows nothing about what a job is for. A job:
 Everything is a file a person can read: queue/, running/HOST/, done/, failed/,
 stopped/ (a job each, its JSON), logs/ID.log, results/ID/, lanes/HOST.json
 (what each lane is doing), events.jsonl, and the switches STOP_ADDING and
-STOP_NOW (and SHUTDOWN). A job is claimed by renaming its file, so two lanes never run one
+STOP_NOW (and SHUTDOWN), flags/ (what needs a person's attention, each
+acknowledged or not), keeper.json (the keeper: pid, start, last plan, last and
+next sync, the caffeinate holding a Mac awake). A job is claimed by renaming its file, so two lanes never run one
 job. A remote job runs in its own process group, its pid kept on the host,
 so `stop-now` can stop all of it.
 """
+import glob
 import hashlib
 import json
 import os
@@ -141,6 +149,52 @@ class Queue:
 
     def flag(self, name):
         return os.path.exists(self.p(name))
+
+    def notice(self, kind, text, key=None):
+        """Raise a flag: something a person (or the agent working with them)
+        should look at. One a key: a key already flagged is not raised again.
+        flags/SEQ-KIND.json, until acknowledged (ack)."""
+        d = self.p("flags")
+        os.makedirs(d, exist_ok=True)
+        key = key or "%s:%s" % (kind, text)
+        for f in os.listdir(d):
+            try:
+                if json.load(open(os.path.join(d, f))).get("key") == key:
+                    return False
+            except (OSError, ValueError):
+                pass
+        seq = int(now() * 1000)
+        fid = "%d-%s" % (seq, kind)
+        with open(os.path.join(d, ".%s.tmp" % fid), "w") as f:
+            json.dump({"id": fid, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, "text": text, "key": key, "ack": None}, f)
+        os.rename(os.path.join(d, ".%s.tmp" % fid), os.path.join(d, fid + ".json"))
+        self.event("flag", kind=kind, text=text)
+        return True
+
+    def flags(self, every=False):
+        out = []
+        for f in sorted(glob.glob(self.p("flags", "*.json"))):
+            try:
+                j = json.load(open(f))
+            except (OSError, ValueError):
+                continue
+            if every or not j.get("ack"):
+                out.append(j)
+        return out
+
+    def ack(self, fid, by):
+        n = 0
+        for f in sorted(glob.glob(self.p("flags", "*.json"))):
+            j = json.load(open(f))
+            if not j.get("ack") and (fid == "all" or j["id"] == fid):
+                j["ack"] = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": by}
+                with open(f + ".tmp", "w") as out:
+                    json.dump(j, out)
+                os.replace(f + ".tmp", f)
+                n += 1
+        if n:
+            self.event("acknowledged", flag=fid, by=by, count=n)
+        return n
 
 
 # ---- running a job on a host --------------------------------------------------
@@ -292,6 +346,7 @@ def lane(q, host, alive):
         # nothing: a machine that is down must not fail the queue's jobs.
         if not reachable(host):
             q.event("host unreachable", host=name)
+            q.notice("host", "%s cannot be reached: its lane waits" % name, key="host:%s:%s" % (name, time.strftime("%Y-%m-%d %H")))
             say("unreachable")
             while (alive.is_set() and not q.flag("STOP_NOW") and not reachable(host)
                    and name in [h["name"] for h in q.config()["hosts"]]):
@@ -446,6 +501,23 @@ def keeper(q):
         os.rename(j["_file"], q.p("queue", os.path.basename(j["_file"])))
         q.event("requeued", job=j["id"], why="the keeper before this one died while it ran")
     q.event("keeper started", pid=os.getpid())
+    # A Mac running the keeper stays awake exactly while it runs: caffeinate
+    # waits on the keeper's pid and ends with it (config "keep_awake": false
+    # to leave the Mac to its own settings).
+    awake = None
+    if sys.platform == "darwin" and cfg.get("keep_awake", True):
+        try:
+            awake = subprocess.Popen(["caffeinate", "-dimsu", "-w", str(os.getpid())], stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True).pid
+        except OSError:
+            awake = None
+    life = {"pid": os.getpid(), "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "awake": awake,
+            "last_plan": None, "last_sync": None, "sync_s": cfg.get("sync_s", 1800)}
+
+    def tell():
+        with open(q.p(".keeper.json.tmp"), "w") as f:
+            json.dump(life, f)
+        os.replace(q.p(".keeper.json.tmp"), q.p("keeper.json"))
     alive = threading.Event()
     alive.set()
     threads = {}
@@ -457,7 +529,9 @@ def keeper(q):
         r = subprocess.run(["bash", "-c", "%s plan %d" % (planner, n)], capture_output=True, text=True, timeout=600)
         if r.returncode != 0:
             q.event("planner failed", detail=(r.stderr or r.stdout)[-400:])
+            q.notice("planner", "the planner failed: " + (r.stderr or r.stdout).strip()[-200:])
             return
+        life["last_plan"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         added = 0
         for job in json.loads(r.stdout or "[]"):
             if q.add(job):
@@ -480,6 +554,9 @@ def keeper(q):
         try:
             r = subprocess.run(["bash", "-c", "%s sync" % planner], capture_output=True, text=True, timeout=3600)
             q.event("synced" if r.returncode == 0 else "sync failed", detail=(r.stdout or r.stderr)[-400:])
+            life["last_sync"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            if r.returncode != 0:
+                q.notice("sync", "the sync failed: " + (r.stderr or r.stdout).strip()[-200:])
         except subprocess.TimeoutExpired:
             q.event("sync failed", detail="timed out")
         finally:
@@ -494,6 +571,9 @@ def keeper(q):
         while True:
             with open(q.p("keeper.beat"), "w") as f:
                 f.write(str(now()))
+            life["beat"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            life["next_sync"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(last_sync + sync_s)) if last_sync and sync_s else None
+            tell()
             if q.flag("SHUTDOWN"):
                 # Each lane powers its host off after the job in hand; when
                 # none is left the keeper reports and ends.
@@ -501,6 +581,7 @@ def keeper(q):
                     collect()
                     report = shutdown_report(q)
                     q.event("shut down", detail=report["summary"])
+                    q.notice("shutdown", "the fleet shut down: " + report["summary"])
                     break
                 time.sleep(poll)
                 continue
@@ -537,6 +618,7 @@ def keeper(q):
             if q.streak >= limit and not q.flag("STOP_ADDING"):
                 open(q.p("STOP_ADDING"), "w").close()
                 q.event("stop adding", why="%d jobs failed in a row: read logs/, fix, then resume-adding" % q.streak)
+                q.notice("breaker", "%d jobs failed in a row: the queue stopped adding (read logs/, fix, then Resume adding)" % q.streak)
             queued = len(q.jobs_in("queue"))
             running = len(q.jobs_in("running"))
             if q.flag("STOP_ADDING"):
@@ -640,7 +722,12 @@ def status(q):
         sync = json.load(open(os.path.join(os.path.dirname(q.d.rstrip("/")), "..", "ledger", "sync.json")))
     except (OSError, ValueError):
         pass
+    try:
+        keeper_info = json.load(open(q.p("keeper.json"))) if pid else None
+    except (OSError, ValueError):
+        keeper_info = None
     return {"dir": q.d, "state": state, "keeper_pid": pid, "adding": not q.flag("STOP_ADDING"),
+            "keeper": keeper_info, "flags": q.flags(),
             "shutdown": shutdown, "sync": sync,
             "counts": counts, "lanes": lanes,
             "recent": [{"id": j["id"], "kind": j.get("kind"), "title": j.get("title"), "host": j.get("host"),
@@ -716,6 +803,22 @@ def main(argv):
         r = subprocess.run(["bash", "-c", "%s approve %s" % (q.config()["planner"], shlex.quote(argv[2]))], text=True)
         q.event("approved" if r.returncode == 0 else "approve failed", run=argv[2])
         sys.exit(r.returncode)
+    elif cmd == "flags":
+        fl = q.flags(every="--all" in argv)
+        if "--json" in argv:
+            print(json.dumps(fl, indent=1))
+        elif "--brief" in argv:
+            if fl:
+                print("orrery %s: %d flag(s) not acknowledged" % (os.path.basename(q.d.rstrip("/")), len(fl)))
+                for f in fl:
+                    print("  [%s] %s %s: %s" % (f["id"], f["t"][11:16], f["kind"], f["text"]))
+        else:
+            for f in fl:
+                print("%s %s %-10s %s%s" % (f["id"], f["t"], f["kind"], f["text"], "  (acknowledged by %s)" % f["ack"]["by"] if f.get("ack") else ""))
+    elif cmd == "ack":
+        by = argv[argv.index("--by") + 1] if "--by" in argv else os.environ.get("USER", "someone")
+        n = q.ack(argv[2], by)
+        print("%d flag(s) acknowledged" % n)
     elif cmd == "push-check":
         # Can this coordinator push the project's branch (Approve is a push)?
         r = subprocess.run(["bash", "-c", "%s push-check" % q.config()["planner"]], text=True)

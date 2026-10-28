@@ -146,6 +146,11 @@ pub struct Queue {
     pub lead_hosts: Vec<(String, i64, i64)>,
     /// The runs a person asked for.
     pub runs: Vec<RunRow>,
+    /// What needs attention, not yet acknowledged: (id, time, kind, text).
+    pub flags: Vec<(String, String, String, String)>,
+    /// The keeper, in a line: its pid, how long up, the last and next sync,
+    /// and whether it holds this Mac awake.
+    pub keeper: String,
     /// Push permission to the project's branch: (ok, "url branch", detail).
     /// Approve is a push, so a template must have it.
     pub push: Option<(bool, String, String)>,
@@ -341,6 +346,22 @@ impl Model {
                         _ => None,
                     })
                     .collect(),
+                flags: arr(q, "flags").iter().map(|f| (s(f, "id"), s(f, "t"), s(f, "kind"), s(f, "text"))).collect(),
+                keeper: q
+                    .get("keeper")
+                    .filter(|k| k.get("pid").is_some())
+                    .map(|k| {
+                        let hm = |key: &str| { let v = s(k, key); if v.len() >= 16 { v[11..16].to_string() } else { "not yet".into() } };
+                        format!(
+                            "keeper pid {} since {}; last sync {}, next {}{}",
+                            n(k, "pid") as i64,
+                            hm("started"),
+                            hm("last_sync"),
+                            hm("next_sync"),
+                            if k.get("awake").and_then(|a| a.as_num()).is_some() { "; keeping this Mac awake" } else { "" }
+                        )
+                    })
+                    .unwrap_or_default(),
                 push: q.get("push").filter(|p| p.get("ok").is_some()).map(|p| {
                     (p.get("ok").and_then(|b| b.as_bool()).unwrap_or(false), format!("{} {}", s(p, "url"), s(p, "branch")), s(p, "detail"))
                 }),
@@ -484,11 +505,12 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
         // one page at a time, so nothing runs past its box.
         y = draw_queue(ui, rect(body.x, y, body.w, 64), q, st) + 6;
         y = draw_latest(ui, rect(body.x, y, body.w, 18), q) + 8;
-        y = draw_pages(ui, rect(body.x, y, body.w, 24), st) + 8;
+        y = draw_pages(ui, rect(body.x, y, body.w, 24), st, q.flags.len()) + 8;
         let page = rect(body.x, y, body.w, body.bottom() - y);
         match st.page {
             1 => draw_runs_page(ui, page, q, st),
             2 => draw_found_page(ui, page, q),
+            4 => draw_flags_page(ui, page, q, st),
             3 => {
                 if let Some(i) = draw_net(ui, page, m) {
                     st.zoom = Some(i);
@@ -546,25 +568,29 @@ fn draw_latest(ui: &mut Ui, at: Rect, q: &Queue) -> i32 {
 }
 
 /// The page tabs under the band.
-fn draw_pages(ui: &mut Ui, at: Rect, st: &mut State) -> i32 {
+fn draw_pages(ui: &mut Ui, at: Rect, st: &mut State, flags: usize) -> i32 {
     let t = ui.t;
-    const PAGES: [(&str, &str); 4] = [
+    const PAGES: [(&str, &str); 5] = [
         ("Fleet", "each machine and its job"),
         ("Runs", "ask for a run, cancel, approve"),
         ("Found", "improvements, by variable and machine"),
         ("Net", "the learned tank's weights"),
+        ("Flags", "what needs attention; acknowledge it"),
     ];
     let mut x = at.x;
     for (i, (name, what)) in PAGES.iter().enumerate() {
-        let w = F8X13.measure(name) as i32 + 24;
+        // The Flags tab carries its count, lit while any is unacknowledged.
+        let alarm = *name == "Flags" && flags > 0;
+        let shown = if alarm { format!("Flags {}", flags) } else { name.to_string() };
+        let w = F8X13.measure(&shown) as i32 + 24;
         let tab = rect(x, at.y, w, at.h);
         let on = st.page == i;
         ui.panel(tab, if on { t.tile } else { t.panel });
-        ui.outline(tab, t.line);
+        ui.outline(tab, if alarm { t.alarm } else { t.line });
         if on {
             ui.c.rect(tab.x, tab.bottom() - 2, tab.w, 2, t.accent);
         }
-        ui.label(tab.x + 12, tab.y + (at.h - F8X13.height as i32) / 2, name, &F8X13, if on { t.ink } else { t.dim });
+        ui.label(tab.x + 12, tab.y + (at.h - F8X13.height as i32) / 2, &shown, &F8X13, if alarm { t.alarm } else if on { t.ink } else { t.dim });
         if ui.button_hit(tab) {
             st.page = i;
         }
@@ -713,6 +739,39 @@ fn draw_runs_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
             st.ctl = Some(format!("approve {}", r.id));
         }
         y += lh + 2;
+    }
+}
+
+/// The Flags page: what the fleet raised for a person to see (a candidate
+/// past both reads, a promotion waiting for Approve, a run done or failed,
+/// a machine lost, the breaker, push permission), newest first; an
+/// operator acknowledges each, or all.
+fn draw_flags_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
+    let t = ui.t;
+    let lh = F8X13.height as i32 + 6;
+    let mut y = at.y;
+    if q.flags.is_empty() {
+        ui.label_in(at.x, y, at.w, "Nothing needs attention: every flag is acknowledged.", &F8X13, t.dim);
+        return;
+    }
+    ui.label(at.x, y, &format!("{} flag(s) not acknowledged, newest first", q.flags.len()), &F8X13, t.ink);
+    if st.operator && ui.button(rect(at.right() - 150, y - 4, 150, 22), "Acknowledge all", true) {
+        st.ctl = Some("ack all --by operator".into());
+    }
+    y += lh + 4;
+    let kw = F8X13.measure("candidate  ") as i32;
+    for (id, when, kind, text) in q.flags.iter().rev() {
+        if y + lh > at.bottom() {
+            break;
+        }
+        let bw = if st.operator { 110 } else { 0 };
+        ui.label(at.x, y, if when.len() >= 16 { &when[11..16] } else { when }, &F8X13, t.dim);
+        ui.label(at.x + 52, y, kind, &F8X13, if kind == "breaker" || kind == "push" || kind == "families" { t.alarm } else { t.up });
+        ui.label_in(at.x + 52 + kw, y, at.w - 52 - kw - bw - 10, text, &F8X13, t.ink);
+        if bw > 0 && ui.button(rect(at.right() - bw, y - 3, bw, lh - 2), "Acknowledge", true) {
+            st.ctl = Some(format!("ack {} --by operator", id));
+        }
+        y += lh;
     }
 }
 
@@ -890,6 +949,10 @@ fn draw_queue(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) -> i32 {
     }
     if !q.synced.is_empty() {
         ui.label_in(at.x, ly, bw, &q.synced, &F8X13, t.dim);
+        ly += F8X13.height as i32 + 3;
+    }
+    if !q.keeper.is_empty() {
+        ui.label_in(at.x, ly, bw, &q.keeper, &F8X13, t.dim);
         ly += F8X13.height as i32 + 3;
     }
     if !q.shutdown.is_empty() {

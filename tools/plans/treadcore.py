@@ -153,6 +153,17 @@ class Plan:
         self._sha = None
         self._rsaves = {}
 
+    def flag(self, kind, text, key=None):
+        """A flag for a person (fleet-queue's flags/, the same form): raised once a key."""
+        d = os.path.join(self.q, "flags")
+        os.makedirs(d, exist_ok=True)
+        key = key or "%s:%s" % (kind, text)
+        for f in glob.glob(os.path.join(d, "*.json")):
+            if (load(f, {}) or {}).get("key") == key:
+                return
+        fid = "%d-%s" % (int(time.time() * 1000), kind)
+        save(os.path.join(d, fid + ".json"), {"id": fid, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, "text": text, "key": key, "ack": None})
+
     def keep(self):
         save(os.path.join(self.pd, "state.json"), self.state)
         for rid, st in self._rsaves.items():
@@ -724,6 +735,12 @@ class Plan:
         # Kept until the top-up succeeds (keep()): a run is never marked as
         # having jobs the keeper did not receive.
         self._rsaves[rid] = st
+        # A run that ends, or waits for a person, is a flag.
+        status = st.get("status")
+        if status in ("done", "failed", "prepared"):
+            text = {"done": "run %s finished" % rid, "failed": "run %s failed: %s" % (rid, st.get("why", "")),
+                    "prepared": "promotion %s is prepared on %s: read it, then Approve (a push to main)" % (rid, st.get("branch"))}[status]
+            self.flag("run" if status != "prepared" else "approve", text, key="run:%s:%s" % (rid, status))
 
     def text(self, v):
         """A weights parameter: a file under treadcore, or the text itself ("a = 1;b = 2")."""
@@ -1090,6 +1107,8 @@ class Plan:
             detail = "ok" if ok else (r.stderr.strip().splitlines() or ["refused"])[-1][:200]
         st = {"ok": ok, "remote": remote, "url": url, "branch": branch, "detail": detail, "checked": time.strftime("%Y-%m-%dT%H:%M:%S")}
         save(os.path.join(self.pd, "push.json"), st)
+        if not ok:
+            self.flag("push", "no push permission to %s %s: %s" % (url or remote, branch, detail), key="push:%s" % time.strftime("%Y-%m-%d"))
         return st
 
     # ---- promotion: a candidate prepared for treadcore, approved by Paul ---------
@@ -1281,8 +1300,24 @@ class Plan:
             self.state["ticked"].append(jid)
 
     # ---- the keeper's calls ---------------------------------------------------------------
+    def raise_found(self):
+        """Flags for what the fleet found: a trial past both held-out reads,
+        and a candidate under a family's floor."""
+        for jid, ds in self.held_pairs().items():
+            if len(ds) == 2 and all(self.passes(d) for d in ds):
+                c = self.job_census(jid)
+                held = [self.job_census(d.rstrip("/").split(os.sep)[-2]) for d in ds]
+                tw = glob.glob(os.path.join(self.q, "results", jid, self.home, "out", jid, "*", "trial.weights"))
+                what = short_moved(open(tw[0]).read()) if tw else jid
+                self.flag("candidate", "%s passed both held-out reads (%s): %s" % (jid, ", ".join("%+.2f" % h[0] for h in held if h), what), key="candidate:%s" % jid)
+        fam = load(os.path.join(self.pd, "families.json"), {}) or {}
+        for name, v in fam.items():
+            if v.get("verdict") == "UNDER":
+                self.flag("families", "%s falls under a family's floor" % name, key="under:%s" % name)
+
     def plan(self, n):
         jobs = self.prepare_jobs()
+        self.raise_found()
         jobs += self.net_jobs()
         # What a person asked for comes before the standing search.
         jobs += self.run_jobs(n)
