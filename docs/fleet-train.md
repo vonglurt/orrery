@@ -1,4 +1,4 @@
-# fleet-train, and the Jobs view
+# fleet-train, and the Training view
 
 *The fleet used as one computer: rounds of work on every spare CPU and the
 GPU, each round judged, watched from the museum interface. First use:
@@ -15,21 +15,41 @@ cd ~/code/treadcore
 ~/code/orrery/tools/fleet-train.sh stop   scripts/fleet-train-stages.sh       # after the round in hand
 ```
 
-## Watch it
+## Watch it: the Training view
 
 ```sh
 cd ~/code/orrery
-cargo run --release -- --gui --demo \
-  --jobs-cmd "cd ~/code/treadcore && ~/code/orrery/tools/fleet-train.sh status scripts/fleet-train-stages.sh --json"
+cargo run --release -- --gui --fleet grove --fleet-cmd "$HOME/.local/bin/copal fleet" \
+  --training-cmd "cd ~/code/treadcore && python3 -I scripts/fleet-view.py"
 ```
 
-Then **Jobs** in the header (Command-3). `--demo` is only for the Lab view
-on a Mac without the `copal` CLI; the Jobs view reads the command. To watch
-a recording run started by hand, put `RUNS=rec2400` in front of the
-command. `--frame out.ppm --frame-view jobs --frame-state doc.json` draws a
-saved document to a file, for review.
+The fleet is **grove**, the real one: saskatchewan, columbia, nasser and
+calber, declared in `~/.copal/fleets/grove/nodes` (the Mac has no avahi, so
+the list is written down). `copal fleet` on the Mac comes from
+`make install-fleet` in copal-alpine-linux. The **Lab** view shows the four
+machines as the fleet CLI sees them; they run no fleet agent yet, so their
+tiles say "off bus" until they are enrolled.
 
-![The Jobs view: a recording run on four machines](features/jobs-live.png)
+**Training** (Command-3) is laid out to be read:
+
+- **the top line** says what is happening, in a sentence, and the round's
+  three steps light in turn: record, train, judge;
+- **the fleet**, a card a machine: what it is for, its CPU load against its
+  cores, calber's GPU, what it is doing now in words, and the command doing
+  it;
+- **the net being trained**: its three weight matrices as heat maps (green
+  positive, red negative, stronger is larger), the 47 scores split into the
+  heads they choose for, how often it makes the scripted brain's choice on
+  matches it never saw (against the first clone and against always the
+  commonest choice), and its census against the official net.
+
+![The Training view while rec2400 records](features/training.png)
+
+It reads one document, printed by treadcore's `scripts/fleet-view.py` every
+5 s: each machine asked over ssh for its cores, load, memory and GPU; the
+newest recording run's lanes; the loop's state; the best net's weights; its
+results. `--frame out.ppm --frame-view training --frame-state doc.json`
+draws a saved document, for review.
 
 ## What it is
 
@@ -39,11 +59,12 @@ saved document to a file, for review.
 | the stages | the project's (`treadcore/scripts/fleet-train-stages.sh`) | `stage_record`, `stage_train`, `stage_judge`, and `ft_detail` for the view |
 | the recording | `treadcore/scripts/fleet-record.sh` | a queue of jobs claimed by `mv`, a lane a machine, shards streamed to the GPU node and hashed at both ends |
 | the lanes as JSON | `treadcore/scripts/fleet-jobs.py` | each machine's job, state, age and the pipe it is running |
-| the view | `src/jobs.rs`, the Jobs face | draws that document; it has no verbs |
+| what is shown | `treadcore/scripts/fleet-view.py` | the machines, the run, the loop, the net and its results, as one document |
+| the view | `src/training.rs`, the Training face | draws that document; it has no verbs |
 
 ## The rules it keeps
 
-1. **The same read rule as every face.** The Jobs view draws one command's
+1. **The same read rule as every face.** The Training view draws one command's
    document and nothing else; a job that is not in it cannot be drawn.
 2. **Watching and steering are two things.** The view has no verbs. The
    loop is started and stopped from a shell.

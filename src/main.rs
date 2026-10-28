@@ -42,7 +42,7 @@ mod files;
 mod fleet;
 mod font;
 mod http;
-mod jobs;
+mod training;
 mod json;
 mod keymap;
 mod lab;
@@ -121,8 +121,8 @@ fn main() {
     let mut frame_select: Vec<String> = Vec::new();
     let mut frame_state = String::new();
     let mut frame_size = (960usize, 600usize);
-    // The Jobs view's read model: a command that prints fleet-train's
-    // document (jobs.rs). Empty: the view says how to give it one.
+    // The Training view's read model: a command that prints what the fleet
+    // is training (training.rs). Empty: the view says how to give it one.
     let mut jobs_cmd = String::new();
 
     let mut i = 0;
@@ -137,7 +137,7 @@ fn main() {
             "--listen" => { listen = need(i, "--listen"); i += 2 }
             "--fleet" => { fleet_name = need(i, "--fleet"); i += 2 }
             "--fleet-cmd" => { fleet_cmd = need(i, "--fleet-cmd"); i += 2 }
-            "--jobs-cmd" => { jobs_cmd = need(i, "--jobs-cmd"); i += 2 }
+            "--training-cmd" | "--jobs-cmd" => { jobs_cmd = need(i, "--training-cmd"); i += 2 }
             "--operator" => { operator = need(i, "--operator"); i += 2 }
             "--seat" => { seat = need(i, "--seat"); i += 2 }
             "--vnc-port" => {
@@ -269,19 +269,19 @@ fn main() {
             }
         } else if frame_view == "media" {
             Frame::Media { copal: copal.clone(), demo }
-        } else if frame_view == "jobs" {
-            // A saved document, the jobs command's answer, or the fixture.
+        } else if frame_view == "training" || frame_view == "jobs" {
+            // A saved document, or the training command's answer.
             let doc = if !frame_state.is_empty() {
                 std::fs::read_to_string(&frame_state).unwrap_or_else(|e| {
                     eprintln!("orrery: cannot read {}: {}", frame_state, e);
                     std::process::exit(1);
                 })
-            } else if !jobs_cmd.is_empty() && !demo {
+            } else if !jobs_cmd.is_empty() {
                 jobs_answer(&jobs_cmd)
             } else {
-                jobs::demo_doc()
+                String::new()
             };
-            Frame::Jobs { doc }
+            Frame::Training { doc }
         } else {
             // The document comes from a file, from the fixture, or from the
             // CLI -- in that order, so that a review frame can be pinned to a
@@ -465,8 +465,8 @@ enum Frame {
     /// reason `--demo` exists at all: the drawing has to be reviewable without
     /// eight Raspberry Pis on the bench.
     Files { nodes: Vec<String> },
-    /// The jobs, against a document (jobs.rs).
-    Jobs { doc: String },
+    /// What the fleet is training, against a document (training.rs).
+    Training { doc: String },
 }
 
 /// THE SPECIMEN, which is phase 2's deliverable and its own regression test.
@@ -632,12 +632,12 @@ fn write_frame(
                 let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
                 media::draw(&mut u, &mut m);
             }
-            Frame::Jobs { ref doc } => {
-                let m = jobs::Model::parse(doc, "a saved document");
+            Frame::Training { ref doc } => {
+                let m = training::Model::parse(doc, "");
                 let mut ui_state = ui::UiState::default();
                 ui_state.pointer = (-1, -1);
                 let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
-                jobs::draw(&mut u, &m);
+                training::draw(&mut u, &m);
             }
             Frame::Files { ref nodes } => {
                 let here = std::env::current_dir().unwrap_or_else(|_| ".".into());
@@ -725,19 +725,18 @@ fn gui_loop<S: surface::Surface>(
     // The account on the node. See `--user`.
     ssh_user: &str,
     demo_fixture: bool,
-    // `--jobs-cmd`: what the Jobs view reads (jobs.rs).
+    // `--training-cmd`: what the Training view reads (training.rs).
     jobs_cmd: &str,
 ) -> Result<(), String> {
     use std::time::Duration;
 
-    // THE JOBS ARE READ THE WAY THE FLEET IS: a command on a second thread,
-    // every five seconds, its answer posted for the loop to take. Under
-    // --demo, and with no command, the fixture or the sentence that says
-    // how to give one.
+    // WHAT THE FLEET IS TRAINING IS READ THE WAY THE FLEET IS: a command on a
+    // second thread, every five seconds, its answer posted for the loop to
+    // take. With no command the view says how to give it one; there is no
+    // fixture, because a picture of training that is not happening is worse
+    // than none.
     let jobs_doc = Arc::new(Mutex::new(String::new()));
-    if demo_fixture && jobs_cmd.is_empty() {
-        *jobs_doc.lock().unwrap_or_else(|e| e.into_inner()) = jobs::demo_doc();
-    } else if !jobs_cmd.is_empty() {
+    if !jobs_cmd.is_empty() {
         let jobs_doc = Arc::clone(&jobs_doc);
         let cmd = jobs_cmd.to_string();
         thread::spawn(move || loop {
@@ -746,7 +745,7 @@ fn gui_loop<S: surface::Surface>(
             thread::sleep(Duration::from_secs(5));
         });
     }
-    let jobs_source = if demo_fixture && jobs_cmd.is_empty() { "the demo fixture".to_string() } else { jobs_cmd.to_string() };
+    let jobs_source = jobs_cmd.to_string();
 
     // THE READ MODEL IS REFRESHED ON A SECOND THREAD, and it has to be.
     // `copal fleet state` may take forty-five seconds, and a console that
@@ -920,9 +919,9 @@ fn gui_loop<S: surface::Surface>(
                     }
                 }
                 (None, nav::View::Lab) => action = lab::draw(&mut u, &model, &mut lab_state),
-                (None, nav::View::Jobs) => {
+                (None, nav::View::Training) => {
                     let text = jobs_doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                    if let Some(v) = jobs::draw(&mut u, &jobs::Model::parse(&text, &jobs_source)) {
+                    if let Some(v) = training::draw(&mut u, &training::Model::parse(&text, &jobs_source)) {
                         action = Some(lab::Action::Go(v));
                     }
                 }
@@ -1310,9 +1309,9 @@ fn usage() {
     --operator TOKEN     enable the write verbs; without it the console is
                          the read-mostly face §12 describes
     --demo               serve the lab report's museum from a fixture
-    --jobs-cmd CMD       what the Jobs view shows: a command that prints
-                         fleet-train's document, run with sh every 5 s, e.g.
-                         \"tools/fleet-train.sh status STAGES --json\"
+    --training-cmd CMD   what the Training view shows: a command that prints
+                         what the fleet is training, run with sh every 5 s,
+                         e.g. treadcore's \"python3 -I scripts/fleet-view.py\"
     --quiet              do not log requests
 
   the seat -- one node, full screen, in this terminal
