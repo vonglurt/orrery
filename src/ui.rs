@@ -160,6 +160,7 @@ impl Frame {
                 }
                 Input::Resized { w, h } => f.resized = Some((w, h)),
                 Input::Closed => f.closed = true,
+                Input::Menu(_) => {}
                 Input::Frame => {}
             }
         }

@@ -35,6 +35,7 @@
 // `nothing_here_is_off_the_profile` is what keeps the set honest in the
 // meantime: nothing is in there that the whitelist does not name.
 #[allow(dead_code)]
+mod commands;
 mod crypto;
 mod draw;
 #[allow(dead_code)]
@@ -852,6 +853,8 @@ fn gui_loop<S: surface::Surface>(
     let machines_said: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let handoff: Arc<Mutex<Option<(String, String, String)>>> = Arc::new(Mutex::new(None));
     let mut machines_state = machines::State::new(posture == lab::Posture::Operator && !mcmd.is_empty());
+    // Keys a menu item asks the next frame to see (commands.rs: LabKey).
+    let mut injected: Vec<surface::Input> = Vec::new();
     if !mcmd.is_empty() {
         let doc = Arc::clone(&machines_doc);
         let cmd = format!("{} status", mcmd);
@@ -917,7 +920,83 @@ fn gui_loop<S: surface::Surface>(
     let frame = Duration::from_millis(1000 / 12);
 
     loop {
-        let inputs = s.poll()?;
+        let mut inputs = s.poll()?;
+        // Keys a menu item asked for last frame (a Lab verb), as if typed.
+        inputs.extend(injected.drain(..));
+        // A menu item: what its button does (commands.rs).
+        for row in inputs.iter().filter_map(|i| if let surface::Input::Menu(r) = i { Some(*r) } else { None }).collect::<Vec<_>>() {
+            let Some((_, _, _, cmd)) = commands::MENU.get(row) else { continue };
+            use commands::Cmd;
+            match *cmd {
+                Cmd::Go(v) => {
+                    view = v;
+                    if v == nav::View::Media {
+                        media.reload();
+                    }
+                }
+                Cmd::Page(p) => {
+                    view = nav::View::Training;
+                    training_state.page = p;
+                }
+                Cmd::Grid => {
+                    view = nav::View::Sessions;
+                    if let Some(sv) = sessions_view.as_mut() {
+                        sv.big = None;
+                        sv.focus = None;
+                    }
+                }
+                Cmd::LabKey(c, chord) => {
+                    view = nav::View::Lab;
+                    let mods = surface::Mods { logo: chord, ..surface::Mods::default() };
+                    injected.push(surface::Input::Key { scancode: 0, sym: surface::Sym::Char(c), down: true, mods });
+                    injected.push(surface::Input::Key { scancode: 0, sym: surface::Sym::Char(c), down: false, mods });
+                }
+                Cmd::Queue(v) | Cmd::Run(v) => {
+                    view = nav::View::Training;
+                    training_state.page = if matches!(cmd, Cmd::Run(_)) { 1 } else { 0 };
+                    if training_state.operator {
+                        training_state.ctl = Some(v.to_string());
+                    }
+                }
+                Cmd::ArmStop => {
+                    view = nav::View::Training;
+                    training_state.page = 0;
+                    training_state.arm_stop = true;
+                }
+                Cmd::ArmShutdown => {
+                    view = nav::View::Training;
+                    training_state.page = 0;
+                    training_state.arm_shutdown = true;
+                }
+                Cmd::Probe | Cmd::ProbeAll => {
+                    view = nav::View::Machines;
+                    if machines_state.operator {
+                        let n = if *cmd == Cmd::ProbeAll { "all".to_string() } else { machines_state.sel.clone() };
+                        if !n.is_empty() {
+                            machines_state.ask = Some(machines::Ask::Probe(n));
+                        }
+                    }
+                }
+                Cmd::Join => {
+                    view = nav::View::Machines;
+                    if machines_state.operator {
+                        machines_state.confirm_join();
+                    }
+                }
+                Cmd::Apply(r) => {
+                    view = nav::View::Machines;
+                    if machines_state.operator && !machines_state.sel.is_empty() {
+                        let sel = machines_state.sel.clone();
+                        machines_state.confirm_apply(r, &sel);
+                    }
+                }
+                Cmd::Doc(path) => {
+                    let p = format!("{}/{}", env!("CARGO_MANIFEST_DIR"), path);
+                    let _ = std::process::Command::new("open").arg(p).spawn();
+                }
+                Cmd::Quit | Cmd::Minimize | Cmd::Close | Cmd::Separator => {}
+            }
+        }
         if s.closed() || inputs.iter().any(|i| *i == surface::Input::Closed) {
             return Ok(());
         }

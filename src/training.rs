@@ -107,6 +107,9 @@ pub struct State {
     pub said: String,
     /// Shut the fleet down was pressed once: the next press does it.
     pub arm_shutdown: bool,
+    /// Collect results and stop now, armed from the menu: the button says
+    /// so, and its press runs it.
+    pub arm_stop: bool,
     /// Which page of the queue's view: 0 Fleet, 1 Runs, 2 Found, 3 Net.
     pub page: usize,
 }
@@ -1134,8 +1137,10 @@ fn draw_queue(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) -> i32 {
             st.ctl = Some("ensure".into());
         }
         x += 140;
-        if running_keeper && ui.button(rect(x, at.y, 280, 26), "Collect results and stop now", true) {
+        let stop = if st.arm_stop { "Press: collect results and stop now" } else { "Collect results and stop now" };
+        if running_keeper && ui.button(rect(x, at.y, 280, 26), stop, true) {
             st.ctl = Some("stop-now".into());
+            st.arm_stop = false;
         }
         // The second row: gather now, and shut the fleet down. Shutdown
         // powers machines off, so it asks twice: the first press arms it.

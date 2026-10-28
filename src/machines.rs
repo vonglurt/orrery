@@ -147,10 +147,20 @@ impl State {
         State { operator, ..State::default() }
     }
 
-    /// The confirmation, open: for a review frame of it (ORRERY_FRAME_CONFIRM).
+    /// Join's confirmation, for the selected machine (the menu's Join...).
+    pub fn confirm_join(&mut self) {
+        if !self.sel.is_empty() {
+            self.confirm = Some((Confirm::Join, self.sel.clone()));
+            self.typed.clear();
+        }
+    }
+
+    /// The confirmation, open: for a review frame of it (ORRERY_FRAME_CONFIRM),
+    /// and the menu's Apply items.
     pub fn confirm_apply(&mut self, recipe: &str, machine: &str) {
         self.sel = machine.to_string();
         self.confirm = Some((Confirm::Apply(recipe.to_string()), machine.to_string()));
+        self.typed.clear();
     }
 }
 

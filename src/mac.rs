@@ -271,37 +271,92 @@ fn set1_of_char(c: char) -> u16 {
     ROW.iter().find(|(k, _)| *k == lower).map(|(_, s)| *s).unwrap_or(0)
 }
 
-/// The menu bar: the application's menu with Quit, and a Window menu with
-/// Minimize and Close, each with its usual Command key (Paul, 28 October:
-/// "add quit. exit close. minimize window features to orrery"). Each item's
-/// action goes to the first responder -- the window, or the application
-/// for terminate: -- so no class of orrery's own is needed. Closing the
-/// window ends the loop (poll sees it is not visible), and so the program.
+// ---------------------------------------------------------------- the menus ---
+
+extern "C" {
+    fn objc_allocateClassPair(superclass: Id, name: *const c_char, extra: usize) -> Id;
+    fn objc_registerClassPair(cls: Id);
+    fn class_addMethod(cls: Id, name: Sel, imp: *const c_void, types: *const c_char) -> bool;
+}
+
+/// Rows of commands::MENU chosen since the last poll.
+static PICKED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// `-[OrreryMenuTarget pick:]`: the one method AppKit calls in orrery. It
+/// keeps the item's tag, the row, for the loop to read at its next poll.
+extern "C" fn pick(_this: Id, _cmd: Sel, sender: Id) {
+    let tag: isize = unsafe { send(sender, sel("tag")) };
+    if let Ok(mut v) = PICKED.lock() {
+        v.push(tag.max(0) as usize);
+    }
+}
+
+/// THE ONE CLASS ORRERY DEFINES, AND WHY. The rest of this file only sends
+/// messages and polls (the note at the top), but a menu item can report a
+/// choice only by calling a method on a target. So one subclass of NSObject
+/// with one method, pick:, which records a number and returns; the loop does
+/// the command, as it does a click.
+unsafe fn menu_target() -> Id {
+    let name = CString::new("OrreryMenuTarget").expect("a name");
+    let mut cls = objc_getClass(name.as_ptr());
+    if cls.is_null() {
+        cls = objc_allocateClassPair(class("NSObject"), name.as_ptr(), 0);
+        let types = CString::new("v@:@").expect("types");
+        class_addMethod(cls, sel("pick:"), pick as extern "C" fn(Id, Sel, Id) as *const c_void, types.as_ptr());
+        objc_registerClassPair(cls);
+    }
+    send(send::<Id>(cls, sel("alloc")), sel("init"))
+}
+
+/// The menu bar, from commands::MENU: every view, page, button and document
+/// (Paul, 28 October: "all options and paths should be in the menu as
+/// well"). Quit, Minimize and Close are AppKit's own actions; every other
+/// item calls pick: with its row as its tag. The Command keys are shown; of
+/// them only Q, W and M reach AppKit (translate), the rest are orrery's
+/// chords already.
 unsafe fn menus(app: Id) {
-    let item = |title: &str, action: &str, key: &str| -> Id {
-        let i: Id = send(class("NSMenuItem"), sel("alloc"));
-        send3::<Id, Sel, Id, Id>(i, sel("initWithTitle:action:keyEquivalent:"), nsstring(title), sel(action), nsstring(key))
-    };
-    let menu = |title: &str| -> Id {
-        let m: Id = send(class("NSMenu"), sel("alloc"));
-        send1(m, sel("initWithTitle:"), nsstring(title))
-    };
-    let bar = menu("");
-    // The application's menu: macOS titles it with the bundle's name.
-    let app_item: Id = send(send::<Id>(class("NSMenuItem"), sel("alloc")), sel("init"));
-    let app_menu = menu("orrery");
-    let _: () = send1(app_menu, sel("addItem:"), item("Quit Orrery", "terminate:", "q"));
-    let _: () = send1(app_item, sel("setSubmenu:"), app_menu);
-    let _: () = send1(bar, sel("addItem:"), app_item);
-    // The Window menu.
-    let win_item: Id = send(send::<Id>(class("NSMenuItem"), sel("alloc")), sel("init"));
-    let win_menu = menu("Window");
-    let _: () = send1(win_menu, sel("addItem:"), item("Minimize", "performMiniaturize:", "m"));
-    let _: () = send1(win_menu, sel("addItem:"), item("Close Window", "performClose:", "w"));
-    let _: () = send1(win_item, sel("setSubmenu:"), win_menu);
-    let _: () = send1(bar, sel("addItem:"), win_item);
+    use crate::commands::{menu_titles, Cmd, MENU};
+    let target = menu_target();
+    let bar: Id = send1(send::<Id>(class("NSMenu"), sel("alloc")), sel("initWithTitle:"), nsstring(""));
+    for title in menu_titles() {
+        let menu: Id = send1(send::<Id>(class("NSMenu"), sel("alloc")), sel("initWithTitle:"), nsstring(title));
+        for (row, (m, label, key, cmd)) in MENU.iter().enumerate() {
+            if *m != title {
+                continue;
+            }
+            let item: Id = if *cmd == Cmd::Separator {
+                send(class("NSMenuItem"), sel("separatorItem"))
+            } else {
+                let action = match cmd {
+                    Cmd::Quit => "terminate:",
+                    Cmd::Minimize => "performMiniaturize:",
+                    Cmd::Close => "performClose:",
+                    _ => "pick:",
+                };
+                let i: Id = send(class("NSMenuItem"), sel("alloc"));
+                let i: Id = send3(i, sel("initWithTitle:action:keyEquivalent:"), nsstring(label), sel(action), nsstring(key));
+                if action == "pick:" {
+                    let _: () = send1(i, sel("setTarget:"), target);
+                    let _: () = send1(i, sel("setTag:"), row as isize);
+                }
+                i
+            };
+            let _: () = send1(menu, sel("addItem:"), item);
+        }
+        let holder: Id = send(send::<Id>(class("NSMenuItem"), sel("alloc")), sel("init"));
+        let _: () = send1(holder, sel("setSubmenu:"), menu);
+        let _: () = send1(bar, sel("addItem:"), holder);
+        match title {
+            "Window" => {
+                let _: () = send1(app, sel("setWindowsMenu:"), menu);
+            }
+            "Help" => {
+                let _: () = send1(app, sel("setHelpMenu:"), menu);
+            }
+            _ => {}
+        }
+    }
     let _: () = send1(app, sel("setMainMenu:"), bar);
-    let _: () = send1(app, sel("setWindowsMenu:"), win_menu);
 }
 
 fn mods_of(flags: u64) -> Mods {
@@ -601,6 +656,10 @@ impl Surface for Window {
                     break;
                 }
                 self.translate(e, &mut out);
+            }
+            // Menu items chosen while those events were handled.
+            if let Ok(mut picked) = PICKED.lock() {
+                out.extend(picked.drain(..).map(Input::Menu));
             }
 
             // The two that are polled rather than delivered.

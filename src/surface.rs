@@ -99,6 +99,8 @@ pub enum Input {
 
     Resized { w: usize, h: usize },
     Closed,
+    /// A menu item was chosen: its row in commands::MENU (mac.rs).
+    Menu(usize),
     /// The platform thinks now is a good time to draw.
     Frame,
 }
