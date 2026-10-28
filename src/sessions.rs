@@ -174,7 +174,11 @@ fn worker(target: &str, rx: Receiver<Ask>, lines: Arc<Mutex<Vec<String>>>, statu
                     if (c, r) != size {
                         size = (c, r);
                         if kind == "tmux" {
-                            script.push_str(&format!("tmux resize-window -t {} -x {} -y {} 2>/dev/null; ", SESSION, c, r));
+                            // Newer tmux sizes a window to its clients unless told
+                            // it is sized by hand; orrery's tile is the size.
+                            script.push_str(&format!("tmux set-option -t {s} window-size manual 2>/dev/null; tmux resize-window -t {s} -x {} -y {} 2>/dev/null; ", c, r, s = SESSION));
+                        } else {
+                            script.push_str(&format!("screen -S {s} -X width -w {} 2>/dev/null; screen -S {s} -X height -w {} 2>/dev/null; ", c, r, s = SESSION));
                         }
                     }
                 }
@@ -199,6 +203,25 @@ fn worker(target: &str, rx: Receiver<Ask>, lines: Arc<Mutex<Vec<String>>>, statu
         }
         thread::sleep(Duration::from_millis(900));
     }
+}
+
+/// Box-drawing and block characters as their ASCII look-alikes: the
+/// bitmap faces carry Latin-1 only, and a program in a UTF-8 locale
+/// (copal-tm on Ubuntu) draws its panels with these.
+fn ascii_art(l: &str) -> String {
+    l.chars()
+        .map(|c| match c as u32 {
+            0x2500 | 0x2501 | 0x2504 | 0x2505 | 0x2508 | 0x2509 | 0x254C | 0x254D | 0x2550 => '-',
+            0x2502 | 0x2503 | 0x2506 | 0x2507 | 0x250A | 0x250B | 0x254E | 0x254F | 0x2551 => '|',
+            0x250C..=0x254B | 0x2552..=0x256C | 0x256D..=0x2570 => '+',
+            0x2571 => '/',
+            0x2572 => '\\',
+            0x2580..=0x259F => '#',
+            0x25A0..=0x25AB | 0x2022 | 0x00B7 | 0x2219 => '.',
+            0x2190..=0x21FF => '>',
+            _ => c,
+        })
+        .collect()
 }
 
 /// A key the session should receive: tmux's name, and the byte for screen.
@@ -298,11 +321,16 @@ pub fn draw(ui: &mut Ui, s: &mut Sessions) -> Option<nav::View> {
             tile.size = (cols, rows);
             let _ = tile.tx.send(Ask::Size(cols, rows));
         }
-        let lines = tile.lines.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        // The bottom of the screen is where the prompt is: show the last rows.
+        let mut lines = tile.lines.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        // The multiplexer gives the whole pane, blank rows under the prompt
+        // included: drop those, then show the last rows that fit, so a
+        // prompt on the first line is never cut off with only blanks shown.
+        while lines.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+            lines.pop();
+        }
         let start = lines.len().saturating_sub(rows as usize);
         for (k, l) in lines[start..].iter().enumerate() {
-            ui.label_in(inner.x, inner.y + k as i32 * F6X10.height as i32, inner.w, l, &F6X10, t.ink);
+            ui.label_in(inner.x, inner.y + k as i32 * F6X10.height as i32, inner.w, &ascii_art(l), &F6X10, t.ink);
         }
         if ui.button_hit(screen) {
             s.focus = Some(i);
@@ -351,6 +379,12 @@ mod tests {
         assert_eq!(key_name(Sym::Char('c'), true), Some(("C-c", Some('\u{3}'))));
         assert_eq!(key_name(Sym::Return, false), Some(("Enter", Some('\r'))));
         assert_eq!(key_name(Sym::Char('c'), false), None, "plain text travels as text");
+    }
+
+    #[test]
+    fn box_drawing_becomes_ascii() {
+        assert_eq!(ascii_art("╭──╮"), "+--+");
+        assert_eq!(ascii_art("│CPU ▪▪ 99.9%│"), "|CPU .. 99.9%|");
     }
 
     #[test]

@@ -28,6 +28,10 @@
 #   5. PATH and the library path for every login
 #   6. the check: nvidia-smi, then a small CUDA program compiled for this
 #      card and run: device properties and a million-element vector add
+#   7. the fleet's own tools: tmux (orrery's Sessions keep a session on each
+#      machine in it), and copal-tm (the task manager a session opens with:
+#      it shows the card's load and CUDA jobs), built for the user who ran
+#      sudo, from github.com/vonglurt/copal-tm, linked into ~/.local/bin
 #
 # Settings: DRIVER=580-server (the Ubuntu branch), CUDA=12-9 (the toolkit).
 set -euo pipefail
@@ -156,6 +160,29 @@ CU
 "/usr/local/cuda-$CUDA_DOT/bin/nvcc" -arch=native -o "$_d/check" "$_d/check.cu"
 "$_d/check"
 rm -rf "$_d"
+
+# ---- 7. the fleet's tools: tmux and copal-tm ---------------------------------
+say "The fleet's tools: tmux, and copal-tm for ${SUDO_USER:-root}"
+dpkg-query -W tmux >/dev/null 2>&1 || apt-get install -y -qq tmux
+note "tmux $(tmux -V 2>/dev/null | cut -d' ' -f2)"
+# copal-tm is built by the user who will run it, with that user's cargo
+# (rustup), never as root: the build and the link are in their home.
+_u="${SUDO_USER:-}"
+if [ -n "$_u" ] && [ "$_u" != root ]; then
+    if sudo -u "$_u" -H bash -c '[ -f ~/.cargo/env ] && . ~/.cargo/env; command -v cargo' >/dev/null 2>&1; then
+        sudo -u "$_u" -H bash -c 'set -e; [ -f ~/.cargo/env ] && . ~/.cargo/env
+            mkdir -p ~/code ~/.local/bin
+            if [ -d ~/code/copal-tm/.git ]; then git -C ~/code/copal-tm pull -q --ff-only || true
+            else git clone -q https://github.com/vonglurt/copal-tm.git ~/code/copal-tm; fi
+            cd ~/code/copal-tm && cargo build -q --release
+            ln -sf ~/code/copal-tm/target/release/copal-tm ~/.local/bin/copal-tm'
+        note "copal-tm: $(sudo -u "$_u" -H bash -c '~/.local/bin/copal-tm --help 2>&1 | head -1')"
+    else
+        note "copal-tm skipped: $_u has no cargo (install rustup for $_u, then run this again)"
+    fi
+else
+    note "copal-tm skipped: run this with sudo from the user who will use it"
+fi
 
 say "Done: $(hostname) is a CUDA node (driver $DRIVER, CUDA $CUDA_DOT). Log: $LOG"
 note "A new login has nvcc on PATH; this one: . /etc/profile.d/cuda.sh"
