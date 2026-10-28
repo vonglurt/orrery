@@ -1,6 +1,6 @@
 # Held Back on Purpose: the Versions a GTX 1080 Ti Can Run CUDA On, and Nix as a Way to Pin Them
 
-*Lab Report — IEEE Format · 28 October 2026 · interim: the Burn probe is building*
+*Lab Report — IEEE Format · 28 October 2026*
 
 Copyright (c) 2026 Paul Richeson. MIT licensed, as orrery.
 
@@ -49,7 +49,7 @@ the host, which is where it has to stay.
 | CUDA toolkit | **12.9.2** (`nvcc` 12.9.86) | 13.0 to 13.4 | CUDA 13 does not target Pascal | the versioned package `cuda-toolkit-12-9`, never the unversioned `cuda` or `cuda-toolkit` metapackages |
 | Compute capability | `sm_61` | — | the card's | `nvcc -arch=native` |
 | Rust | 1.99.1 (rustup, user's) | — | current; nothing about Pascal holds it | rustup, per user |
-| Training library | **Burn 0.22.1**, CubeCL 0.11.3, CUDA backend | — | the newest; **whether it still runs on compute 6.1 is what the probe is testing** | BURN_RESULT |
+| Training library | **Burn 0.22.1**, CubeCL 0.11.3, CUDA backend | — | the newest, and **it runs on compute 6.1** (V) | `tools/burn-probe/Cargo.lock`, which records every crate's version as it ran |
 
 `ubuntu-drivers` recommends `nvidia-driver-470` for the card. That is an
 *older* series and was not taken: 580 is newer, still supports Pascal, and is
@@ -81,11 +81,40 @@ calber (`~/code/burnprobe`), Burn 0.22.1 with `cuda` and `autodiff`:
    8) fitting a fixed random target (learning if the loss falls by more than
    a fifth).
 
-Result: BURN_RESULT_DETAIL
+Result, on calber, 28 October 2026 (`tools/burn-probe`, with its
+`Cargo.lock`):
 
-If it fails, the alternatives, in order: Burn's LibTorch backend (`tch`)
-with a PyTorch build that still includes `sm_61`; an older Burn and CubeCL
-pinned to the last versions that did; or a newer card.
+```
+matmul 256x256 on the GPU: largest difference from the CPU 5.96e-6 -> ok
+step   0: loss 1.0365
+step  50: loss 0.7537
+step 100: loss 0.3458
+step 150: loss 0.1229
+200 Adam steps in 4.02 s: loss 1.0365 -> 0.0446 -> learning
+```
+
+**Burn 0.22.1 and CubeCL 0.11.3 run on `sm_61`.** The arithmetic agrees
+with the CPU to 6e-6, and a net of the learned tank's shape cut its loss
+23-fold in 200 steps on the card; the 4.02 s includes CubeCL compiling its
+kernels for the card the first time.
+
+Two things learned on the way:
+
+- **Burn 0.22 changed its API.** Tensors no longer carry their backend as a
+  type parameter (`Tensor<2>`, not `Tensor<B, 2>`); the device is chosen at
+  run time (`Device::cuda(0).autodiff()`), and `Linear` and the optimizer
+  are not generic. The probe was first written for the older API and did not
+  compile; it was rewritten from 0.22's own README and source.
+- **After the program ends,** a CubeCL worker thread panics eight times with
+  `CUDA_ERROR_DEINITIALIZED`: it is still running while the CUDA driver shuts
+  down. The results and the exit status (0) are not affected; it is noise
+  at exit, to be quieted in the trainer (by synchronising and dropping the
+  device's work before `main` returns).
+
+Had it failed, the alternatives were weaker than expected: Burn 0.22.0
+deprecated its LibTorch backend ("will be removed in a future release"),
+leaving an older Burn and CubeCL pinned to the last versions that worked, or
+a newer card.
 
 ## VI. Recommendations
 
@@ -152,6 +181,7 @@ from then on.
 
 ## VIII. Open items
 
-1. The Burn probe's result (V).
+1. Done: the Burn probe (V).
 2. The release upgrade prompt off on calber, and in `cuda-node.sh`.
 3. The Nix experiment (VII).
+4. The CubeCL exit noise, in the trainer.

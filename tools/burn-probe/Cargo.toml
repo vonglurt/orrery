@@ -1,0 +1,7 @@
+[package]
+name = "burnprobe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+burn = { version = "0.22.1", features = ["cuda", "autodiff"] }
