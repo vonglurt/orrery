@@ -156,6 +156,9 @@ pub struct Queue {
     pub progress: Vec<(String, String, String)>,
     /// Auto mode: candidates promote themselves (config "auto").
     pub auto: bool,
+    /// Each candidate (w0034): true when it was read on today's defaults and
+    /// may promote itself; false when on older defaults (a promotion since).
+    pub current: Vec<(String, bool, String)>,
     /// The rotation: auto mode asks one of each kind in turn ("rotation").
     pub rotation: bool,
     /// The keeper, in a line: its pid, how long up, the last and next sync,
@@ -365,6 +368,13 @@ impl Model {
                 flags: arr(q, "flags").iter().map(|f| (s(f, "id"), s(f, "t"), s(f, "kind"), s(f, "text"))).collect(),
                 progress: arr(q, "progress").iter().map(|f| (s(f, "t"), s(f, "kind"), s(f, "text"))).collect(),
                 auto: !matches!(q.get("auto"), Some(json::Value::Bool(false))),
+                current: match q.get("candidate_state") {
+                    Some(json::Value::Obj(m)) => m
+                        .iter()
+                        .map(|(k, v)| (k.clone(), matches!(v.get("current"), Some(json::Value::Bool(true))), s(v, "commit")))
+                        .collect(),
+                    _ => Vec::new(),
+                },
                 rotation: !matches!(q.get("rotation"), Some(json::Value::Bool(false))),
                 keeper: q
                     .get("keeper")
@@ -901,14 +911,22 @@ fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     }
     let first = cands.first().map(|p| p.0.as_str()).unwrap_or("");
     let since = if first.len() >= 16 { first[..16].replace('T', " ") } else { first.to_string() };
+    let state = |id: &str| q.current.iter().find(|(k, _, _)| k == id).map(|(_, c, at)| (*c, at.clone()));
+    let is_promoted = |id: &str| q.runs.iter().any(|r| r.kind == "promote" && r.status == "approved" && r.candidate.rsplit('/').next() == Some(id));
+    let ids: Vec<&str> = cands.iter().map(|p| p.2.split_whitespace().next().unwrap_or("")).collect();
+    let n_promoted = ids.iter().filter(|id| is_promoted(id)).count();
+    let n_current = ids.iter().filter(|id| !is_promoted(id) && state(id).map(|s| s.0).unwrap_or(false)).count();
     ui.label_in(
         at.x,
         y,
         at.w,
         &format!(
-            "{} candidate(s) since {}, newest first. {}",
+            "{} candidate(s) since {}, newest first: {} promoted, {} current, {} on older defaults. {}",
             cands.len(),
             since,
+            n_promoted,
+            n_current,
+            cands.len() - n_current - n_promoted,
             if q.auto { "The strongest current one promotes itself." } else { "A candidate is promoted from Runs (promote)." }
         ),
         &F8X13,
@@ -918,6 +936,7 @@ fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     // Columns: when; the trial and its two reads; what it moves.
     let when_w = F8X13.measure("10-28 00:00  ") as i32;
     let head_w = F8X13.measure("w0000  +0.00  +0.00   ") as i32;
+    let state_w = F8X13.measure("older (8f852ac)  ") as i32;
     for (when, _kind, text) in cands.iter().rev().map(|p| (&p.0, &p.1, &p.2)) {
         if y + lh > at.bottom() {
             break;
@@ -930,9 +949,21 @@ fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
             .map(|(_, r)| r.trim_end_matches(')').replace(',', " "))
             .unwrap_or_default();
         let w = if when.len() >= 16 { format!("{} {}", &when[5..10], &when[11..16]) } else { when.clone() };
+        // Current: read on today's defaults, so it may promote itself.
+        // Older: read before a promotion moved them; it waits to be read again.
+        // A candidate that is now the defaults says which promotion made it so.
+        let promoted = q.runs.iter().find(|r| r.kind == "promote" && r.status == "approved" && r.candidate.rsplit('/').next() == Some(id));
+        let (tag, cur) = match (promoted, state(id)) {
+            (Some(r), _) => (format!("promoted ({})", r.id), true),
+            (None, Some((true, _))) => ("current".to_string(), true),
+            (None, Some((false, at))) => (format!("older ({})", if at.is_empty() { "?" } else { &at }), false),
+            (None, None) => ("not read".to_string(), false),
+        };
         ui.label(at.x, y, &w, &F8X13, t.dim);
-        ui.label(at.x + when_w, y, &format!("{}  {}", id, reads), &F8X13, t.up);
-        ui.label_in(at.x + when_w + head_w, y, at.w - when_w - head_w, moved, &F8X13, t.ink);
+        ui.label(at.x + when_w, y, &format!("{}  {}", id, reads), &F8X13, if cur { t.up } else { t.dim });
+        ui.label(at.x + when_w + head_w, y, &tag, &F8X13, if cur { t.up } else { t.dim });
+        let mx = at.x + when_w + head_w + state_w;
+        ui.label_in(mx, y, at.right() - mx, moved, &F8X13, if cur { t.ink } else { t.dim });
         y += lh;
     }
 }

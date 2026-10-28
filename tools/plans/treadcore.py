@@ -1595,6 +1595,17 @@ class Plan:
             self.state["ticked"].append(jid)
 
     # ---- the keeper's calls ---------------------------------------------------------------
+    def candidate_states(self):
+        """plan/candidates.json: each of this queue's candidates, current (its
+        census and both reads on today's defaults, so it may promote itself)
+        or on older defaults, with the commit it was read at. The Candidates
+        page marks each line with it."""
+        out = {}
+        for k, v in self.evidence().items():
+            if k.startswith(self.name + "/"):
+                out[k.split("/", 1)[1]] = {"current": bool(v.get("current")), "commit": (v.get("commits") or [None])[0]}
+        save(os.path.join(self.pd, "candidates.json"), out)
+
     def raise_found(self):
         """Flags for what the fleet found: a trial past both held-out reads,
         and a candidate under a family's floor."""
@@ -1616,6 +1627,7 @@ class Plan:
         # prepared promotion approved (inside run_jobs). A promotion moves
         # main, so the builds are asked for after it.
         self.adopt_runs()
+        self.candidate_states()
         self.auto_promote()
         self.rotate()
         jobs = self.net_jobs()

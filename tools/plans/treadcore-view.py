@@ -155,6 +155,11 @@ def queue():
     q["name"] = os.path.basename(os.path.abspath(QDIR))
     q.update(ticker())
     q["runs"] = runs()
+    # Each candidate: current, or on older defaults (the planner's).
+    try:
+        q["candidate_state"] = json.load(open(os.path.join(QDIR, "plan", "candidates.json")))
+    except (OSError, ValueError):
+        q["candidate_state"] = {}
     try:
         q["push"] = json.load(open(os.path.join(QDIR, "plan", "push.json")))
     except (OSError, ValueError):
