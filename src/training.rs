@@ -151,6 +151,8 @@ pub struct Queue {
     /// What the fleet has found, oldest first, needing no one: (time, kind,
     /// text). A candidate past both held-out reads, so far.
     pub progress: Vec<(String, String, String)>,
+    /// Auto mode: candidates promote themselves (config "auto").
+    pub auto: bool,
     /// The keeper, in a line: its pid, how long up, the last and next sync,
     /// and whether it holds this Mac awake.
     pub keeper: String,
@@ -180,6 +182,12 @@ pub struct RunRow {
     pub kind: String,
     pub status: String,
     pub detail: String,
+    /// A promotion's candidate, and who asked ("auto" in auto mode).
+    pub candidate: String,
+    pub by: String,
+    /// A promotion's machines and each one's state ("confirmed at ...",
+    /// "building ...", "differs at ...").
+    pub hosts: Vec<(String, String)>,
 }
 
 /// (head, the net's agreement, bc1's, always-the-commonest's), percent.
@@ -351,6 +359,7 @@ impl Model {
                     .collect(),
                 flags: arr(q, "flags").iter().map(|f| (s(f, "id"), s(f, "t"), s(f, "kind"), s(f, "text"))).collect(),
                 progress: arr(q, "progress").iter().map(|f| (s(f, "t"), s(f, "kind"), s(f, "text"))).collect(),
+                auto: !matches!(q.get("auto"), Some(json::Value::Bool(false))),
                 keeper: q
                     .get("keeper")
                     .filter(|k| k.get("pid").is_some())
@@ -371,7 +380,18 @@ impl Model {
                 }),
                 runs: arr(q, "runs")
                     .iter()
-                    .map(|r| RunRow { id: s(r, "id"), kind: s(r, "kind"), status: s(r, "status"), detail: if s(r, "why").is_empty() { s(r, "detail") } else { s(r, "why") } })
+                    .map(|r| RunRow {
+                        id: s(r, "id"),
+                        kind: s(r, "kind"),
+                        status: s(r, "status"),
+                        detail: if s(r, "why").is_empty() { s(r, "detail") } else { s(r, "why") },
+                        candidate: s(r, "candidate"),
+                        by: s(r, "by"),
+                        hosts: match r.get("hosts") {
+                            Some(json::Value::Obj(m)) => m.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect(),
+                            _ => Vec::new(),
+                        },
+                    })
                     .collect(),
                 synced: q
                     .get("sync")
@@ -509,13 +529,14 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
         // one page at a time, so nothing runs past its box.
         y = draw_queue(ui, rect(body.x, y, body.w, 64), q, st) + 6;
         y = draw_latest(ui, rect(body.x, y, body.w, 18), q) + 8;
-        y = draw_pages(ui, rect(body.x, y, body.w, 24), st, q.flags.len(), q.progress.len()) + 8;
+        let found = q.progress.iter().filter(|p| p.1 == "candidate").count();
+        y = draw_pages(ui, rect(body.x, y, body.w, 24), st, q.flags.len(), found) + 8;
         let page = rect(body.x, y, body.w, body.bottom() - y);
         match st.page {
             1 => draw_runs_page(ui, page, q, st),
             2 => draw_found_page(ui, page, q),
             4 => draw_flags_page(ui, page, q, st),
-            5 => draw_candidates_page(ui, page, q),
+            5 => draw_candidates_page(ui, page, q, st),
             3 => {
                 if let Some(i) = draw_net(ui, page, m) {
                     st.zoom = Some(i);
@@ -795,21 +816,72 @@ fn draw_flags_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
 /// The Candidates page: every trial that passed both held-out reads, newest
 /// first. News of progress: nothing here waits for anyone (Paul, 28 October:
 /// "I'm going to always accept them. Just make them visible").
-fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue) {
+fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     let t = ui.t;
     let lh = F8X13.height as i32 + 6;
     let mut y = at.y;
-    if q.progress.is_empty() {
+    // Auto mode, and its switch.
+    let mode = if q.auto {
+        "Auto mode ON: a run's result gets its held-out reads; the strongest current candidate promotes itself; every machine's build is checked for its values."
+    } else {
+        "Auto mode OFF: candidates wait for a promotion asked for by hand, and for Approve."
+    };
+    let bw = if st.operator { 150 } else { 0 };
+    ui.label_in(at.x, y, at.w - bw - 10, mode, &F8X13, if q.auto { t.up } else { t.dim });
+    if st.operator && ui.button(rect(at.right() - bw, y - 4, bw, 22), if q.auto { "Turn auto off" } else { "Turn auto on" }, true) {
+        st.ctl = Some(if q.auto { "auto off".into() } else { "auto on".into() });
+    }
+    y += lh + 4;
+    // Promotions, newest first: each machine's confirmation that the values
+    // reached it.
+    let proms: Vec<&RunRow> = q.runs.iter().filter(|r| r.kind == "promote").rev().take(3).collect();
+    if !proms.is_empty() {
+        ui.label(at.x, y, "Promotions, and the machines that have their values", &F8X13, t.ink);
+        y += lh;
+        let hw = F8X13.measure("saskatchewan  ") as i32;
+        for r in proms {
+            if y + lh > at.bottom() {
+                return;
+            }
+            let c = match r.status.as_str() {
+                "approved" => t.up,
+                "failed" => t.alarm,
+                _ => t.dim,
+            };
+            let who = if r.by == "auto" { " (auto)" } else { "" };
+            ui.label_in(at.x, y, at.w, &format!("{}{}  {}  {}: {}", r.id, who, r.candidate, r.status, r.detail), &F8X13, c);
+            y += lh;
+            for (host, state) in &r.hosts {
+                if y + lh > at.bottom() {
+                    return;
+                }
+                let ok = state.starts_with("confirmed");
+                let bad = state.starts_with("differs") || state.contains("failed");
+                ui.label(at.x + 16, y, if ok { "ok" } else if bad { "!!" } else { ".." }, &F8X13, if ok { t.up } else if bad { t.alarm } else { t.dim });
+                ui.label(at.x + 44, y, host, &F8X13, t.ink);
+                ui.label_in(at.x + 44 + hw, y, at.w - 44 - hw, state, &F8X13, if ok { t.up } else if bad { t.alarm } else { t.dim });
+                y += lh;
+            }
+        }
+        y += 6;
+    }
+    let cands: Vec<&(String, String, String)> = q.progress.iter().filter(|p| p.1 == "candidate").collect();
+    if cands.is_empty() {
         ui.label_in(at.x, y, at.w, "No candidate yet: none has passed both held-out reads.", &F8X13, t.dim);
         return;
     }
-    let first = q.progress.first().map(|p| p.0.as_str()).unwrap_or("");
+    let first = cands.first().map(|p| p.0.as_str()).unwrap_or("");
     let since = if first.len() >= 16 { first[..16].replace('T', " ") } else { first.to_string() };
     ui.label_in(
         at.x,
         y,
         at.w,
-        &format!("{} candidate(s) since {}, newest first. A candidate is promoted from Runs (promote).", q.progress.len(), since),
+        &format!(
+            "{} candidate(s) since {}, newest first. {}",
+            cands.len(),
+            since,
+            if q.auto { "The strongest current one promotes itself." } else { "A candidate is promoted from Runs (promote)." }
+        ),
         &F8X13,
         t.ink,
     );
@@ -817,7 +889,7 @@ fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue) {
     // Columns: when; the trial and its two reads; what it moves.
     let when_w = F8X13.measure("10-28 00:00  ") as i32;
     let head_w = F8X13.measure("w0000  +0.00  +0.00   ") as i32;
-    for (when, _kind, text) in q.progress.iter().rev() {
+    for (when, _kind, text) in cands.iter().rev().map(|p| (&p.0, &p.1, &p.2)) {
         if y + lh > at.bottom() {
             break;
         }

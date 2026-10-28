@@ -262,7 +262,51 @@ One that passes both is a candidate. Its families run next, with the
 families of every converge run in `families.converge`, newest first, 8 to
 a job side by side.
 
-Nothing becomes a default, and no net becomes official, without Paul.
+### 4a. Auto mode: the cycle closes itself
+
+**Since 28 October the queue runs in auto mode** (config.json `"auto"`, on
+unless `false`; `fleet-queue.py $Q auto on|off`, or the button on the
+Candidates page). Paul: "Should self promote, unless we are not in AUTO
+mode. We should be in auto mode." The cycle, with no one asked:
+
+1. **Search.** The standing search plays weight trials, a census each, on
+   every CPU; asked-for runs (spsa, tune, ...) go first.
+2. **Adopt.** A finished spsa or tune run's result (`theta.weights`,
+   `best.weights`) becomes a trial, its census and its two held-out reads
+   queued together (`plan adopt FILE WHAT` does the same by hand).
+3. **Hold out.** A trial past two errors is read twice on held-out seeds;
+   past two errors on both, it is a **candidate** (news, on the Candidates
+   page; nothing to answer).
+4. **Families.** Every candidate's families are read; one under a floor is
+   a flag.
+5. **Promote.** The strongest *current* candidate whose families hold
+   (current: its census and both reads ran on today's defaults, by each
+   census's `COMMIT`) gets a promotion run. One at a time; each candidate
+   tried once; two failures in a row pause auto mode with a flag.
+6. **Approve.** The promotion's tests and full families pass on a branch;
+   auto mode then pushes it to main (a fast-forward).
+7. **Propagate.** Every machine's next top-up builds the new main and
+   brings back the defaults it compiled. The promotion is **confirmed**
+   machine by machine (Candidates page: `ok` confirmed, `..` building,
+   `!!` differs or failed); confirmed on all, it is a progress record.
+   Every candidate's families are read again on the new defaults.
+8. **Again.** The search's history counts only censuses on the new
+   defaults, and the search goes on from them.
+
+With auto mode off, step 5 waits for a promotion asked by hand and step 6
+for Approve.
+
+**Flags and progress.** A flag asks a person: a run failed, a family
+fell under its floor, a machine was lost, the breaker, push refused, auto
+mode paused. Progress needs no one: a candidate, a run finished, a
+promotion asked, approved, confirmed on every machine. The window shows
+flags on the Flags tab, progress on Candidates.
+
+**When the window closes.** The keeper is its own process (started by
+`fleet-queue.py $Q start`, its parent launchd), so closing Orrery stops
+nothing: the jobs, the syncs every `sync_s`, the plans and auto mode all go
+on; the window only reads `status` and sends the buttons' commands.
+Opening it again shows where the queue is.
 
 ### 5. When a machine goes away, joins, or must power off
 

@@ -261,8 +261,9 @@ class Plan:
                     "cd $C/wt/tools/bc && CARGO_TARGET_DIR=$HOME/code/treadcore/tools/bc/target cargo build -q --release\n"
                     "cp $HOME/code/treadcore/tools/bc/target/release/treadcore-bc $C/treadcore-bc\n"
                 )
-            if h["name"] == self.cfg["census_host"]:
-                job["fetch"] = "%s/c/%s/defaults.toml" % (self.home, short)
+            # Every machine brings back the defaults it built: after a
+            # promotion, the proof that its values reached that machine.
+            job["fetch"] = "%s/c/%s/defaults.toml" % (self.home, short)
             jobs.append(job)
         return jobs
 
@@ -747,7 +748,167 @@ class Plan:
         if status in ("done", "failed", "prepared"):
             text = {"done": "run %s finished" % rid, "failed": "run %s failed: %s" % (rid, st.get("why", "")),
                     "prepared": "promotion %s is prepared on %s: read it, then Approve (a push to main)" % (rid, st.get("branch"))}[status]
-            self.flag("run" if status != "prepared" else "approve", text, key="run:%s:%s" % (rid, status))
+            # News is progress (Paul, 28 October: "I'm going to always accept
+            # them"); a failure asks for a person, and so does a prepared
+            # promotion when auto mode is off.
+            asks = status == "failed" or (status == "prepared" and not self.auto())
+            self.flag("run" if status != "prepared" else "approve", text, key="run:%s:%s" % (rid, status), progress=not asks)
+
+    # ---- auto mode: the cycle closes itself ---------------------------------------------
+    def auto(self):
+        """Auto mode (config "auto", on unless false): a run's result gets its
+        held-out reads, the strongest current candidate promotes itself, and a
+        prepared promotion approves itself (Paul, 28 October: "Should self
+        promote, unless we are not in AUTO mode. We should be in auto mode")."""
+        return self.cfg.get("auto", True) is not False
+
+    def new_run(self, kind, params, by):
+        """A run file, as fleet-queue.py new writes one."""
+        d = os.path.join(self.q, "runs")
+        os.makedirs(d, exist_ok=True)
+        n = 1 + max([int(f[1:5]) for f in os.listdir(d) if f[:1] == "r" and f[1:5].isdigit()] or [0])
+        rid = "r%04d" % n
+        save(os.path.join(d, rid + ".json"), {"kind": kind, "params": params, "asked": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": by})
+        return rid
+
+    def adopt(self, text, what):
+        """A result (a run's weights) as a trial of the queue: its census and
+        its two held-out reads, queued together. Passing both, it is a
+        candidate like any other. Returns the trial's id."""
+        self.state.setdefault("adopt", []).append({"text": text, "what": what})
+        return "w%04d" % (self.state["weights_n"] + len(self.state["adopt"]) - 1)
+
+    def adopt_runs(self):
+        """Each finished spsa or tune run's result, adopted once (auto mode)."""
+        if not self.auto() or not self.defaults():
+            return
+        done = self.state.setdefault("adopted", {})
+        for r in self.runs():
+            rid, kind = r["id"], r["kind"]
+            if kind not in ("spsa", "tune") or rid in done or self.rstate(rid).get("status") != "done":
+                continue
+            f = os.path.join(self.rdir(rid), "theta.weights" if kind == "spsa" else "best.weights")
+            text = open(f).read() if os.path.exists(f) else ""
+            dflt = parse_weights(open(self.defaults()).read()) if self.defaults() else {}
+            moved = {k: v for k, v in parse_weights(text).items() if k in dflt and abs(v - dflt[k]) > 1e-9}
+            if not moved:
+                done[rid] = None
+                continue
+            done[rid] = self.adopt(text, "%s %s" % (kind, rid))
+
+    def adopt_jobs(self):
+        w = self.cfg.get("weights")
+        if not w or not self.state.get("adopt") or not self.cpu_ready():
+            return []
+        jobs = []
+        for a in self.state["adopt"]:
+            jid = "w%04d" % self.state["weights_n"]
+            self.state["weights_n"] += 1
+            seed0 = w["seed0"] + 10000 * int(jid[1:])
+            jobs.append({"id": jid, "kind": "weights", "title": "%s: %s" % (a["what"], short_moved(a["text"])),
+                         "needs": "cpu", "after_host": self.after_host(), "cmd": self.census_cmd(a["text"], w["seeds"], seed0, jid),
+                         "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 6 * 3600})
+            # Its held-out reads at once, not after its own census passes:
+            # a run's result was already chosen by a search.
+            for k in range(2):
+                hid = "h%04d" % self.state["held_n"]
+                hseed = w["held_seed0"] + 200000 * self.state["held_n"]
+                self.state["held_n"] += 1
+                jobs.append({"id": hid, "kind": "weights", "title": "held-out read %d of %s (%d seeds)" % (k + 1, jid, w["held_seeds"]),
+                             "needs": "cpu", "after_host": self.after_host(), "cmd": self.census_cmd(a["text"], w["held_seeds"], hseed, hid),
+                             "fetch": "%s/out/%s" % (self.home, hid), "timeout_s": 6 * 3600})
+            self.state["held_read"].append(jid)
+        self.state["adopt"] = []
+        return jobs
+
+    @staticmethod
+    def census_commit(d):
+        try:
+            for l in open(os.path.join(d, "run.env")):
+                if l.startswith("COMMIT="):
+                    return l.split("=", 1)[1].strip().strip("'")
+        except OSError:
+            pass
+        return None
+
+    def auto_promote(self):
+        """The strongest current candidate whose families hold, promoted: one
+        promotion at a time, each candidate tried once."""
+        if not self.auto():
+            return
+        autos = [r for r in self.runs() if r["kind"] == "promote" and r.get("by") == "auto"]
+        for r in self.runs():
+            if r["kind"] == "promote" and self.rstate(r["id"]).get("status") in ("new", "running", "prepared"):
+                return
+        # Two failed in a row: something every candidate trips on (a test, a
+        # family). Auto mode waits for a person rather than trying them all.
+        last = [self.rstate(r["id"]).get("status") for r in autos[-2:]]
+        if len(last) == 2 and all(x == "failed" for x in last):
+            self.flag("auto", "auto promotion paused: %s and %s failed in a row; see their logs, then ask for a promotion by hand"
+                      % (autos[-2]["id"], autos[-1]["id"]), key="paused:%s" % autos[-1]["id"])
+            return
+        tried = self.state.setdefault("auto_tried", [])
+        ev = {k: v for k, v in self.evidence().items()
+              if v.get("current") and v["families"] == "holds" and v["held_mean"] is not None and k not in tried}
+        if not ev:
+            return
+        name = max(ev, key=lambda k: ev[k]["held_mean"])
+        tried.append(name)
+        rid = self.new_run("promote", {"candidate": name}, "auto")
+        self.flag("promote", "auto: %s asked to promote %s (held out %s)" % (rid, name, " and ".join("%+.2f" % h[0] for h in ev[name]["held"])),
+                  key="auto:%s" % name, progress=True)
+
+    def propagation(self):
+        """For each approved promotion: has each machine built a commit whose
+        defaults carry the promoted values? Read from the defaults.toml each
+        machine's build brought back; confirmed on all, it is progress."""
+        for r in self.runs():
+            rid = r["id"]
+            if r["kind"] != "promote":
+                continue
+            st = self.rstate(rid)
+            if st.get("status") != "approved" or st.get("confirmed"):
+                continue
+            want = {}
+            for l in st.get("changed", []):
+                parts = l.split()
+                try:
+                    want[parts[0]] = float(parts[-1])
+                except (IndexError, ValueError):
+                    pass
+            shorts = [self.short(), st.get("commit", "")[:7]]
+            hosts = {}
+            for h in self.hosts:
+                name, state = h["name"], "waiting for its build"
+                for short in shorts:
+                    jid = "prep-%s-%s" % (name, short)
+                    if jid in self.ids("done"):
+                        f = glob.glob(os.path.join(self.q, "results", jid, self.home, "c", short, "defaults.toml"))
+                        if not f:
+                            state = "built %s, no defaults brought back" % short
+                            continue
+                        got = parse_weights(open(f[0]).read())
+                        off = [k for k, v in want.items() if k not in got or abs(got[k] - v) > 1e-6 * max(1.0, abs(v))]
+                        state = "confirmed at %s" % short if not off else "differs at %s: %s" % (short, ", ".join(off))
+                        break
+                    if jid in self.ids("queue", "running"):
+                        state = "building %s" % short
+                        break
+                    if jid in self.ids("failed", "stopped"):
+                        state = "build of %s failed" % short
+                hosts[name] = state
+            st["hosts"] = hosts
+            ok = [n for n, v in hosts.items() if v.startswith("confirmed")]
+            st["detail"] = "on main at %s; values confirmed on %d of %d machines%s" % (
+                st.get("commit", "")[:7], len(ok), len(hosts),
+                "" if len(ok) == len(hosts) else " (" + "; ".join("%s: %s" % (n, v) for n, v in hosts.items() if n not in ok) + ")")
+            if hosts and len(ok) == len(hosts):
+                st["confirmed"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                self.flag("propagated", "promotion %s: %s's values confirmed on all %d machines (%s)" % (
+                    rid, st.get("candidate"), len(hosts), ", ".join(sorted(hosts))), key="propagated:%s" % rid, progress=True)
+            elif any(v.startswith("differs") or "failed" in v for v in hosts.values()):
+                self.flag("propagated", "promotion %s: not every machine has its values: %s" % (rid, st["detail"]), key="propagation:%s:%s" % (rid, st["detail"]))
+            self.rsave(rid, st)
 
     def text(self, v):
         """A weights parameter: a file under treadcore, or the text itself ("a = 1;b = 2")."""
@@ -1131,7 +1292,11 @@ class Plan:
                 c = self.job_census(jid)
                 held = [self.job_census(d.rstrip("/").split(os.sep)[-2]) for d in ds]
                 if tw and c and all(held):
-                    out["%s/%s" % (self.name, jid)] = {"weights": open(tw[0]).read(), "census": c[:2], "held": [h[:2] for h in held]}
+                    # Current: its census and both reads ran on today's
+                    # defaults. Only a current candidate may promote itself.
+                    commits = [self.census_commit(os.path.dirname(tw[0]))] + [self.census_commit(d) for d in ds]
+                    out["%s/%s" % (self.name, jid)] = {"weights": open(tw[0]).read(), "census": c[:2], "held": [h[:2] for h in held],
+                                                       "commits": commits, "current": all(self.same_defaults(x) for x in commits)}
         # Each converge run's: its progress lines.
         for run_dir in (self.cfg.get("families") or {}).get("converge", []):
             run_dir = os.path.join(self.tc, run_dir) if not os.path.isabs(run_dir) else run_dir
@@ -1198,9 +1363,10 @@ class Plan:
             changed = r.stdout.strip().splitlines()
             fmt = lambda c: "%+.2f +/- %.2f" % tuple(c) if c else "?"
             msg = ("promote %s as the brain's defaults -- %s; census %s, held out %s; families %s; prepared by orrery (queue %s, run %s), "
-                   "on main only when Paul approves\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n") % (
+                   "%s\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n") % (
                 name, "; ".join(changed) or "no change", fmt(ev.get("census")), " and ".join(fmt(h) for h in ev.get("held", [])) or "?",
-                ev.get("families"), self.name, rid)
+                ev.get("families"), self.name, rid,
+                "approved by orrery's auto mode (Paul, 28 October)" if self.auto() else "on main only when Paul approves")
             jid = "%s-promote" % rid
             branch = "promote/%s-%s" % (self.name, rid)
             b1 = base64.b64encode(ev["weights"].encode()).decode()
@@ -1235,6 +1401,13 @@ class Plan:
             st["commit"] = open(c[0]).read().strip() if c else ""
             st["status"] = "prepared"
             st["detail"] = "%s: ready for Paul's approval (%s)" % (st["branch"], st["commit"][:7])
+            if self.auto():
+                self.rsave(rid, st)
+                try:
+                    self._approve(rid)
+                except SystemExit as e:
+                    st["status"] = "failed"
+                    st["why"] = "auto approval: %s" % str(e).splitlines()[0]
             self.tick({"kind": "promote", "run": rid, "host": "mac", "improved": True, "d": None, "se": None,
                        "vars": {l.split()[0]: {"value": float(l.split()[-1]), "offset": round(float(l.split()[-1]) - float(l.split()[1]), 4)} for l in st["changed"]}})
         elif st["job"] in self.ids("failed", "stopped"):
@@ -1246,6 +1419,11 @@ class Plan:
     def approve(self, rid):
         """Paul's word: the prepared branch becomes main (a fast-forward), so
         the fleet trains on it at its next top-up."""
+        st = self._approve(rid)
+        self.keep()
+        print("%s approved: main is %s; the fleet builds it at its next top-up" % (rid, st["commit"][:7]))
+
+    def _approve(self, rid):
         st = self.rstate(rid)
         if st.get("status") != "prepared" or not st.get("commit"):
             raise SystemExit("%s is not a prepared promotion (%s)" % (rid, st.get("status")))
@@ -1258,11 +1436,14 @@ class Plan:
         st["status"] = "approved"
         st["detail"] = "on main at %s" % st["commit"][:7]
         st["approved"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        save(os.path.join(self.rdir(rid), "state.json"), st)
-        # Every candidate's families again, on the new defaults.
+        self.rsave(rid, st)
+        # Every candidate's families again, on the new defaults; and the
+        # commit is read anew, so this pass's prep jobs build it everywhere.
         self.state["families_queued"] = []
-        self.keep()
-        print("%s approved: main is %s; the fleet builds it at its next top-up" % (rid, st["commit"][:7]))
+        self._sha = None
+        self.flag("promote", "promotion %s approved%s: %s is main at %s; every machine builds it next" % (
+            rid, " by auto mode" if self.auto() else "", st.get("candidate"), st["commit"][:7]), key="approved:%s" % rid, progress=True)
+        return st
 
     def runs_status(self):
         out = []
@@ -1276,7 +1457,8 @@ class Plan:
             if r["kind"] == "promote" and st.get("candidate") and st.get("status") == "running":
                 detail = "%s: tests and families on %s" % (st["candidate"], st.get("branch"))
             out.append({"id": r["id"], "kind": r["kind"], "status": st.get("status"), "why": st.get("why", ""),
-                        "detail": detail, "params": r.get("params", {})})
+                        "detail": detail, "params": r.get("params", {}), "by": r.get("by", ""),
+                        "candidate": st.get("candidate", ""), "hosts": st.get("hosts", {})})
         return out
 
     # ---- the ticker: every finished census, each coefficient it moved ----------------
@@ -1323,11 +1505,18 @@ class Plan:
                 self.flag("families", "%s falls under a family's floor" % name, key="under:%s" % name)
 
     def plan(self, n):
-        jobs = self.prepare_jobs()
         self.raise_found()
-        jobs += self.net_jobs()
+        # Auto mode: results adopted, the strongest candidate promoted, a
+        # prepared promotion approved (inside run_jobs). A promotion moves
+        # main, so the builds are asked for after it.
+        self.adopt_runs()
+        self.auto_promote()
+        jobs = self.net_jobs()
         # What a person asked for comes before the standing search.
         jobs += self.run_jobs(n)
+        jobs = self.prepare_jobs() + jobs
+        self.propagation()
+        jobs += self.adopt_jobs()
         self.ticker_scan()
         # The families first, a share of the queue: a candidate waits on them.
         jobs += self.family_jobs(max(0, (n - len(jobs) + 1) // 2))
@@ -1377,6 +1566,12 @@ if __name__ == "__main__":
         print(json.dumps(p.runs_status(), indent=1))
     elif cmd == "approve":
         p.approve(sys.argv[3])
+    elif cmd == "adopt":
+        # adopt FILE WHAT: a weights file as a trial with its two held-out
+        # reads, queued at the next top-up.
+        jid = p.adopt(open(sys.argv[3]).read(), " ".join(sys.argv[4:]) or os.path.basename(sys.argv[3]))
+        p.keep()
+        print("%s: queued with its two held-out reads at the next top-up" % jid)
     elif cmd == "push-check":
         st = p.push_check()
         print("push to %s %s: %s" % (st["url"] or st["remote"], st["branch"], "ok" if st["ok"] else "NO: " + st["detail"]))
@@ -1384,6 +1579,7 @@ if __name__ == "__main__":
     elif cmd == "evidence":
         ev = p.evidence()
         for k, v in sorted(ev.items(), key=lambda kv: -(kv[1]["held_mean"] or -99)):
-            print("%-58s held %s  families %s" % (k, " ".join("%+.2f" % h[0] for h in v["held"]), v["families"]))
+            print("%-58s held %s  families %-9s %s" % (k, " ".join("%+.2f" % h[0] for h in v["held"]), v["families"],
+                                                      "current" if v.get("current") else "older defaults"))
     else:
         sys.exit(__doc__)
