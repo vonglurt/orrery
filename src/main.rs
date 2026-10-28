@@ -141,6 +141,21 @@ fn main() {
             "--fleet-cmd" => { fleet_cmd = need(i, "--fleet-cmd"); i += 2 }
             "--training-cmd" | "--jobs-cmd" => { jobs_cmd = need(i, "--training-cmd"); i += 2 }
             "--queue-ctl" => { queue_ctl = need(i, "--queue-ctl"); i += 2 }
+            "--queue" => {
+                // One flag for a fleet queue: the Training view reads it
+                // (tools/plans/treadcore-view.py) and its buttons drive it
+                // (tools/fleet-queue.py), both from this checkout. Given
+                // after --training-cmd or --queue-ctl, those win.
+                let dir = need(i, "--queue");
+                let tools = concat!(env!("CARGO_MANIFEST_DIR"), "/tools");
+                if jobs_cmd.is_empty() {
+                    jobs_cmd = format!("python3 -I {}/plans/treadcore-view.py --queue '{}'", tools, dir);
+                }
+                if queue_ctl.is_empty() {
+                    queue_ctl = format!("python3 {}/fleet-queue.py '{}'", tools, dir);
+                }
+                i += 2
+            }
             "--operator" => { operator = need(i, "--operator"); i += 2 }
             "--seat" => { seat = need(i, "--seat"); i += 2 }
             "--vnc-port" => {
@@ -1348,12 +1363,17 @@ fn usage() {
     --demo               serve the lab report's museum from a fixture
     --thin               one-pixel strokes; text is drawn a pixel bolder
                          by default
+    --queue DIR          a fleet queue (tools/fleet-queue.py): the Training
+                         view shows it, and with --operator its buttons run
+                         it (stop adding, stop now, sync now, shut the fleet
+                         down); sets the two below unless given before it
     --queue-ctl CMD      with --operator, the Training view's queue buttons
                          run CMD stop-adding | resume-adding | stop-now |
-                         ensure, e.g. \"tools/fleet-queue.py QDIR\"
+                         ensure | sync | shutdown-now,
+                         e.g. \"tools/fleet-queue.py QDIR\"
     --training-cmd CMD   what the Training view shows: a command that prints
                          what the fleet is training, run with sh every 5 s,
-                         e.g. treadcore's \"python3 -I scripts/fleet-view.py\"
+                         e.g. \"python3 -I tools/plans/treadcore-view.py\"
     --quiet              do not log requests
 
   the seat -- one node, full screen, in this terminal

@@ -11,6 +11,12 @@ a keeper that keeps it all running, and two ways to stop.
     tools/fleet-queue.py DIR resume-adding
     tools/fleet-queue.py DIR stop-now        stop every running job now, collect
                                              the results there are, end
+    tools/fleet-queue.py DIR shutdown-now    SHUT THE FLEET DOWN: add nothing,
+                                             start nothing; each machine finishes
+                                             the job in hand, its results and its
+                                             ledger come back, then it powers off;
+                                             a report says who finished what
+    tools/fleet-queue.py DIR sync            gather every machine's record now
     tools/fleet-queue.py DIR status [--json]
     tools/fleet-queue.py DIR add JOB.json    put a job on the queue by hand
 
@@ -19,7 +25,12 @@ DIR/config.json says who works and who plans:
     {"hosts": [{"name": "calber", "target": "user@192.168.8.181", "caps": ["cpu", "gpu"]},
                {"name": "mac", "target": "-", "caps": ["cpu"], "nice": 19}],
      "planner": "python3 -I /path/to/project/scripts/fleet-plan.py DIR",
-     "low_water": 6, "poll_s": 10, "max_failures_in_a_row": 5}
+     "low_water": 6, "poll_s": 10, "max_failures_in_a_row": 5, "sync_s": 1800}
+
+A host may also say how it powers off for shutdown-now ("poweroff": "doas -n
+/sbin/poweroff"); one that does not is left running and the report says so.
+The keeper runs `PLANNER sync` every sync_s seconds (and at the end), so
+every machine's record is gathered without anyone asking.
 
 The planner is the project's: `PLANNER plan N` prints a JSON list of up to N
 new jobs, and `PLANNER collect` gathers what the finished jobs found. The
@@ -40,7 +51,7 @@ queue knows nothing about what a job is for. A job:
 Everything is a file a person can read: queue/, running/HOST/, done/, failed/,
 stopped/ (a job each, its JSON), logs/ID.log, results/ID/, lanes/HOST.json
 (what each lane is doing), events.jsonl, and the switches STOP_ADDING and
-STOP_NOW. A job is claimed by renaming its file, so two lanes never run one
+STOP_NOW (and SHUTDOWN). A job is claimed by renaming its file, so two lanes never run one
 job. A remote job runs in its own process group, its pid kept on the host,
 so `stop-now` can stop all of it.
 """
@@ -256,6 +267,9 @@ def lane(q, host, alive):
 
     say("idle")
     while alive.is_set() and not q.flag("STOP_NOW"):
+        if q.flag("SHUTDOWN"):
+            power_off(q, host, say)
+            return
         # A host taken out of config.json leaves: its lane ends after the job
         # in hand, so a host can be removed while the queue runs.
         if name not in [h["name"] for h in q.config()["hosts"]]:
@@ -308,6 +322,9 @@ def lane(q, host, alive):
             continue
         try:
             work(q, host, picked, say)
+            if q.flag("SHUTDOWN"):
+                power_off(q, host, say)
+                return
         except Exception as e:  # the job fails; the lane goes on
             q.event("lane error", host=name, job=picked["id"], detail=repr(e)[:300])
             try:
@@ -315,6 +332,40 @@ def lane(q, host, alive):
             except OSError:
                 pass
     say("stopped")
+
+
+def power_off(q, host, say):
+    """Shutdown: the host's record comes back (PLANNER sync HOST), then it
+    powers off by its own command; the lane ends. What it did is reported."""
+    name = host["name"]
+    planner = q.config().get("planner")
+    if planner and reachable(host):
+        say("reporting")
+        r = subprocess.run(["bash", "-c", "%s sync %s" % (planner, name)], capture_output=True, text=True, timeout=1800)
+        q.event("reported", host=name, detail=(r.stdout or r.stderr)[-300:])
+    cmd = host.get("poweroff")
+    if not cmd:
+        q.event("left running", host=name, why="no poweroff in config.json")
+        say("left running")
+        return
+    if not reachable(host):
+        q.event("powered off", host=name, detail="already unreachable")
+        say("off")
+        return
+    # The connection drops as the machine goes down: ssh's 255 is expected.
+    try:
+        r = remote(host["target"], "nohup sh -c 'sleep 2; %s' >/dev/null 2>&1 &" % cmd, timeout=60)
+        ok = r.returncode in (0, 255)
+        detail = (r.stderr or "").strip()[-200:]
+    except subprocess.TimeoutExpired:
+        ok, detail = True, "the connection hung as it went down"
+    time.sleep(10)
+    if ok and not reachable(host):
+        q.event("powered off", host=name)
+        say("off")
+    else:
+        q.event("poweroff failed", host=name, detail=detail or "it still answers")
+        say("poweroff failed")
 
 
 def reachable(host):
@@ -407,10 +458,41 @@ def keeper(q):
             r = subprocess.run(["bash", "-c", "%s collect" % planner], capture_output=True, text=True, timeout=3600)
             q.event("collected", detail=(r.stdout or r.stderr)[-400:])
 
+    syncing = threading.Lock()
+
+    def sync():
+        # On its own thread, one at a time: gathering is slow and must not
+        # hold the keeper.
+        if not planner or not syncing.acquire(blocking=False):
+            return
+        try:
+            r = subprocess.run(["bash", "-c", "%s sync" % planner], capture_output=True, text=True, timeout=3600)
+            q.event("synced" if r.returncode == 0 else "sync failed", detail=(r.stdout or r.stderr)[-400:])
+        except subprocess.TimeoutExpired:
+            q.event("sync failed", detail="timed out")
+        finally:
+            syncing.release()
+
+    sync_s = cfg.get("sync_s", 1800)
+    last_sync = 0.0
+
     try:
         while True:
             with open(q.p("keeper.beat"), "w") as f:
                 f.write(str(now()))
+            if q.flag("SHUTDOWN"):
+                # Each lane powers its host off after the job in hand; when
+                # none is left the keeper reports and ends.
+                if not any(t.is_alive() for t in threads.values()) and not q.jobs_in("running"):
+                    collect()
+                    report = shutdown_report(q)
+                    q.event("shut down", detail=report["summary"])
+                    break
+                time.sleep(poll)
+                continue
+            if planner and sync_s and now() - last_sync > sync_s:
+                last_sync = now()
+                threading.Thread(target=sync, daemon=True).start()
             # Keep a lane alive for every host; one that died is started again.
             for h in q.config()["hosts"]:
                 t = threads.get(h["name"])
@@ -463,6 +545,28 @@ def keeper(q):
             pass
 
 
+def shutdown_report(q):
+    """Who finished what, and what was left: DIR/shutdown.json."""
+    ev = [json.loads(l) for l in open(q.p("events.jsonl"))]
+    t0 = max((e["t"] for e in ev if e.get("event") == "shutdown now"), default="")
+    hosts = {}
+    for h in q.config()["hosts"]:
+        mine = [e for e in ev if e.get("host") == h["name"]]
+        last = [e for e in mine if e.get("event") in ("done", "failed", "stopped")]
+        end = [e for e in mine if e["t"] >= t0 and e.get("event") in ("powered off", "left running", "poweroff failed")]
+        hosts[h["name"]] = {"last_job": last[-1]["job"] if last else None, "last_result": last[-1]["event"] if last else None,
+                            "finished_at": last[-1]["t"] if last else None,
+                            "power": end[-1]["event"] if end else "unknown",
+                            "reported": any(e.get("event") == "reported" and e["t"] >= t0 for e in mine)}
+    left = [j["id"] for j in q.jobs_in("queue")]
+    report = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "asked": t0, "hosts": hosts, "left_on_the_queue": left,
+              "summary": "; ".join("%s: %s, %s" % (n, h["last_job"] or "nothing", h["power"]) for n, h in hosts.items())
+              + "; %d jobs never started" % len(left)}
+    with open(q.p("shutdown.json"), "w") as f:
+        json.dump(report, f, indent=1)
+    return report
+
+
 def keeper_alive(q):
     try:
         pid = int(open(q.p("keeper.pid")).read())
@@ -493,6 +597,8 @@ def status(q):
             counts[k][sub] += 1
     pid = keeper_alive(q)
     state = ("stopping now" if q.flag("STOP_NOW") and pid else
+             "shutting down: each machine finishes, reports, powers off" if q.flag("SHUTDOWN") and pid else
+             "shut down" if q.flag("SHUTDOWN") and not pid else
              "stopped" if not pid else
              "draining: adding nothing" if q.flag("STOP_ADDING") else "running, adding")
     recent = sorted(q.jobs_in("done") + q.jobs_in("failed") + q.jobs_in("stopped"), key=lambda j: j.get("ended", ""))[-12:]
@@ -502,7 +608,18 @@ def status(q):
         events = [json.loads(l) for l in open(q.p("events.jsonl")).readlines()[-8:]]
     except OSError:
         pass
+    shutdown = None
+    try:
+        shutdown = json.load(open(q.p("shutdown.json"))) if q.flag("SHUTDOWN") else None
+    except (OSError, ValueError):
+        pass
+    sync = None
+    try:
+        sync = json.load(open(os.path.join(os.path.dirname(q.d.rstrip("/")), "..", "ledger", "sync.json")))
+    except (OSError, ValueError):
+        pass
     return {"dir": q.d, "state": state, "keeper_pid": pid, "adding": not q.flag("STOP_ADDING"),
+            "shutdown": shutdown, "sync": sync,
             "counts": counts, "lanes": lanes,
             "recent": [{"id": j["id"], "kind": j.get("kind"), "title": j.get("title"), "host": j.get("host"),
                         "seconds": j.get("seconds"), "ok": j["_file"].startswith(q.p("done"))} for j in recent],
@@ -518,7 +635,7 @@ def main(argv):
     if cmd == "start":
         if keeper_alive(q):
             sys.exit("a keeper is already running (pid %s)" % keeper_alive(q))
-        for f in ("STOP_NOW",):
+        for f in ("STOP_NOW", "SHUTDOWN"):
             try:
                 os.remove(q.p(f))
             except OSError:
@@ -549,6 +666,15 @@ def main(argv):
         open(q.p("STOP_NOW"), "w").close()
         q.event("stop now")
         print("stopping now: running jobs are stopped, results collected, the keeper ends")
+    elif cmd == "shutdown-now":
+        open(q.p("STOP_ADDING"), "w").close()
+        open(q.p("SHUTDOWN"), "w").close()
+        q.event("shutdown now")
+        print("shutting the fleet down: nothing new starts; each machine finishes its job, reports, then powers off")
+    elif cmd == "sync":
+        cfg = q.config()
+        r = subprocess.run(["bash", "-c", "%s sync" % cfg["planner"]], text=True)
+        sys.exit(r.returncode)
     elif cmd == "status":
         s = status(q)
         if "--json" in argv:

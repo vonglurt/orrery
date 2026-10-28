@@ -20,7 +20,7 @@ cd ~/code/treadcore
 ```sh
 cd ~/code/orrery
 cargo run --release -- --gui --fleet grove --fleet-cmd "$HOME/.local/bin/copal fleet" \
-  --training-cmd "cd ~/code/treadcore && python3 -I scripts/fleet-view.py"
+  --training-cmd "python3 -I $HOME/code/orrery/tools/plans/treadcore-view.py"
 ```
 
 The fleet is **grove**, the real one: saskatchewan, columbia, nasser and
@@ -49,133 +49,168 @@ tiles say "off bus" until they are enrolled.
 
 ![The Training view while rec2400 records](features/training.png)
 
-It reads one document, printed by treadcore's `scripts/fleet-view.py` every
+It reads one document, printed by `tools/plans/treadcore-view.py` every
 5 s: each machine asked over ssh for its cores, load, memory and GPU; the
 newest recording run's lanes; the loop's state; the best net's weights; its
 results. `--frame out.ppm --frame-view training --frame-state doc.json`
 draws a saved document, for review (`ORRERY_FRAME_ZOOM=N` with a matrix
 enlarged). Text is drawn a pixel bolder than the font; `--thin` goes back.
 
-## The queue: keep the whole fleet busy (fleet-queue)
+## The queue: orrery runs treadcore's training (fleet-queue)
 
-`tools/fleet-queue.py` is the newer engine:
-- **one queue** that every machine takes from, a job at a time;
-- **a keeper** that tops the queue up from the project's planner, restarts
-  any lane that dies, and stops adding by itself after five failures in a
-  row;
-- **two ways to stop.**
+Orrery holds all of the orchestration (treadcore LAB-REPORT-BRAIN.md 112
+and 113):
+- **the engine,** `tools/fleet-queue.py`: the queue, a lane a machine, the
+  keeper, the stops, sync and shutdown;
+- **the plan,** `tools/plans/treadcore.py`: what the fleet does for
+  treadcore, and how it gathers what came back;
+- **the view,** `tools/plans/treadcore-view.py`: what the Training view
+  draws.
 
-treadcore's planner (`scripts/fleet-plan.py`) fills it with two kinds of
-work in turn:
-- **weight trials:** the scripted brain's 110 weights, a census each,
-  chosen by `suggest.py` from the queue's own ledger;
-- **net rounds:** continue the best net on calber's GPU, then judge it
-  in a census on columbia.
+treadcore keeps only the work itself: how one census plays
+(`scripts/census.sh`), the brain's tests, the ledger and the fit
+(`scripts/ledger.py`, `scripts/suggest.py`), and the trainer (`tools/bc`).
 
-### 1. A queue is a folder
+### 1. The standing queue, grove
 
-On the Mac, `~/code/treadcore/build/queue/NAME/` holds two files.
+`~/code/treadcore/build/queue/grove/` is the fleet's queue. It holds two
+files.
 
-`config.json` says who works:
+**`config.json` says who works**, how each machine powers off for a
+shutdown, and how often to gather:
 
 ```json
 {"hosts": [
-  {"name": "calber",   "target": "user@192.168.8.181", "caps": ["cpu", "gpu"], "nice": 10},
-  {"name": "columbia", "target": "user@192.168.8.224", "caps": ["cpu"], "nice": 10},
-  {"name": "nasser",   "target": "user@192.168.8.121", "caps": ["cpu"], "nice": 19},
-  {"name": "mac",      "target": "-",                  "caps": ["cpu"], "nice": 19}],
- "planner": "python3 -I /Users/user/code/treadcore/scripts/fleet-plan.py /Users/user/code/treadcore/build/queue/NAME",
- "low_water": 6, "poll_s": 10, "max_failures_in_a_row": 5}
+  {"name": "saskatchewan", "target": "user@192.168.8.235", "caps": ["cpu"], "nice": 10},
+  {"name": "calber",   "target": "user@192.168.8.181", "caps": ["cpu", "gpu"], "nice": 10,
+   "poweroff": "sudo -n /usr/bin/systemctl poweroff"},
+  {"name": "mac",      "target": "-", "caps": ["cpu"], "nice": 19}],
+ "planner": "python3 -I /Users/user/code/orrery/tools/plans/treadcore.py /Users/user/code/treadcore/build/queue/grove",
+ "aliases": {"users-iMac": "mac", "users-iMac.lan": "mac", "iMac.lan": "mac"},
+ "low_water": 7, "poll_s": 10, "sync_s": 1800}
 ```
 
-`plan.json` says what to train. The real settings are below; the sample
-run used 4 seeds of 120 s.
+**`plan.json` says what to train:**
 
 ```json
-{"commit": "the treadcore commit every machine builds (pushed)",
- "census_host": "columbia",
- "weights": {"seeds": 55, "secs": 900, "map": "all", "seed0": 6000000,
-             "held_seeds": 400, "held_seed0": 7000000},
- "net": {"rounds": [{"run": "rec2400", "lo": 9001260, "n": 1200},
-                    {"run": "rec2400", "lo": 9002460, "n": 1200}],
-         "train_args": "4 32768 3e-3",
-         "census": {"seeds": 110, "seed0": 500000, "secs": 900, "map": "all"}}}
+{"project": "~/code/treadcore",
+ "commit": "origin/main",
+ "census_host": "saskatchewan",
+ "history": "build/ledger/fleet.tsv",
+ "weights": {"seeds": 55, "secs": 900, "map": "all", "seed0": 20000000,
+             "held_seeds": 400, "held_seed0": 60000000},
+ "families": {"converge": ["build/fleet-sync/saskatchewan/converge/20261026-181011"], "queue": true, "batch": 8}}
 ```
 
-### 2. Start it, watch it, stop it
+- **`commit`.** `origin/main` is read again, after a fetch, at every
+  top-up. So the fleet always works on the newest commit this Mac pushed.
+  - Each machine builds each commit once, in `~/fleet/q-grove/c/SHORT/`.
+  - Before building, a machine fast-forwards its own checkout
+    (`~/code/treadcore`), when that checkout is clean and on main.
+  - New jobs use the newest build. A job already planned runs on its own.
+- **`history`.** The search starts from every census the fleet has read
+  that shares the queue's settings (55 seeds or more, 900 s, every map)
+  and today's `weights.rs`. A promotion changes `weights.rs`, so later
+  trials are measured against the new defaults and are never mixed with
+  the old.
+- **`net`.** It adds rounds of the learned tank (see sections 3 and 4 of
+  the first queue's settings in treadcore LR 110); grove has none for
+  now.
+
+### 2. Open it in orrery
 
 ```sh
-Q=~/code/treadcore/build/queue/NAME
-python3 ~/code/orrery/tools/fleet-queue.py $Q ensure          # start the keeper (in the background)
-python3 ~/code/orrery/tools/fleet-queue.py $Q status          # where it is
-python3 ~/code/orrery/tools/fleet-queue.py $Q stop-adding     # drain: finish what is queued, collect, end
-python3 ~/code/orrery/tools/fleet-queue.py $Q resume-adding
-python3 ~/code/orrery/tools/fleet-queue.py $Q stop-now        # stop every job now, collect, end
+cd ~/code/orrery && cargo run --release -- --gui --operator paul --fleet grove \
+  --fleet-cmd "$HOME/.local/bin/copal fleet" --queue $HOME/code/treadcore/build/queue/grove
 ```
 
-Or from orrery, with the buttons. They appear only for an operator, and
-only with `--queue-ctl`:
+`--queue DIR` sets both what the Training view reads and what its buttons
+run. Training is Command-3.
 
-```sh
-cd ~/code/orrery
-Q=$HOME/code/treadcore/build/queue/NAME
-cargo run --release -- --gui --operator paul --fleet grove --fleet-cmd "$HOME/.local/bin/copal fleet" \
-  --training-cmd "cd $HOME/code/treadcore && python3 -I scripts/fleet-view.py --queue $Q" \
-  --queue-ctl "python3 $HOME/code/orrery/tools/fleet-queue.py $Q"
-```
-
-The Training view then shows:
-- the queue's state in its top sentence;
+**The view shows:**
+- the queue's state, in its top sentence;
 - a bar of done (green), running (amber) and failed (red);
-- the counts for each kind of job, the next job, and the last finished;
+- the counts for each kind of job, the next job and the last finished;
+- the last sync;
 - what each machine is running.
 
-The buttons are:
-- **Stop adding** (or **Resume adding** while draining);
+**For an operator, the buttons are:**
+- **Stop adding**, or **Resume adding** while draining;
 - **Collect results and stop now**;
-- **Start the queue**, when its keeper is not running.
+- **Start the queue**, when its keeper is not running;
+- **Sync now:** gather every machine's record at once;
+- **Shut the fleet down.** It asks twice, because the second press powers
+  machines off:
+  1. nothing new starts;
+  2. each machine finishes the job in hand, and its results and its ledger
+     come back;
+  3. then it powers off;
+  4. a report, `shutdown.json`, says who finished what and what never
+     started. Its line is shown under the bar.
 
-### 3. What it found
+The same from a shell:
+
+```sh
+Q=~/code/treadcore/build/queue/grove; F="python3 $HOME/code/orrery/tools/fleet-queue.py $Q"
+$F ensure; $F status; $F stop-adding; $F resume-adding; $F stop-now; $F sync; $F shutdown-now
+```
+
+### 3. Gathering: sync
+
+**The keeper runs `PLANNER sync` every `sync_s` seconds, and once more at
+the end.** It gathers, with no command by hand:
+1. Each machine's own ledger, read by `scripts/ledger.py` on that machine,
+   so each row keeps its census binary's hash. The ledgers go to
+   `~/code/treadcore/build/ledger/HOST.tsv`.
+2. Each machine's converge records, without their binaries, into
+   `build/fleet-sync/HOST/converge/`.
+3. Every queue's own ledger.
+
+**All of it is joined into `build/ledger/fleet.tsv`**, one row a machine
+and census:
+- rows are joined, never pooled: a census belongs to its machine;
+- the Mac's names (users-iMac, users-iMac.lan) are one, by `aliases`;
+- the last sync is in `build/ledger/sync.json`.
+
+A machine that cannot be reached keeps the table it had.
+
+### 4. What it found
 
 All of it is under `$Q`:
 
 | File | What it holds |
 | --- | --- |
-| `plan/summary.json` | written when the queue stops: every weight census and whether it passed, every net round's verdict, the best net |
-| `plan/ledger.tsv` | the queue's census ledger |
-| `plan/round-NNN.json` | a net round: the candidate less the best, paired by seed, and its held-out agreement |
-| `plan/best.bin` | the queue's best net (it changes only past two errors) |
-| `plan/families.json` | every candidate's families: each family's share, error and floor, and `holds` or `UNDER` (`fleet-plan.py $Q families` refreshes it) |
-| `logs/ID.log` | each job's commands and output |
-| `results/ID/` | what each job brought back |
-| `events.jsonl` | every start, finish, failure and stop |
+| `plan/summary.json` | written when the queue stops: every weight census and whether it passed, every net round, the best net, the families |
+| `plan/ledger.tsv` | the queue's own censuses; `plan/history.tsv` the fleet's rows it also fits; `plan/ledger-all.tsv` both |
+| `plan/families.json` | every candidate's families: each family's share, error and floor, and `holds` or `UNDER` |
+| `plan/round-NNN.json`, `plan/best.bin` | net rounds, when the plan has them |
+| `plan/state.json` | the planner's counters, and each commit seen with its `weights.rs` |
+| `shutdown.json` | after a shutdown: each machine's last job, whether it reported, whether it is off; the jobs never started |
+| `logs/ID.log`, `results/ID/` | each job's commands and output; what it brought back |
+| `events.jsonl` | every start, finish, failure, requeue, sync, report and power-off |
 
-A weight trial that passes is read twice more on 400 held-out seeds. One
-that passes both is a candidate, and the queue runs its families (the
-scenario families, each held to its floor). Turn them on in `plan.json`:
+**A weight trial that passes** is read twice more on 400 held-out seeds.
+One that passes both is a candidate. Its families run next, with the
+families of every converge run in `families.converge`, newest first, 8 to
+a job side by side.
 
-```json
-"families": {"converge": ["build/saskatchewan/converge/STAMP"], "queue": true, "batch": 8}
-```
+Nothing becomes a default, and no net becomes official, without Paul.
 
-The candidates, in order:
-1. the defaults;
-2. the queue's own candidates;
-3. each listed converge run's, newest first.
-
-A job runs 8 of them side by side. Nothing becomes a default, and no net
-becomes official, without Paul.
-
-### 4. When a machine goes away
+### 5. When a machine goes away, joins, or must power off
 
 - **A host that ssh cannot reach takes nothing.** Its lane says
   `unreachable` and probes it each minute.
 - **A job that ended because ssh failed (255)** on a host that is then
   unreachable goes back on the queue for another host. It is not failed,
   and the breaker does not count it.
-- **To take a host out,** delete it from `config.json`. Its lane ends
-  after the job in hand. To add one, add it: its lane starts and builds
-  first.
+- **To take a host out,** delete it from `config.json`. Its lane ends after
+  the job in hand.
+- **To add one,** add it. Its lane starts, and builds the commit first. A
+  host with `"caps": []` takes no work, but its record is still gathered.
+- **To power off at a shutdown,** a host needs `poweroff`, a command it may
+  run without a password. A host without it is left running, and the
+  report says so. `tools/fleet-poweroff-setup.sh` writes the one rule that
+  allows it: run it once on each machine.
 
 ## What it is
 
@@ -184,16 +219,19 @@ becomes official, without Paul.
 | the loop | `tools/fleet-train.sh` (here) | rounds, stages in order, an event a line (`events.jsonl`), STOP, `status --json` |
 | the stages | the project's (`treadcore/scripts/fleet-train-stages.sh`) | `stage_record`, `stage_train`, `stage_judge`, and `ft_detail` for the view |
 | the recording | `treadcore/scripts/fleet-record.sh` | a queue of jobs claimed by `mv`, a lane a machine, shards streamed to the GPU node and hashed at both ends |
-| the lanes as JSON | `treadcore/scripts/fleet-jobs.py` | each machine's job, state, age and the pipe it is running |
-| what is shown | `treadcore/scripts/fleet-view.py` | the machines, the run, the loop, the net and its results, as one document |
+| the queue | `tools/fleet-queue.py` (here) | jobs, a lane a machine, the keeper, stop adding, stop now, sync, shutdown |
+| the plan for treadcore | `tools/plans/treadcore.py` (here) | prepares each commit on each machine; weight trials, held-out reads, families, net rounds; sync |
+| the lanes as JSON | `tools/plans/treadcore-jobs.py` (here) | each machine's job, state, age and the pipe it is running |
+| what is shown | `tools/plans/treadcore-view.py` (here) | the machines, the queue, the run, the loop, the net and its results, as one document |
+| counting | `tools/plans/treadcore-count.py` (here) | the games, seat-ticks, thinks and training a queue has done |
 | the view | `src/training.rs`, the Training face | draws that document; it has no verbs |
 
 ## The rules it keeps
 
 1. **The same read rule as every face.** The Training view draws one command's
    document and nothing else; a job that is not in it cannot be drawn.
-2. **Watching and steering are two things.** The view has no verbs. The
-   loop is started and stopped from a shell.
+2. **Watching and steering are two things.** The view's buttons exist only
+   for an operator (`--operator`), and only with a queue to drive.
 3. **A failure stops the loop.** A stage that fails ends the round as
    failed; the loop does not retry around it.
 4. **A round's best is the loop's, not the project's.** treadcore's judge

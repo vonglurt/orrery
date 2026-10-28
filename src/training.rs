@@ -16,7 +16,7 @@
 //!     census against the official net.
 //!
 //! THE SAME RULE AS EVERY OTHER FACE: the whole picture is the document one
-//! command prints (`--training-cmd`; treadcore's is `scripts/fleet-view.py`),
+//! command prints (`--training-cmd`; treadcore's is `tools/plans/treadcore-view.py`),
 //! polled on a thread. Nothing is discovered here, and there are no verbs.
 
 use crate::draw::{mix, Rgb};
@@ -105,6 +105,8 @@ pub struct State {
     pub ctl: Option<&'static str>,
     /// What the last control said, shown until the next.
     pub said: String,
+    /// Shut the fleet down was pressed once: the next press does it.
+    pub arm_shutdown: bool,
 }
 
 /// One machine's lane in the queue.
@@ -130,6 +132,10 @@ pub struct Queue {
     pub upcoming: Vec<(String, String)>,
     /// (kind, title, ok) of the last few.
     pub recent: Vec<(String, String, bool)>,
+    /// The shutdown report's one line, once the fleet is shut down.
+    pub shutdown: String,
+    /// The last sync: when, and how many censuses the fleet's ledger holds.
+    pub synced: String,
 }
 
 /// (head, the net's agreement, bc1's, always-the-commonest's), percent.
@@ -171,8 +177,8 @@ impl Model {
         let mut m = Model::default();
         if text.trim().is_empty() {
             m.why = if source.is_empty() {
-                "Nothing to show yet: start orrery with --training-cmd, e.g. \
-                 \"cd ~/code/treadcore && python3 -I scripts/fleet-view.py\""
+                "Nothing to show yet: start orrery with --queue DIR (a fleet queue), \
+                 or --training-cmd CMD"
                     .into()
             } else {
                 format!("Asking the fleet what it is doing: {}", source)
@@ -266,6 +272,12 @@ impl Model {
                     .iter()
                     .map(|j| (s(j, "kind"), s(j, "title"), j.get("ok").and_then(|b| b.as_bool()).unwrap_or(false)))
                     .collect(),
+                shutdown: q.get("shutdown").map(|r| s(r, "summary")).unwrap_or_default(),
+                synced: q
+                    .get("sync")
+                    .filter(|x| x.get("t").is_some())
+                    .map(|x| format!("synced {}: {} censuses in the fleet's ledger", s(x, "t").replace('T', " "), n(x, "rows") as i64))
+                    .unwrap_or_default(),
             });
         }
         if let Some(x) = v.get("net").filter(|x| x.get("sizes").is_some()) {
@@ -419,6 +431,8 @@ fn headline(m: &Model) -> (String, Option<usize>) {
             "running, adding" => "keeping the fleet busy",
             "draining: adding nothing" => "draining: finishing what is queued, adding nothing",
             "stopping now" => "stopping now",
+            "shut down" => "shut down",
+            s if s.starts_with("shutting down") => "shutting down: each machine finishes, reports, powers off",
             _ => "stopped",
         };
         return (
@@ -504,6 +518,14 @@ fn draw_queue(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) -> i32 {
         ui.label_in(at.x, ly, bw, &format!("last finished: {} - {}{}", k, title, if *ok { "" } else { "  (failed or stopped)" }), &F8X13, if *ok { t.dim } else { t.alarm });
         ly += F8X13.height as i32 + 3;
     }
+    if !q.synced.is_empty() {
+        ui.label_in(at.x, ly, bw, &q.synced, &F8X13, t.dim);
+        ly += F8X13.height as i32 + 3;
+    }
+    if !q.shutdown.is_empty() {
+        ui.label_in(at.x, ly, bw, &format!("shutdown: {}", q.shutdown), &F8X13, t.ink);
+        ly += F8X13.height as i32 + 3;
+    }
     if st.operator {
         // Absent rather than greyed when they cannot apply: a running queue
         // offers stop adding; a draining one, resume; both offer stop now.
@@ -523,11 +545,29 @@ fn draw_queue(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) -> i32 {
         if running_keeper && ui.button(rect(x, at.y, 280, 26), "Collect results and stop now", true) {
             st.ctl = Some("stop-now");
         }
+        // The second row: gather now, and shut the fleet down. Shutdown
+        // powers machines off, so it asks twice: the first press arms it.
+        let y2 = at.y + 32;
+        if ui.button(rect(bx, y2, 130, 26), "Sync now", true) {
+            st.ctl = Some("sync");
+        }
+        let shutting = q.state.starts_with("shutting down") || q.state == "shut down";
+        if running_keeper && !shutting {
+            let label = if st.arm_shutdown { "Press again: shut the fleet down" } else { "Shut the fleet down" };
+            if ui.button(rect(bx + 140, y2, 280, 26), label, true) {
+                if st.arm_shutdown {
+                    st.ctl = Some("shutdown-now");
+                    st.arm_shutdown = false;
+                } else {
+                    st.arm_shutdown = true;
+                }
+            }
+        }
         if !st.said.is_empty() {
-            ui.label_in(bx, at.y + 32, 420, &st.said, &F8X13, t.dim);
+            ui.label_in(bx, at.y + 64, 420, &st.said, &F8X13, t.dim);
         }
     }
-    ly.max(at.y + 48)
+    ly.max(at.y + if st.operator { 82 } else { 48 })
 }
 
 fn draw_machines(ui: &mut Ui, at: Rect, m: &Model) {
