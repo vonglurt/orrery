@@ -154,6 +154,45 @@ over the network and checked as `user`, without root:
 
 The node keeps all of it across a reboot, with nothing to do by hand.
 
+### The login: Copal fleet, not Ubuntu's advertising
+
+Ubuntu's login offered help links, news from motd.ubuntu.com, "Enable ESM
+Apps to receive additional future security updates", and "New release
+'26.04.1 LTS' available. Run 'do-release-upgrade'": the last one the very
+upgrade this node must not take. `tools/fleet-login.sh --role cuda`, run on
+the node as root:
+
+- **turns off**, with `chmod -x` and a list kept for `--undo`:
+  `10-help-text`, `50-motd-news` (and `ENABLED=0` for its timer),
+  `91-contract-ua-esm-status`, `91-release-upgrade`; and Ubuntu Pro's
+  `apt_news`, which puts the ESM advertising into apt's own output;
+- **keeps** `50-landscape-sysinfo` (load, memory, temperature, address),
+  updates waiting, reboot required, firmware, and the HWE end-of-life notice;
+- **adds** `01-copal-fleet`, run at each login, reading
+  `/etc/copal-fleet/node.conf`: the fleet's name, the node and its role, the
+  GPU as it is (name, driver, temperature, load, memory), CUDA's version,
+  what is held and why, hints, and a warning against `do-release-upgrade`;
+- **holds the release** for a CUDA node: `Prompt=never` (section VI of the
+  version report's recommendations).
+
+Previewed on calber as `user` before installing:
+
+```
+  Copal fleet · orrery
+  calber -- the fleet's CUDA node (Ubuntu 24.04.5 LTS, not Copal)
+  GPU   NVIDIA GeForce GTX 1080 Ti · driver 580.178.04 · 33°C · 0% busy · 0 of 11264 MiB
+  CUDA  12.9
+  held: Ubuntu 24.04, driver 580, CUDA 12.9: held for a Pascal card
+
+  Hints
+    nvidia-smi                       the card, now
+    nvcc --version                   the CUDA toolkit
+    ~/code/burnprobe                 Burn on this card (orrery tools/burn-probe)
+    sudo less /var/log/cuda-node.log how this node was set up
+
+  Do not run do-release-upgrade: Ubuntu 26.04 has no CUDA 12 for this card.
+```
+
 ## VI. Discussion
 
 **Ubuntu's installer did half the work.** "Third-party" put in the right
