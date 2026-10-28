@@ -80,6 +80,13 @@ pub struct UiState {
     pub focus: Option<u64>,
 }
 
+/// One thing typed: a key press, or text.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Typed {
+    Key(Sym, Mods),
+    Text(String),
+}
+
 /// One frame's worth of input, sorted into the shapes widgets ask about.
 #[derive(Debug, Default)]
 pub struct Frame {
@@ -96,6 +103,11 @@ pub struct Frame {
     /// the reason it produces them.
     pub raw_keys: Vec<(u16, Sym, bool, Mods)>,
     pub text: String,
+    /// Key presses and text together, in the order they came. `keys` and
+    /// `text` lose the order between them, and a terminal needs it: a
+    /// password's last letters and its Return in one frame must reach the
+    /// far end letters first (Sessions, 28 October).
+    pub typed: Vec<Typed>,
     pub scroll: (i32, i32),
     /// Did the pointer move this frame? A remote desktop only wants to be told
     /// about a position that changed.
@@ -139,9 +151,13 @@ impl Frame {
                     f.raw_keys.push((scancode, sym, down, mods));
                     if down {
                         f.keys.push((sym, mods));
+                        f.typed.push(Typed::Key(sym, mods));
                     }
                 }
-                Input::Text(ref s) => f.text.push_str(s),
+                Input::Text(ref s) => {
+                    f.text.push_str(s);
+                    f.typed.push(Typed::Text(s.clone()));
+                }
                 Input::Resized { w, h } => f.resized = Some((w, h)),
                 Input::Closed => f.closed = true,
                 Input::Frame => {}
@@ -810,4 +826,17 @@ mod field_tests {
         }
         assert!(f.text.len() <= 400, "the field grew to {}", f.text.len());
     }
+
+    #[test]
+    fn typing_keeps_its_order_between_text_and_keys() {
+        // A password's last letters and its Return, in one frame.
+        let mut st = UiState::default();
+        let ret = Input::Key { scancode: 0x1c, sym: Sym::Return, down: true, mods: Mods::default() };
+        let f = Frame::gather(&[Input::Text("pw".into()), ret, Input::Text("x".into())], &mut st);
+        assert_eq!(
+            f.typed,
+            vec![Typed::Text("pw".into()), Typed::Key(Sym::Return, Mods::default()), Typed::Text("x".into())]
+        );
+    }
+
 }

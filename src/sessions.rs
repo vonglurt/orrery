@@ -185,8 +185,24 @@ fn worker(target: &str, rx: Receiver<Ask>, lines: Arc<Mutex<Vec<String>>>, statu
     say(format!("{} session '{}'", kind, SESSION));
     let mut pending: VecDeque<Ask> = VecDeque::new();
     let mut size = (0u16, 0u16);
+    // screen's window in front of the tile. A detached screen session has no
+    // display, and a command sent to it without -p reaches no window at all
+    // (28 October: typing into boburner's tile went nowhere), so every stuff
+    // and every hardcopy names its window: the first ("0"), or "recipe"
+    // after Ask::Window until that window is gone.
+    let mut win = String::from("0");
     loop {
         // Everything typed since the last pass, in order, in one call.
+        // Wait for something typed, or 900 ms for the next look at the
+        // screen, whichever comes first: a key goes out at once, not on the
+        // next second (28 October: "its delayed").
+        if pending.is_empty() {
+            if let Ok(a) = rx.recv_timeout(Duration::from_millis(900)) {
+                pending.push_back(a);
+                // The rest of a burst of typing, in the same call.
+                thread::sleep(Duration::from_millis(30));
+            }
+        }
         while let Ok(a) = rx.try_recv() {
             pending.push_back(a);
         }
@@ -210,31 +226,49 @@ fn worker(target: &str, rx: Receiver<Ask>, lines: Arc<Mutex<Vec<String>>>, statu
                     q(&c),
                     s = SESSION
                 )),
-                (_, Ask::Window(c)) => script.push_str(&format!(
-                    "screen -S {s} -X screen -t recipe; screen -S {s} -p recipe -X stuff {}; ",
-                    q(&format!("{}\n", c)),
-                    s = SESSION
-                )),
+                (_, Ask::Window(c)) => {
+                    script.push_str(&format!(
+                        "screen -S {s} -X screen -t recipe; screen -S {s} -p recipe -X stuff {}; ",
+                        q(&format!("{}\n", c)),
+                        s = SESSION
+                    ));
+                    win = "recipe".into();
+                }
                 ("tmux", Ask::Text(t)) => script.push_str(&format!("tmux send-keys -t {} -l -- {}; ", SESSION, q(&t))),
                 ("tmux", Ask::Key(k, _)) => script.push_str(&format!("tmux send-keys -t {} {}; ", SESSION, k)),
-                (_, Ask::Text(t)) => script.push_str(&format!("screen -S {} -X stuff {}; ", SESSION, q(&t))),
-                (_, Ask::Key(_, Some(c))) => script.push_str(&format!("screen -S {} -X stuff \"$(printf '\\{:03o}')\"; ", SESSION, c as u32)),
+                (_, Ask::Text(t)) => script.push_str(&format!("screen -S {} -p {} -X stuff {}; ", SESSION, q(&win), q(&t))),
+                (_, Ask::Key(_, Some(c))) => {
+                    script.push_str(&format!("screen -S {} -p {} -X stuff \"$(printf '\\{:03o}')\"; ", SESSION, q(&win), c as u32))
+                }
                 (_, Ask::Key(_, None)) => {}
             }
         }
         script.push_str(&if kind == "tmux" {
             format!("tmux capture-pane -p -t {}", SESSION)
         } else {
-            format!("f=/tmp/orrery-hardcopy-$$; screen -S {} -X hardcopy $f && cat $f; rm -f $f", SESSION)
+            // The named window; gone (the recipe's shell exited), the first,
+            // and a line to say so, which the worker reads.
+            format!(
+                "f=/tmp/orrery-hardcopy-$$; if screen -S {s} -p {w} -X hardcopy $f 2>/dev/null && [ -f $f ]; then cat $f; \
+                 else echo '@orrery-window-gone'; screen -S {s} -p 0 -X hardcopy $f && cat $f; fi; rm -f $f",
+                s = SESSION,
+                w = q(&win)
+            )
         });
         match on(target, &script) {
             Ok(text) => {
+                let text = match text.strip_prefix("@orrery-window-gone\n") {
+                    Some(rest) => {
+                        win = "0".into();
+                        rest.to_string()
+                    }
+                    None => text,
+                };
                 *lines.lock().unwrap_or_else(|e| e.into_inner()) = text.lines().map(|l| l.to_string()).collect();
                 say(format!("{} session '{}'", kind, SESSION));
             }
             Err(e) => say(format!("lost: {}", e)),
         }
-        thread::sleep(Duration::from_millis(900));
     }
 }
 
@@ -385,19 +419,28 @@ pub fn draw(ui: &mut Ui, s: &mut Sessions) -> Option<nav::View> {
     if let Some(i) = s.focus {
         let tile = &s.tiles[i];
         let mut typed = false;
-        for (sym, mods) in ui.f.keys.clone() {
-            if mods.logo {
-                continue; // Command-digit and the like belong to orrery
+        // In the order typed: letters and Return in one frame stay letters
+        // first (a password's Return before its last letters is a wrong
+        // password).
+        for t in ui.f.typed.clone() {
+            match t {
+                crate::ui::Typed::Key(sym, mods) => {
+                    if mods.logo {
+                        continue; // Command-digit and the like belong to orrery
+                    }
+                    if let Some((k, b)) = key_name(sym, mods.ctrl) {
+                        let _ = tile.tx.send(Ask::Key(k, b));
+                        typed = true;
+                    }
+                }
+                crate::ui::Typed::Text(text) => {
+                    let text: String = text.chars().filter(|c| !c.is_control()).collect();
+                    if !text.is_empty() {
+                        let _ = tile.tx.send(Ask::Text(text));
+                        typed = true;
+                    }
+                }
             }
-            if let Some((k, b)) = key_name(sym, mods.ctrl) {
-                let _ = tile.tx.send(Ask::Key(k, b));
-                typed = true;
-            }
-        }
-        let text: String = ui.f.text.chars().filter(|c| !c.is_control()).collect();
-        if !text.is_empty() {
-            let _ = tile.tx.send(Ask::Text(text));
-            typed = true;
         }
         let _ = typed;
     }

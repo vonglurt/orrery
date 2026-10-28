@@ -517,6 +517,13 @@ impl Window {
             }
             _ => {}
         }
+        // A key orrery has read is not handed on: the content view is an
+        // NSImageView, which takes no keys, so AppKit answered every one
+        // with the system beep (28 October). The mouse still goes on, so the
+        // title bar drags and the buttons work.
+        if kind == EV_KEY_DOWN || kind == EV_KEY_UP {
+            return;
+        }
 
         let _: () = send1(self.app, sel("sendEvent:"), e);
     }
