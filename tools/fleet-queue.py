@@ -256,6 +256,26 @@ def lane(q, host, alive):
 
     say("idle")
     while alive.is_set() and not q.flag("STOP_NOW"):
+        # A host taken out of config.json leaves: its lane ends after the job
+        # in hand, so a host can be removed while the queue runs.
+        if name not in [h["name"] for h in q.config()["hosts"]]:
+            q.event("lane left", host=name, why="not in config.json")
+            say("removed")
+            return
+        # A host that cannot be reached waits, probed each minute, and takes
+        # nothing: a machine that is down must not fail the queue's jobs.
+        if not reachable(host):
+            q.event("host unreachable", host=name)
+            say("unreachable")
+            while (alive.is_set() and not q.flag("STOP_NOW") and not reachable(host)
+                   and name in [h["name"] for h in q.config()["hosts"]]):
+                for _ in range(20):
+                    if not alive.is_set() or q.flag("STOP_NOW"):
+                        break
+                    time.sleep(3)
+            if name in [h["name"] for h in q.config()["hosts"]]:
+                q.event("host back", host=name)
+            continue
         done, failed = q.ids_in("done"), q.ids_in("failed") | q.ids_in("stopped")
         picked = None
         for j in q.jobs_in("queue"):
@@ -297,6 +317,16 @@ def lane(q, host, alive):
     say("stopped")
 
 
+def reachable(host):
+    """ssh answers (always, for this machine)."""
+    if host["target"] == "-":
+        return True
+    try:
+        return remote(host["target"], "true", timeout=30).returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
 def work(q, host, j, say):
     name = host["name"]
     if True:
@@ -314,6 +344,14 @@ def work(q, host, j, say):
             ok = fetch(q, host, j, log)
         if q.flag("STOP_NOW") and not ok:
             dest = "stopped"
+        elif not ok and rc == 255 and not reachable(host):
+            # ssh's own failure, and the host is gone: not the job's fault.
+            # It goes back on the queue for any host, its log kept.
+            with open(log, "a") as out:
+                out.write("the host went away (ssh 255): the job goes back on the queue\n")
+            os.rename(j["_file"], q.p("queue", os.path.basename(j["_file"])))
+            q.event("requeued", job=j["id"], host=name, why="host unreachable")
+            return
         else:
             dest = "done" if ok else "failed"
         j2 = {k: v for k, v in j.items() if k != "_file"}

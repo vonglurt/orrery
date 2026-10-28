@@ -145,13 +145,37 @@ All of it is under `$Q`:
 | `plan/ledger.tsv` | the queue's census ledger |
 | `plan/round-NNN.json` | a net round: the candidate less the best, paired by seed, and its held-out agreement |
 | `plan/best.bin` | the queue's best net (it changes only past two errors) |
+| `plan/families.json` | every candidate's families: each family's share, error and floor, and `holds` or `UNDER` (`fleet-plan.py $Q families` refreshes it) |
 | `logs/ID.log` | each job's commands and output |
 | `results/ID/` | what each job brought back |
 | `events.jsonl` | every start, finish, failure and stop |
 
 A weight trial that passes is read twice more on 400 held-out seeds. One
-that passes both is a candidate: `make families`, then Paul. Nothing
-becomes a default, and no net becomes official, without him.
+that passes both is a candidate, and the queue runs its families (the
+scenario families, each held to its floor). Turn them on in `plan.json`:
+
+```json
+"families": {"converge": ["build/saskatchewan/converge/STAMP"], "queue": true, "batch": 8}
+```
+
+The candidates, in order:
+1. the defaults;
+2. the queue's own candidates;
+3. each listed converge run's, newest first.
+
+A job runs 8 of them side by side. Nothing becomes a default, and no net
+becomes official, without Paul.
+
+### 4. When a machine goes away
+
+- **A host that ssh cannot reach takes nothing.** Its lane says
+  `unreachable` and probes it each minute.
+- **A job that ended because ssh failed (255)** on a host that is then
+  unreachable goes back on the queue for another host. It is not failed,
+  and the breaker does not count it.
+- **To take a host out,** delete it from `config.json`. Its lane ends
+  after the job in hand. To add one, add it: its lane starts and builds
+  first.
 
 ## What it is
 
