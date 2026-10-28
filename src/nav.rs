@@ -22,6 +22,9 @@ pub enum View {
     Lab,
     /// The cards, images and machines that room was made from.
     Media,
+    /// What the fleet is working on as one computer: fleet-train's rounds,
+    /// and each machine's job and the pipe it is running (jobs.rs).
+    Jobs,
 }
 
 impl Default for View {
@@ -35,11 +38,12 @@ impl View {
         match self {
             View::Lab => "Lab",
             View::Media => "Media",
+            View::Jobs => "Jobs",
         }
     }
 
     /// Every view, in the order the strip draws them.
-    pub const ALL: &'static [View] = &[View::Lab, View::Media];
+    pub const ALL: &'static [View] = &[View::Lab, View::Media, View::Jobs];
 }
 
 /// Draw the strip and report a click on a view that is not the current one.
