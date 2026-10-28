@@ -301,6 +301,96 @@ console, the fleet needs a way to hold a non-Copal node, its address,
 account and role, and that is a decision for the fleet's design, not this
 script.
 
+### The second node, boburner
+
+28 October 2026. boburner is 192.168.8.113:
+- Ryzen 7 3700X, 16 threads, 31 GB;
+- GTX 1070 Ti (Pascal, compute 6.1, 8 GB);
+- an Ubuntu 24.04 desktop with a ZFS pool (`Hexamir`) and VirtualBox.
+
+It came with Ubuntu's 535 driver and was months behind.
+
+**1. The upgrade that would not finish.**
+- `apt-get upgrade` held back the NVIDIA packages and the HWE kernel
+  meta-packages. Four packages were left half-installed: 24.04's HWE
+  kernel, which is now **7.0** (7.0.0-38), and its headers.
+- Its DKMS step failed. zfs-dkms 2.2.2 does not configure on 7.0
+  (`bdev_open_by_path() exists... configure: error`), and
+  virtualbox-dkms 7.0.16 does not build.
+- A machine whose ZFS pool and VMs depend on DKMS modules stays on the
+  standard 6.8 line. So the HWE kernel and its meta-packages were
+  purged, and `linux-generic` (6.8.0-147) put in their place.
+- No dist-upgrade.
+
+**2. The driver: 535 is now a name for 580.**
+- Ubuntu's `nvidia-driver-535`, `nvidia-utils-535`,
+  `nvidia-kernel-common-535` and `linux-modules-nvidia-535-generic`
+  are now transitional packages. Each depends on its 580 counterpart.
+- So `apt-get install linux-generic linux-modules-nvidia-535-generic
+  nvidia-driver-535` (08:33, from `/var/log/apt/history.log`) installed
+  driver 580.178.04, with Ubuntu's prebuilt, signed module for
+  6.8.0-147 (`linux-modules-nvidia-580-generic`). After the reboot:
+
+```
+$ uname -r
+6.8.0-147-generic
+$ cat /proc/driver/nvidia/version
+NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.178.04
+```
+
+This is the desktop 580 branch, not calber's 580-server. Both are the
+same driver version, from Ubuntu's archive. ZFS and VirtualBox rebuilt
+for 6.8.0-147, and the pool is mounted.
+
+**3. Chrome's repository.** It failed its signature check
+(`NO_PUBKEY FD533C07C264648F`) and served a 404 for a version that is
+gone. `apt-get purge google-chrome-stable` removed the package and its
+repository list. Then `apt-get upgrade` finished, leaving 2 packages
+phased: fwupd and linux-firmware.
+
+**4. `cuda-node.sh`: right result, wrong report.** It ran twice
+(15:38Z and 15:56Z). Both runs printed:
+
+```
+    installed branch: 535 (asked for 580-server); keeping what is there
+    branch 535: a GTX 900 or 10 series card needs 580; newer cards are fine on it too
+...
+NVIDIA GeForce GTX 1070 Ti, 580.178.04, 8192 MiB, 36
+device: NVIDIA GeForce GTX 1070 Ti, compute 6.1, 19 SMs, 7.9 GB
+vector add of 1048576 floats: correct
+==> Done: boburner is a CUDA node (driver 535, CUDA 12.9).
+```
+
+- CUDA 12.9 works: `nvcc` 12.9.86 compiled for sm_61 and ran on the card.
+- But the script names the wrong branch.
+  - It takes the first `nvidia-kernel-common-*` package dpkg lists, and
+    the transitional `-535` sorts before `-580`.
+  - Its own `nvidia-smi` line two steps later says 580.178.04.
+  - It also installed `nvidia-utils-535`, a transitional name for what
+    was there.
+- The fix: read the branch from the loaded module
+  (`/proc/driver/nvidia/version`), or from `nvidia-smi`, not from
+  package names.
+- An earlier note here (the same day) said the toolkit could not run
+  on 535. That was not what happened: the card was on 580 throughout
+  the script's runs. It is also not true in general, because CUDA 12's
+  minor-version compatibility runs sm_61 code built by 12.9 on a 525+
+  driver.
+- nvcc 12.9 warns that offline compilation for targets before sm_75
+  will be removed in a future release. On a Pascal card CUDA 12.9 is
+  the last toolkit, as section III says.
+
+**What is left behind, harmless.**
+- **The four transitional 535 packages.** To remove them, mark the 580
+  ones manual first (`apt-mark manual nvidia-driver-580 nvidia-utils-580
+  linux-modules-nvidia-580-generic`), then purge the 535 names.
+- **The module for the fallback kernel 6.8.0-52**
+  (`linux-modules-nvidia-535-6.8.0-52-generic`).
+- **Config-only (`rc`) entries of old 535 modules.**
+- **A `dkms status` warning** that the zfs module built for 6.8.0-147
+  differs from the installed one. The kernel ships its own zfs 2.2.2
+  module beside zfs-dkms's.
+
 ## VII. Open items
 
 1. Done: the toolkit and the CUDA check (V).
@@ -310,3 +400,10 @@ script.
 4. A headless toolkit set in `cuda-node.sh` (compiler, libraries, command-line
    tools), without the graphical profilers and their Java and desktop
    packages: smaller and faster, for nodes nobody sits at.
+5. `cuda-node.sh` (V, boburner):
+   - Read the driver branch from the loaded module, not the first
+     `nvidia-kernel-common-*` package (Ubuntu's 535 names are now
+     transitional to 580).
+   - When no driver is present, choose the module package by the kernel
+     line, not always HWE: a node with DKMS modules (ZFS, VirtualBox)
+     stays on 6.8, since 24.04's HWE kernel is now 7.0.
