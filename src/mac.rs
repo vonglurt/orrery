@@ -50,6 +50,15 @@ extern "C" {
     fn objc_getClass(name: *const c_char) -> Id;
     fn sel_registerName(name: *const c_char) -> Sel;
 
+    /// AppKit's run loop drains an autorelease pool every turn; this loop is
+    /// ours, so it pushes and pops its own around every poll and every
+    /// present. Without them each frame's autoreleased objects -- the event
+    /// objects, and the copy of the frame `NSImageView` keeps to draw -- were
+    /// never freed: 90 MB a second at 2560 x 1520, until the Mac ran out
+    /// (28 October 2026).
+    fn objc_autoreleasePoolPush() -> *mut c_void;
+    fn objc_autoreleasePoolPop(pool: *mut c_void);
+
     /// DECLARED WITH NO ARGUMENTS ON PURPOSE, AND NEVER CALLED THIS WAY.
     ///
     /// `objc_msgSend` is declared variadic in the headers and is not a
@@ -525,6 +534,7 @@ impl Surface for Window {
     fn poll(&mut self) -> Result<Vec<Input>, String> {
         let mut out = Vec::new();
         unsafe {
+            let pool = objc_autoreleasePoolPush();
             // Drain every event that is already queued. `distantPast` makes
             // this return nil the moment there are none, so it never blocks.
             loop {
@@ -548,6 +558,7 @@ impl Surface for Window {
                 self.closed = true;
                 out.push(Input::Closed);
             }
+            objc_autoreleasePoolPop(pool);
         }
 
         let (cw, ch) = self.content_size();
@@ -581,6 +592,23 @@ impl Surface for Window {
             self.zoom,
         );
         unsafe {
+            let pool = objc_autoreleasePoolPush();
+            let r = self.show();
+            objc_autoreleasePoolPop(pool);
+            r
+        }
+    }
+
+    fn closed(&self) -> bool {
+        self.closed
+    }
+}
+
+impl Window {
+    /// The frame in `px`, handed to the view as an image. Called inside an
+    /// autorelease pool (`present`).
+    unsafe fn show(&mut self) -> Result<(), String> {
+        {
             let provider = CGDataProviderCreateWithData(
                 std::ptr::null_mut(),
                 self.px.as_ptr() as *const c_void,
@@ -630,10 +658,6 @@ impl Surface for Window {
             self.last_image = image;
         }
         Ok(())
-    }
-
-    fn closed(&self) -> bool {
-        self.closed
     }
 }
 

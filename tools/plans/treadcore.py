@@ -153,16 +153,23 @@ class Plan:
         self._sha = None
         self._rsaves = {}
 
-    def flag(self, kind, text, key=None):
-        """A flag for a person (fleet-queue's flags/, the same form): raised once a key."""
+    def flag(self, kind, text, key=None, progress=False):
+        """A flag for a person (fleet-queue's flags/, the same form): raised once a key.
+        progress=True: news, shown and never waiting for anyone (a candidate)."""
         d = os.path.join(self.q, "flags")
         os.makedirs(d, exist_ok=True)
         key = key or "%s:%s" % (kind, text)
         for f in glob.glob(os.path.join(d, "*.json")):
-            if (load(f, {}) or {}).get("key") == key:
+            j = load(f, {}) or {}
+            if j.get("key") == key:
+                # One raised before candidates were news: it becomes news.
+                if progress and not j.get("progress"):
+                    j["progress"] = True
+                    save(f, j)
                 return
         fid = "%d-%s" % (int(time.time() * 1000), kind)
-        save(os.path.join(d, fid + ".json"), {"id": fid, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, "text": text, "key": key, "ack": None})
+        save(os.path.join(d, fid + ".json"), {"id": fid, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, "text": text, "key": key,
+                                              "ack": None, "progress": bool(progress)})
 
     def keep(self):
         save(os.path.join(self.pd, "state.json"), self.state)
@@ -1309,7 +1316,7 @@ class Plan:
                 held = [self.job_census(d.rstrip("/").split(os.sep)[-2]) for d in ds]
                 tw = glob.glob(os.path.join(self.q, "results", jid, self.home, "out", jid, "*", "trial.weights"))
                 what = short_moved(open(tw[0]).read()) if tw else jid
-                self.flag("candidate", "%s passed both held-out reads (%s): %s" % (jid, ", ".join("%+.2f" % h[0] for h in held if h), what), key="candidate:%s" % jid)
+                self.flag("candidate", "%s passed both held-out reads (%s): %s" % (jid, ", ".join("%+.2f" % h[0] for h in held if h), what), key="candidate:%s" % jid, progress=True)
         fam = load(os.path.join(self.pd, "families.json"), {}) or {}
         for name, v in fam.items():
             if v.get("verdict") == "UNDER":

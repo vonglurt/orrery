@@ -41,7 +41,9 @@ done
 [ $gui = 1 ] || ARGS=" --gui$ARGS"
 
 cd "$ROOT"
-cargo build --release
+# Under the memory guard: a release build beside a full census once ran
+# this Mac out of memory (tools/mem-guard.sh).
+sh "$ROOT/tools/mem-guard.sh" cargo build --release
 VERSION=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
 
 mkdir -p "$PREFIX/bin"

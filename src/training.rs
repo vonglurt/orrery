@@ -148,6 +148,9 @@ pub struct Queue {
     pub runs: Vec<RunRow>,
     /// What needs attention, not yet acknowledged: (id, time, kind, text).
     pub flags: Vec<(String, String, String, String)>,
+    /// What the fleet has found, oldest first, needing no one: (time, kind,
+    /// text). A candidate past both held-out reads, so far.
+    pub progress: Vec<(String, String, String)>,
     /// The keeper, in a line: its pid, how long up, the last and next sync,
     /// and whether it holds this Mac awake.
     pub keeper: String,
@@ -347,6 +350,7 @@ impl Model {
                     })
                     .collect(),
                 flags: arr(q, "flags").iter().map(|f| (s(f, "id"), s(f, "t"), s(f, "kind"), s(f, "text"))).collect(),
+                progress: arr(q, "progress").iter().map(|f| (s(f, "t"), s(f, "kind"), s(f, "text"))).collect(),
                 keeper: q
                     .get("keeper")
                     .filter(|k| k.get("pid").is_some())
@@ -505,12 +509,13 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
         // one page at a time, so nothing runs past its box.
         y = draw_queue(ui, rect(body.x, y, body.w, 64), q, st) + 6;
         y = draw_latest(ui, rect(body.x, y, body.w, 18), q) + 8;
-        y = draw_pages(ui, rect(body.x, y, body.w, 24), st, q.flags.len()) + 8;
+        y = draw_pages(ui, rect(body.x, y, body.w, 24), st, q.flags.len(), q.progress.len()) + 8;
         let page = rect(body.x, y, body.w, body.bottom() - y);
         match st.page {
             1 => draw_runs_page(ui, page, q, st),
             2 => draw_found_page(ui, page, q),
             4 => draw_flags_page(ui, page, q, st),
+            5 => draw_candidates_page(ui, page, q),
             3 => {
                 if let Some(i) = draw_net(ui, page, m) {
                     st.zoom = Some(i);
@@ -568,20 +573,32 @@ fn draw_latest(ui: &mut Ui, at: Rect, q: &Queue) -> i32 {
 }
 
 /// The page tabs under the band.
-fn draw_pages(ui: &mut Ui, at: Rect, st: &mut State, flags: usize) -> i32 {
+fn draw_pages(ui: &mut Ui, at: Rect, st: &mut State, flags: usize, found: usize) -> i32 {
     let t = ui.t;
-    const PAGES: [(&str, &str); 5] = [
-        ("Fleet", "each machine and its job"),
-        ("Runs", "ask for a run, cancel, approve"),
-        ("Found", "improvements, by variable and machine"),
-        ("Net", "the learned tank's weights"),
-        ("Flags", "what needs attention; acknowledge it"),
+    // (page number, name, what it shows), in the order the tabs are drawn.
+    // Candidates came after the rest and keeps the number 5, so
+    // ORRERY_FRAME_PAGE and a saved page mean what they meant.
+    const PAGES: [(usize, &str, &str); 6] = [
+        (0, "Fleet", "each machine and its job"),
+        (1, "Runs", "ask for a run, cancel, approve"),
+        (2, "Found", "improvements, by variable and machine"),
+        (5, "Candidates", "trials past both held-out reads: progress, nothing to answer"),
+        (3, "Net", "the learned tank's weights"),
+        (4, "Flags", "what needs attention; acknowledge it"),
     ];
     let mut x = at.x;
-    for (i, (name, what)) in PAGES.iter().enumerate() {
-        // The Flags tab carries its count, lit while any is unacknowledged.
-        let alarm = *name == "Flags" && flags > 0;
-        let shown = if alarm { format!("Flags {}", flags) } else { name.to_string() };
+    for &(i, name, what) in PAGES.iter() {
+        // The Flags tab carries its count, lit while any is unacknowledged;
+        // the Candidates tab its count, in the colour of an improvement.
+        let alarm = name == "Flags" && flags > 0;
+        let good = name == "Candidates" && found > 0;
+        let shown = if alarm {
+            format!("Flags {}", flags)
+        } else if good {
+            format!("Candidates {}", found)
+        } else {
+            name.to_string()
+        };
         let w = F8X13.measure(&shown) as i32 + 24;
         let tab = rect(x, at.y, w, at.h);
         let on = st.page == i;
@@ -590,14 +607,14 @@ fn draw_pages(ui: &mut Ui, at: Rect, st: &mut State, flags: usize) -> i32 {
         if on {
             ui.c.rect(tab.x, tab.bottom() - 2, tab.w, 2, t.accent);
         }
-        ui.label(tab.x + 12, tab.y + (at.h - F8X13.height as i32) / 2, &shown, &F8X13, if alarm { t.alarm } else if on { t.ink } else { t.dim });
+        ui.label(tab.x + 12, tab.y + (at.h - F8X13.height as i32) / 2, &shown, &F8X13, if alarm { t.alarm } else if good { t.up } else if on { t.ink } else { t.dim });
         if ui.button_hit(tab) {
             st.page = i;
         }
         let _ = what;
         x += w + 4;
     }
-    let what = PAGES.get(st.page).map(|p| p.1).unwrap_or("");
+    let what = PAGES.iter().find(|p| p.0 == st.page).map(|p| p.2).unwrap_or("");
     ui.label_in(x + 10, at.y + (at.h - F8X13.height as i32) / 2, at.right() - x - 10, what, &F8X13, t.dim);
     at.bottom()
 }
@@ -771,6 +788,50 @@ fn draw_flags_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
         if bw > 0 && ui.button(rect(at.right() - bw, y - 3, bw, lh - 2), "Acknowledge", true) {
             st.ctl = Some(format!("ack {} --by operator", id));
         }
+        y += lh;
+    }
+}
+
+/// The Candidates page: every trial that passed both held-out reads, newest
+/// first. News of progress: nothing here waits for anyone (Paul, 28 October:
+/// "I'm going to always accept them. Just make them visible").
+fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue) {
+    let t = ui.t;
+    let lh = F8X13.height as i32 + 6;
+    let mut y = at.y;
+    if q.progress.is_empty() {
+        ui.label_in(at.x, y, at.w, "No candidate yet: none has passed both held-out reads.", &F8X13, t.dim);
+        return;
+    }
+    let first = q.progress.first().map(|p| p.0.as_str()).unwrap_or("");
+    let since = if first.len() >= 16 { first[..16].replace('T', " ") } else { first.to_string() };
+    ui.label_in(
+        at.x,
+        y,
+        at.w,
+        &format!("{} candidate(s) since {}, newest first. A candidate is promoted from Runs (promote).", q.progress.len(), since),
+        &F8X13,
+        t.ink,
+    );
+    y += lh + 4;
+    // Columns: when; the trial and its two reads; what it moves.
+    let when_w = F8X13.measure("10-28 00:00  ") as i32;
+    let head_w = F8X13.measure("w0000  +0.00  +0.00   ") as i32;
+    for (when, _kind, text) in q.progress.iter().rev() {
+        if y + lh > at.bottom() {
+            break;
+        }
+        // "w0024 passed both held-out reads (+2.15, +2.61): castle_inside 8, ..."
+        let (head, moved) = text.split_once(": ").unwrap_or((text.as_str(), ""));
+        let id = head.split_whitespace().next().unwrap_or("");
+        let reads = head
+            .rsplit_once('(')
+            .map(|(_, r)| r.trim_end_matches(')').replace(',', " "))
+            .unwrap_or_default();
+        let w = if when.len() >= 16 { format!("{} {}", &when[5..10], &when[11..16]) } else { when.clone() };
+        ui.label(at.x, y, &w, &F8X13, t.dim);
+        ui.label(at.x + when_w, y, &format!("{}  {}", id, reads), &F8X13, t.up);
+        ui.label_in(at.x + when_w + head_w, y, at.w - when_w - head_w, moved, &F8X13, t.ink);
         y += lh;
     }
 }

@@ -150,10 +150,12 @@ class Queue:
     def flag(self, name):
         return os.path.exists(self.p(name))
 
-    def notice(self, kind, text, key=None):
+    def notice(self, kind, text, key=None, progress=False):
         """Raise a flag: something a person (or the agent working with them)
         should look at. One a key: a key already flagged is not raised again.
-        flags/SEQ-KIND.json, until acknowledged (ack)."""
+        flags/SEQ-KIND.json, until acknowledged (ack). A progress record
+        (progress=True: a candidate found, say) is news, not a question: it
+        is shown (progress()) and never waits for anyone."""
         d = self.p("flags")
         os.makedirs(d, exist_ok=True)
         key = key or "%s:%s" % (kind, text)
@@ -166,7 +168,8 @@ class Queue:
         seq = int(now() * 1000)
         fid = "%d-%s" % (seq, kind)
         with open(os.path.join(d, ".%s.tmp" % fid), "w") as f:
-            json.dump({"id": fid, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, "text": text, "key": key, "ack": None}, f)
+            json.dump({"id": fid, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, "text": text, "key": key, "ack": None,
+                       "progress": bool(progress)}, f)
         os.rename(os.path.join(d, ".%s.tmp" % fid), os.path.join(d, fid + ".json"))
         self.event("flag", kind=kind, text=text)
         return True
@@ -178,7 +181,19 @@ class Queue:
                 j = json.load(open(f))
             except (OSError, ValueError):
                 continue
-            if every or not j.get("ack"):
+            if every or not (j.get("ack") or j.get("progress")):
+                out.append(j)
+        return out
+
+    def progress(self):
+        """The progress records, oldest first: what the fleet has found."""
+        out = []
+        for f in sorted(glob.glob(self.p("flags", "*.json"))):
+            try:
+                j = json.load(open(f))
+            except (OSError, ValueError):
+                continue
+            if j.get("progress"):
                 out.append(j)
         return out
 
@@ -186,7 +201,7 @@ class Queue:
         n = 0
         for f in sorted(glob.glob(self.p("flags", "*.json"))):
             j = json.load(open(f))
-            if not j.get("ack") and (fid == "all" or j["id"] == fid):
+            if not j.get("ack") and not j.get("progress") and (fid == "all" or j["id"] == fid):
                 j["ack"] = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": by}
                 with open(f + ".tmp", "w") as out:
                     json.dump(j, out)
@@ -727,7 +742,7 @@ def status(q):
     except (OSError, ValueError):
         keeper_info = None
     return {"dir": q.d, "state": state, "keeper_pid": pid, "adding": not q.flag("STOP_ADDING"),
-            "keeper": keeper_info, "flags": q.flags(),
+            "keeper": keeper_info, "flags": q.flags(), "progress": q.progress()[-200:],
             "shutdown": shutdown, "sync": sync,
             "counts": counts, "lanes": lanes,
             "recent": [{"id": j["id"], "kind": j.get("kind"), "title": j.get("title"), "host": j.get("host"),
@@ -815,6 +830,9 @@ def main(argv):
         else:
             for f in fl:
                 print("%s %s %-10s %s%s" % (f["id"], f["t"], f["kind"], f["text"], "  (acknowledged by %s)" % f["ack"]["by"] if f.get("ack") else ""))
+    elif cmd == "progress":
+        for f in q.progress():
+            print("%s %-10s %s" % (f["t"], f["kind"], f["text"]))
     elif cmd == "ack":
         by = argv[argv.index("--by") + 1] if "--by" in argv else os.environ.get("USER", "someone")
         n = q.ack(argv[2], by)

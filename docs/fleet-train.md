@@ -192,7 +192,6 @@ keeper, so the Mac stays awake exactly while the queue runs. Set
 
 **Flags.** When something needs a person, the keeper and the plan raise a
 **flag**:
-- a trial past both held-out reads (a candidate);
 - a candidate under a family's floor;
 - a promotion prepared and waiting for Approve;
 - a run finished or failed;
@@ -208,6 +207,16 @@ keeper, so the Mac stays awake exactly while the queue runs. Set
 - **On the command line:** `fleet-queue.py $Q flags [--all] [--brief]`, and
   `ack ID|all [--by NAME]`.
 - **Files:** each flag is `$Q/flags/SEQ-KIND.json`, one a key.
+
+**Progress is not a flag.** A trial past both held-out reads (a
+**candidate**) is news, not a question: Paul accepts every one ("Just make
+them visible, so I can see progress", 28 October). It is written as a
+progress record (`"progress": true` in the same `flags/` folder), never waits
+for an acknowledgement, and is not brought to the agent. It shows:
+- **In the window:** the Candidates tab, its count in green, and the
+  Candidates page: each one with its time, its two held-out reads and what
+  it moves, newest first.
+- **On the command line:** `fleet-queue.py $Q progress`.
 
 **For an agent working with you** (Claude Code), a `UserPromptSubmit` hook
 that runs `fleet-queue.py $Q flags --brief` puts every flag not yet
