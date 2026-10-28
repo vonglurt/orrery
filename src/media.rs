@@ -643,7 +643,7 @@ pub fn draw(ui: &mut Ui, m: &mut Media) -> Option<nav::View> {
     let sy = header.y + (HEADER_H - F8X13.height as i32) / 2;
     if !m.fleet.is_empty() {
         let right = format!("{}  {} cards", m.fleet, m.size);
-        ui.label_right(header.right() - PAD, sy, &right, &F8X13, t.dim);
+        nav::header_right(ui, header, PAD, sy, &right);
     }
 
     // A job replaces the table, the way the results pane replaces the lab.

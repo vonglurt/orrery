@@ -54,6 +54,22 @@ impl View {
     pub const ALL: &'static [View] = &[View::Lab, View::Media, View::Machines, View::Training, View::Sessions];
 }
 
+/// A header's text on the right, in the room the strip leaves: right-aligned
+/// when it fits, clipped from the left of that room when it does not. Five
+/// views made the strip wide enough for the Sessions hint to run over it
+/// (28 October).
+pub fn header_right(ui: &mut Ui, header: Rect, pad: i32, y: i32, text: &str) {
+    let t = ui.t;
+    let left = pad + crate::font::F10X20.measure("orrery") as i32 + 14 + width() + 16;
+    let right = header.right() - pad;
+    let w = F8X13.measure(text) as i32;
+    if right - w >= left {
+        ui.label_right(right, y, text, &F8X13, t.dim);
+    } else if right > left {
+        ui.label_in(left, y, right - left, text, &F8X13, t.dim);
+    }
+}
+
 /// Draw the strip and report a click on a view that is not the current one.
 ///
 /// Returns `None` when nothing was chosen, INCLUDING when the current view was

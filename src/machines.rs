@@ -181,7 +181,7 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
         }
     }
     let sy = header.y + (HEADER_H - F8X13.height as i32) / 2;
-    ui.label_right(header.right() - PAD, sy, "a fresh install to a fleet node: probe, apply, join", &F8X13, t.dim);
+    nav::header_right(ui, header, PAD, sy, "a fresh install to a fleet node: probe, apply, join");
 
     let body = rest.inset(PAD);
     if !m.why.is_empty() {

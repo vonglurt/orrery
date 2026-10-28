@@ -506,7 +506,7 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
     if !m.fleet.is_empty() {
         let up = m.machines.iter().filter(|x| x.up).count();
         let right = format!("fleet {}  {} of {} machines answering", m.fleet, up, m.machines.len());
-        ui.label_right(header.right() - PAD, sy, &right, &F8X13, t.dim);
+        nav::header_right(ui, header, PAD, sy, &right);
     }
 
     let body = rest.inset(PAD);

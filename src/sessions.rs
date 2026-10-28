@@ -41,11 +41,11 @@ enum Ask {
     Key(&'static str, Option<char>),
     /// The size the tile can show, in characters.
     Size(u16, u16),
-    /// A command in a new window of the session, named "recipe", which the
+    /// A command in a new window of the session, named (recipe-TIME), which the
     /// tile then shows (machines.rs: a recipe's command, its password typed
     /// by the person here). Its own window, so copal-tm in the first one is
     /// not typed into; closing it brings copal-tm back.
-    Window(String),
+    Window(String, String),
 }
 
 pub struct Tile {
@@ -148,7 +148,10 @@ impl Sessions {
             Some(i) => i,
             None => self.add(name.to_string(), target.to_string()),
         };
-        let _ = self.tiles[i].tx.send(Ask::Window(command.to_string()));
+        // A name of its own: two windows named alike, and the second Apply's
+        // typing reached the first one's prompt (28 October, boburner).
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = self.tiles[i].tx.send(Ask::Window(format!("recipe-{}", secs), command.to_string()));
         self.big = Some(i);
         self.focus = Some(i);
     }
@@ -188,8 +191,8 @@ fn worker(target: &str, rx: Receiver<Ask>, lines: Arc<Mutex<Vec<String>>>, statu
     // screen's window in front of the tile. A detached screen session has no
     // display, and a command sent to it without -p reaches no window at all
     // (28 October: typing into boburner's tile went nowhere), so every stuff
-    // and every hardcopy names its window: the first ("0"), or "recipe"
-    // after Ask::Window until that window is gone.
+    // and every hardcopy names its window: the first ("0"), or the recipe's
+    // (recipe-TIME) after Ask::Window until that window is gone.
     let mut win = String::from("0");
     loop {
         // Everything typed since the last pass, in order, in one call.
@@ -221,18 +224,20 @@ fn worker(target: &str, rx: Receiver<Ask>, lines: Arc<Mutex<Vec<String>>>, statu
                         }
                     }
                 }
-                ("tmux", Ask::Window(c)) => script.push_str(&format!(
-                    "tmux new-window -t {s}: -n recipe; tmux send-keys -t {s}:recipe -l -- {}; tmux send-keys -t {s}:recipe Enter; ",
+                ("tmux", Ask::Window(n, c)) => script.push_str(&format!(
+                    "tmux new-window -t {s}: -n {n}; tmux send-keys -t {s}:{n} -l -- {}; tmux send-keys -t {s}:{n} Enter; ",
                     q(&c),
-                    s = SESSION
+                    s = SESSION,
+                    n = n
                 )),
-                (_, Ask::Window(c)) => {
+                (_, Ask::Window(n, c)) => {
                     script.push_str(&format!(
-                        "screen -S {s} -X screen -t recipe; screen -S {s} -p recipe -X stuff {}; ",
+                        "screen -S {s} -X screen -t {n}; screen -S {s} -p {n} -X stuff {}; ",
                         q(&format!("{}\n", c)),
-                        s = SESSION
+                        s = SESSION,
+                        n = n
                     ));
-                    win = "recipe".into();
+                    win = n;
                 }
                 ("tmux", Ask::Text(t)) => script.push_str(&format!("tmux send-keys -t {} -l -- {}; ", SESSION, q(&t))),
                 ("tmux", Ask::Key(k, _)) => script.push_str(&format!("tmux send-keys -t {} {}; ", SESSION, k)),
@@ -340,7 +345,7 @@ pub fn draw(ui: &mut Ui, s: &mut Sessions) -> Option<nav::View> {
         Some(i) => format!("typing into {} -- click outside the tiles to stop", s.tiles[i].name),
         None => "click a tile to type into it; each is a tmux session that outlives orrery".to_string(),
     };
-    ui.label_right(header.right() - PAD, sy, &hint, &F8X13, t.dim);
+    nav::header_right(ui, header, PAD, sy, &hint);
 
     let body = rest.inset(6);
     let n = s.tiles.len().max(1) as i32;
