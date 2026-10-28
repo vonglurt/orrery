@@ -1,0 +1,671 @@
+<title>Orrery User Guide</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+/* ---------------------------------------------------------------------------
+   Palette: src/draw.rs LIGHT and DARK, verbatim. Those values are the two
+   blocks at the top of assets/wall.html and nothing new, so this page uses
+   them rather than inventing a second set.
+   ------------------------------------------------------------------------ */
+:root {
+  --base:   #fce2ab;
+  --panel:  #f7d79a;
+  --tile:   #fff2d4;
+  --ink:    #121212;
+  --dim:    #6b5836;
+  --line:   #c4a870;
+  --accent: #87704f;
+  --up:     #4a7c4e;
+  --warn:   #b06a24;
+  --alarm:  #ff723e;
+
+  --term-bg:   #1c1a16;
+  --term-ink:  #f0e3c4;
+  --term-dim:  #8a7d63;
+  --term-line: #35302a;
+
+  --rule: color-mix(in srgb, var(--line) 70%, transparent);
+  --shadow: 0 1px 0 color-mix(in srgb, var(--line) 60%, transparent);
+
+  --measure: 66ch;
+  --step--1: clamp(.78rem, .76rem + .1vw, .84rem);
+  --step-0:  clamp(1rem, .97rem + .16vw, 1.09rem);
+  --step-1:  clamp(1.2rem, 1.13rem + .33vw, 1.4rem);
+  --step-2:  clamp(1.5rem, 1.36rem + .62vw, 1.95rem);
+  --step-3:  clamp(1.95rem, 1.7rem + 1.14vw, 2.75rem);
+}
+:root:not([data-theme="light"]) {
+  @media (prefers-color-scheme: dark) {
+    --base:   #181818;
+    --panel:  #121212;
+    --tile:   #1f1f1f;
+    --ink:    #d0daed;
+    --dim:    #87704f;
+    --line:   #2a2a2a;
+    --accent: #fccf8a;
+    --up:     #8fbf7a;
+    --warn:   #fccf8a;
+    --alarm:  #ff723e;
+
+    --term-bg:   #0e0e0e;
+    --term-ink:  #d0daed;
+    --term-dim:  #7c705c;
+    --term-line: #262626;
+
+    --rule: color-mix(in srgb, var(--line) 160%, transparent);
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --base:   #181818;
+  --panel:  #121212;
+  --tile:   #1f1f1f;
+  --ink:    #d0daed;
+  --dim:    #87704f;
+  --line:   #2a2a2a;
+  --accent: #fccf8a;
+  --up:     #8fbf7a;
+  --warn:   #fccf8a;
+  --alarm:  #ff723e;
+
+  --term-bg:   #0e0e0e;
+  --term-ink:  #d0daed;
+  --term-dim:  #7c705c;
+  --term-line: #262626;
+
+  --rule: color-mix(in srgb, var(--line) 160%, transparent);
+  --shadow: none;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--base);
+  color: var(--ink);
+  font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+  font-size: var(--step-0);
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  padding: 0 20px;
+}
+
+.wrap { max-width: 1100px; margin: 0 auto; }
+
+/* ---- top bar ----------------------------------------------------------- */
+.bar {
+  position: sticky; top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--base) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+  margin: 0 -20px 0;
+  padding: 0 20px;
+}
+.bar-in {
+  max-width: 1100px; margin: 0 auto;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px;
+  padding-block: 10px;
+  font-family: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  font-size: var(--step--1);
+}
+.bar-in strong {
+  font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--accent); margin-right: auto;
+}
+.bar-in a { color: var(--dim); text-decoration: none; border-bottom: 1px solid transparent; }
+.bar-in a:hover, .bar-in a:focus-visible { color: var(--ink); border-bottom-color: var(--accent); }
+
+/* ---- masthead ---------------------------------------------------------- */
+header.mast { padding-block: clamp(40px, 7vw, 80px) clamp(28px, 4vw, 44px); }
+.eyebrow {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--step--1); letter-spacing: .13em; text-transform: uppercase;
+  color: var(--accent); margin: 0 0 18px;
+}
+h1 {
+  font-family: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700; font-size: var(--step-3); line-height: 1.04;
+  letter-spacing: -.015em; text-wrap: balance; margin: 0 0 20px; max-width: 20ch;
+}
+.standfirst {
+  max-width: var(--measure); font-size: var(--step-1); line-height: 1.5;
+  color: color-mix(in srgb, var(--ink) 86%, var(--dim)); margin: 0;
+}
+.mast-meta {
+  margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--rule);
+  display: flex; flex-wrap: wrap; gap: 8px 28px;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--step--1); color: var(--dim);
+}
+.mast-meta b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* ---- sections ---------------------------------------------------------- */
+section { padding-block: clamp(30px, 4.5vw, 54px); border-top: 1px solid var(--rule); }
+h2 {
+  font-family: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700; font-size: var(--step-2); line-height: 1.12;
+  letter-spacing: -.01em; text-wrap: balance; margin: 0 0 6px; max-width: 24ch;
+}
+h3 {
+  font-family: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 600; font-size: var(--step-1); line-height: 1.25;
+  text-wrap: balance; margin: 0 0 8px;
+}
+.kicker {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--accent); margin: 0 0 14px;
+}
+p { max-width: var(--measure); margin: 0 0 1em; }
+p:last-child { margin-bottom: 0; }
+.lede { font-size: var(--step-1); line-height: 1.5; color: color-mix(in srgb, var(--ink) 88%, var(--dim)); }
+strong { font-weight: 600; }
+em { font-style: italic; }
+a { color: var(--ink); text-underline-offset: 3px; text-decoration-color: var(--accent); }
+
+code, .mono {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .88em;
+}
+p code, li code, td code, th code { color: var(--accent); word-break: break-word; }
+
+.stack { display: flex; flex-direction: column; gap: 22px; }
+.stack-lg { display: flex; flex-direction: column; gap: 34px; }
+
+/* ---- the terminal figure ---------------------------------------------- */
+figure { margin: 0; }
+.term {
+  background: var(--term-bg); color: var(--term-ink);
+  border: 1px solid var(--term-line); border-radius: 3px;
+  overflow-x: auto; max-width: 100%;
+}
+.term-head {
+  display: flex; gap: 14px; align-items: baseline;
+  padding: 9px 14px; border-bottom: 1px solid var(--term-line);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .72rem; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--term-dim);
+}
+.term pre {
+  margin: 0; padding: 16px 14px 18px;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: clamp(.6rem, .3rem + 1.05vw, .78rem);
+  line-height: 1.42; white-space: pre; color: var(--term-ink);
+}
+figcaption {
+  margin-top: 10px; max-width: var(--measure);
+  font-size: var(--step--1); color: var(--dim); line-height: 1.5;
+}
+
+/* code block, lighter weight than the terminal figure */
+pre.code {
+  background: var(--tile); border: 1px solid var(--rule); border-left: 2px solid var(--accent);
+  border-radius: 2px; padding: 14px; margin: 0; overflow-x: auto; max-width: 100%;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--step--1); line-height: 1.55; white-space: pre; color: var(--ink);
+}
+
+/* ---- tables ------------------------------------------------------------ */
+.tablewrap { overflow-x: auto; max-width: 100%; }
+table {
+  border-collapse: collapse; width: 100%; min-width: 520px;
+  font-family: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  font-size: var(--step--1); line-height: 1.45;
+}
+caption {
+  text-align: left; padding-bottom: 10px; color: var(--dim);
+  font-size: var(--step--1);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: .1em; text-transform: uppercase;
+}
+th {
+  text-align: left; font-weight: 700; color: var(--accent);
+  letter-spacing: .07em; text-transform: uppercase; font-size: .74rem;
+  padding: 0 14px 7px 0; border-bottom: 1px solid var(--rule); white-space: nowrap;
+}
+td { padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td.num, th.num { font-variant-numeric: tabular-nums; text-align: right; padding-right: 0; }
+td.mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: .8rem; }
+.nowrap { white-space: nowrap; }
+
+/* ---- finding blocks ---------------------------------------------------- */
+.findings { display: grid; gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+.finding { background: var(--tile); padding: 22px; }
+.finding h3 { margin-bottom: 8px; }
+.finding p { font-size: var(--step--1); line-height: 1.6; max-width: 62ch; }
+.finding .tag {
+  display: inline-block; margin-bottom: 10px;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .68rem; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--term-ink); background: var(--accent);
+  padding: 3px 7px; border-radius: 2px;
+}
+@media (min-width: 820px) { .findings { grid-template-columns: repeat(3, 1fr); } }
+
+/* ---- document list ----------------------------------------------------- */
+.docs { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.doc {
+  background: var(--tile); display: grid; gap: 2px 20px; padding: 15px 16px;
+  grid-template-columns: 1fr auto;
+}
+.doc .name {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .86rem; font-weight: 500; color: var(--ink);
+}
+.doc .lines {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .78rem; color: var(--dim); font-variant-numeric: tabular-nums;
+  grid-row: 1 / span 2; align-self: center; text-align: right;
+}
+.doc .what { grid-column: 1; font-size: var(--step--1); color: var(--dim); line-height: 1.5; max-width: 60ch; }
+
+/* ---- risk severity ----------------------------------------------------- */
+.sev { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-weight: 600; }
+.sev::before { content: ""; width: 3px; height: 1.05em; border-radius: 1px; background: var(--up); }
+.sev.high::before { background: var(--alarm); }
+.sev.med::before  { background: var(--warn); }
+.sev.low::before  { background: var(--up); }
+
+/* ---- callout ----------------------------------------------------------- */
+.callout {
+  background: var(--tile); border: 1px solid var(--rule);
+  border-left: 3px solid var(--alarm); border-radius: 2px;
+  padding: 20px 22px; max-width: 78ch;
+}
+.callout .kicker { color: var(--alarm); }
+.callout p { font-size: var(--step--1); line-height: 1.6; }
+.callout.quiet { border-left-color: var(--accent); }
+.callout.quiet .kicker { color: var(--accent); }
+
+/* ---- arithmetic list --------------------------------------------------- */
+dl.arith { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 0; max-width: 70ch; }
+dl.arith dt { padding: 9px 16px 9px 0; border-bottom: 1px solid var(--rule); font-size: var(--step--1); }
+dl.arith dd {
+  margin: 0; padding: 9px 0; border-bottom: 1px solid var(--rule); text-align: right;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: .82rem; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+dl.arith dd.hot { color: var(--alarm); font-weight: 500; }
+
+ul.plain { margin: 0; padding-left: 1.15em; max-width: var(--measure); }
+ul.plain li { margin-bottom: .5em; }
+ul.plain li::marker { color: var(--accent); }
+
+footer {
+  border-top: 1px solid var(--rule); padding-block: 30px 50px;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--step--1); color: var(--dim);
+}
+footer p { max-width: 68ch; line-height: 1.6; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ---- the user guide's additions ---------------------------------------- */
+body { padding: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.bar { margin: 0 calc(-1 * max(16px, env(safe-area-inset-left, 0px))) 0; }
+.shot { border: 1px solid var(--line); background: var(--tile); }
+.shot img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+figure.fig { display: grid; gap: 0; }
+figure.fig figcaption b { color: var(--ink); font-weight: 600; }
+.maps { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.maps figure img { width: 100%; height: auto; display: block; border: 1px solid var(--line); image-rendering: pixelated; }
+.maps figcaption { margin-top: 4px; font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: .74rem; }
+.toc { columns: 2 280px; column-gap: 34px; margin: 0; padding: 0; list-style: none; }
+.toc li { break-inside: avoid; padding: 5px 0; border-bottom: 1px solid var(--rule); display: grid; grid-template-columns: 3.2em 1fr; gap: 6px; }
+.toc .n { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; color: var(--accent); font-size: .85em; }
+.toc a { text-decoration: none; }
+.btn {
+  display: inline-block; font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: .8rem;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px; padding: 2px 9px; white-space: nowrap; color: var(--ink);
+}
+.use { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+.use.tc { color: var(--up); } .use.or { color: var(--warn); }
+.crop { overflow: hidden; border: 1px solid var(--line); background-repeat: no-repeat; image-rendering: pixelated; max-width: 100%; }
+.two { display: grid; gap: 22px; } @media (min-width: 860px) { .two { grid-template-columns: 1fr 1fr; } }
+.eq { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: .86rem; background: var(--tile); border: 1px solid var(--rule); padding: 10px 14px; max-width: 70ch; overflow-x: auto; }
+ol.refs { padding-left: 2.2em; max-width: var(--measure); font-size: var(--step--1); }
+ol.refs li { margin-bottom: .45em; }
+.abstract { background: var(--tile); border: 1px solid var(--rule); padding: 18px 22px; max-width: 80ch; }
+.abstract p { font-size: var(--step--1); line-height: 1.65; max-width: none; }
+.abstract .kicker { margin-bottom: 8px; }
+</style>
+
+<div class="bar">
+  <div class="bar-in">
+    <strong>orrery · user guide</strong>
+    <a href="#intro">I</a><a href="#game">II</a><a href="#brains">III</a><a href="#example">IV</a><a href="#fleet">VI</a><a href="#interface">VIII</a><a href="#buttons">IX</a><a href="#convergence">XII</a><a href="#procedures">XIII</a>
+  </div>
+</div>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Orrery user guide · the fleet as one computer · first template: treadcore</p>
+  <h1>Training a tank to think, on a room of CPUs and two CUDA cards</h1>
+  <p class="lede">How orrery runs treadcore's training across a fleet of six machines: what the
+  fleet measures and why, every view and button of the console, the design for refining
+  every weight and every matrix, and how long convergence takes at the rate the fleet runs
+  today.</p>
+  <div class="mast-meta">
+    <span><b>6</b> machines · <b>68</b> CPU threads · <b>2</b> CUDA cards</span>
+    <span><b>~5,200</b> 15-minute seeds an hour</span>
+    <span><b>3,673</b> censuses in the fleet's ledger</span>
+    <span><b>111</b> brain weights · <b>16,431</b> net parameters</span>
+    <span>Paul Richeson, treadcore.org · 28 October 2026</span>
+  </div>
+</header>
+
+<section id="index">
+  <p class="kicker">Index</p>
+  <h2>Contents</h2>
+  <ol class="toc"><li><span class="n">&nbsp;</span><a href="#abstract">Abstract</a></li><li><span class="n">I</span><a href="#intro">Introduction: a tank that learns, and why it needs a cluster</a></li><li><span class="n">II</span><a href="#game">Treadcore: the game, its maps, its census</a></li><li><span class="n">III</span><a href="#brains">Two brains: the scripted yardstick and the learned tank</a></li><li><span class="n">IV</span><a href="#example">A worked example: signal in, matrices, scores out</a></li><li><span class="n">V</span><a href="#data">Test data: the simulation as the only teacher</a></li><li><span class="n">VI</span><a href="#fleet">The cluster: CPUs and CUDA cards</a></li><li><span class="n">VII</span><a href="#orrery">Orrery: the engine, the plan, the view</a></li><li><span class="n">VIII</span><a href="#interface">The interface, view by view</a></li><li><span class="n">IX</span><a href="#buttons">Every button: what it does and when to use it</a></li><li><span class="n">X</span><a href="#candidates">Every matrix and variable a candidate</a></li><li><span class="n">XI</span><a href="#distribute">Distributing the matrix: a clustering design for the net</a></li><li><span class="n">XII</span><a href="#convergence">Convergence approximations at today&#x27;s run rate</a></li><li><span class="n">XIII</span><a href="#procedures">Operating procedures</a></li><li><span class="n">XIV</span><a href="#limits">Limits and open problems</a></li><li><span class="n">&nbsp;</span><a href="#refs">References</a></li></ol>
+</section>
+
+<section id="abstract">
+  <div class="abstract">
+  <p class="kicker">Abstract</p>
+  <p>Treadcore is a sixteen-seat tank game whose bots are a hand-written brain: functions of the
+  battlefield weighed by 111 named scalars. Its second brain is a neural net of 16,431 numbers,
+  143 senses in and 47 choices out, taught first to copy the scripted brain and then to beat it.
+  Neither improves without measurement, and a measurement here is a <em>census</em>: hundreds of
+  simulated matches, every team in the trial seat, read as a difference a seat with its standard
+  error. One machine reads about 2,200 seeds an hour; a candidate needs thousands. This guide
+  describes orrery, the console that turns six machines (68 CPU threads, a GTX 1080 Ti and a GTX
+  1070 Ti) into one instrument for that measurement: a queue every machine takes from, a plan
+  that decides what to measure next, a sync that gathers every result, and a promotion that
+  brings a proven change into the code only when a person approves it. It documents each view
+  and button, shows a real forward pass of the net, gives a design for refining every matrix
+  and variable, and estimates convergence at today's measured rate of about 5,200 seeds an hour.</p>
+  <p><b>Index terms</b>: distributed simulation, game AI, utility AI, behaviour cloning, evolution
+  strategies, SPSA, statistical testing, CUDA, job queues, operator consoles.</p>
+  </div>
+</section>
+
+<section id="intro">
+  <p class="kicker">I · Introduction</p>
+  <h2>A tank that learns, and why it needs a cluster</h2>
+  <p>A bot in treadcore drives, shoots, builds roads and bridges, takes pillboxes, launches drones
+  and calls its team, sixteen of them at once on maps up to 512 tiles wide. The first brain that
+  could do all of that was written by hand, a function at a time: target selection, kiting,
+  dodging a shell, a castle of pillboxes, a column across a bridge. Each function has scalars
+  in it (how much a near tank matters against a wounded one, how far ahead to dodge), and the
+  project's rule is that an either/or becomes such a scalar, with the census to find its value.</p>
+  <p>That gives two jobs that cannot be done on one machine at a useful pace:</p>
+  <ul class="plain">
+    <li><b>Tuning the scripted brain.</b> 111 scalars, each needing a census of 55 seeds to read
+    a change of about a seat, and two more of 400 seeds to confirm one.</li>
+    <li><b>Teaching the learned tank.</b> Millions of recorded decisions to copy, a GPU to fit
+    them, and a census to judge every round against the best net so far.</li>
+  </ul>
+  <p>Orrery is the room's console. It was written to manage a fleet of Copal machines; this guide
+  covers its training role, in which treadcore is the first template: every view and button below
+  is marked <span class="use tc">treadcore</span> when it serves this project's training, and
+  <span class="use or">orchestration</span> when it would serve any project's.</p>
+  <figure class="fig"><div class="shot"><img src="guide/treadcore-playtest-08-sixteen-seats.png" alt="The game." loading="lazy"></div><figcaption><b>Fig. 1.</b> <b>The game.</b> One seat's instruments (armour, fuel, shells, the drone bay), the sixteen seats and their scores, and a fight at a depot: pillboxes (pb) and their reach in red, the tank's interceptor bubble in blue.</figcaption></figure>
+</section>
+
+<section id="game">
+  <p class="kicker">II · Treadcore</p>
+  <h2>The game, its maps, its census</h2>
+  <p>Each match is played on one of eleven maps, or on a map generated from the seed. A census
+  rotates through them, so a change that helps on islands and hurts on land is seen as both.</p>
+  <div class="maps"><figure><img src="guide/map-industry.png" alt="Industry, 128 × 128: pads and neutral structures" loading="lazy"><figcaption>Industry, 128 × 128: pads and neutral structures</figcaption></figure><figure><img src="guide/map-island.png" alt="Island, 128 × 128" loading="lazy"><figcaption>Island, 128 × 128</figcaption></figure><figure><img src="guide/map-naval.png" alt="Naval, 160 × 160: every start at sea" loading="lazy"><figcaption>Naval, 160 × 160: every start at sea</figcaption></figure><figure><img src="guide/map-big-lizard.png" alt="Big Lizard, 256 × 256 (prior art)" loading="lazy"><figcaption>Big Lizard, 256 × 256 (prior art)</figcaption></figure><figure><img src="guide/map-constanine.png" alt="Constanine, 256 × 256 (prior art)" loading="lazy"><figcaption>Constanine, 256 × 256 (prior art)</figcaption></figure><figure><img src="guide/map-fidos-airstrip.png" alt="Fido&#x27;s Airstrip, 256 × 256 (prior art)" loading="lazy"><figcaption>Fido&#x27;s Airstrip, 256 × 256 (prior art)</figcaption></figure><figure><img src="guide/map-fortressisles2.png" alt="Fortress Isles 2, 256 × 256 (prior art)" loading="lazy"><figcaption>Fortress Isles 2, 256 × 256 (prior art)</figcaption></figure><figure><img src="guide/map-fortressislesx.png" alt="Fortress Isles X, 256 × 256 (prior art)" loading="lazy"><figcaption>Fortress Isles X, 256 × 256 (prior art)</figcaption></figure><figure><img src="guide/map-europe.png" alt="Europe, 320 × 256, from coastlines" loading="lazy"><figcaption>Europe, 320 × 256, from coastlines</figcaption></figure><figure><img src="guide/map-atlantic.png" alt="Atlantic, 512 × 333, from coastlines" loading="lazy"><figcaption>Atlantic, 512 × 333, from coastlines</figcaption></figure></div>
+  <p style="margin-top:1em"><small>Fig. 2. The census maps, drawn from their tile files: grass, forest (dark green), road and rubble (grey-brown), water (blue), depots (yellow), walls and concrete (dark). Prior-art maps are converted from the originals.</small></p>
+  <h3>The census</h3>
+  <p>A census plays the same seeds twice over: one team on the trial brain, two on the baseline,
+  and every team takes the trial seat once a seed, so the starting positions cancel. Its answer
+  is the trial's score less the baseline's, a seat, with a standard error over the seeds:</p>
+  <div class="eq">every map   +1.05 +/- 0.48 over 55 seeds (outside the noise)<br>
+  industry    +2.10 +/- 1.80 over 5 seeds ...</div>
+  <p>The error falls as one over the square root of the seeds. Measured on the fleet, one seat's
+  error is about 3.3 divided by √seeds: ±0.45 at 55 seeds, ±0.17 at 400. The bar for a change is
+  two errors; a trial past it is read again on two sets of 400 seeds no trial saw, and then
+  against the scenario families, each a behaviour held to a floor (a tank under a shell dodges
+  99% of the time, a duel in the open is won 55%).</p>
+  <figure class="fig"><div class="shot"><img src="guide/treadcore-playtest-04-under-fire.png" alt="Under fire." loading="lazy"></div><figcaption><b>Fig. 3.</b> <b>Under fire.</b> What a census plays a million times: a tank hit, its armour falling, its dodge and its answer.</figcaption></figure>
+</section>
+
+<section id="brains">
+  <p class="kicker">III · Two brains</p>
+  <h2>The scripted yardstick and the learned tank</h2>
+  <div class="two">
+  <div>
+  <h3>The scripted brain</h3>
+  <p>Utility AI: each possible action is scored by its considerations (distance, armour, odds,
+  a teammate's call), each weighed by a named scalar in <code>weights.rs</code>. The target score,
+  for instance, adds a distance term <code>w_near / (1 + d / near_scale)</code>, a wounded term,
+  a one-shot term, a focus term for a teammate already on it, an in-range term and a threat
+  term. It is the yardstick because it is <em>best practice written down</em>: every function was
+  added for a reason recorded in a lab report, and kept only if the census said so.</p>
+  </div>
+  <div>
+  <h3>The learned tank</h3>
+  <p>A net of three layers, 143 → 64 → 64 → 47, with ReLU between: 16,431 numbers. Its 143
+  senses are a compass of 8 sectors × 11 channels (hostile tank, ally, pillboxes, depots, a shell
+  coming, ground, cover, a call), its body, its instruments, a periscope on the nearest enemy and
+  the thing to take, the scripted brain's hints, and contacts for shells and drones. Its 47 outputs
+  are seven heads: where to drive (10), where to shoot (9), how to lead (3), the mortar (9), a
+  drone (5), the squad (7), a call (4).</p>
+  </div>
+  </div>
+  <h3>Why the scripted brain teaches first</h3>
+  <p>Intelligence does not appear in a net until it has seen a great deal of play. A net started
+  from random numbers spends its first millions of matches learning to drive straight. Copying a
+  brain that already plays (<em>behaviour cloning</em>) skips that: 47 million recorded decisions,
+  fitted on one GPU in under four minutes, gave a net (bc2) that plays level with the official
+  net. The cost is bias: a clone plays like its teacher and no better, and treadcore's clones hit
+  that ceiling (LR 108). From a cloned start, the next generations come from the census itself:
+  each candidate net judged against the best, only a better one kept. That is a working
+  generational set of coefficients, and the census, with the scripted brain as its opponent, is the
+  metric every generation is judged by.</p>
+</section>
+
+<section id="example">
+  <p class="kicker">IV · A worked example</p>
+  <h2>Signal in, matrices, scores out</h2>
+  <p>One moment from a recording made by the fleet on 28 October (seed 9900000, decision
+  4564 of 4800), put through the net bc2 by hand in Python, as the game does it in
+  Rust. Of the 143 senses, 51 are lit; the rest are zero.</p>
+  <div class="two">
+  <div class="tablewrap"><table><caption>Table I · the signal in (lit senses, first of each group)</caption><thead><tr><th>sense</th><th class="num">value</th></tr></thead><tbody><tr><td><span class="mono">compass 0 AlliedTank</span></td><td class="num">0.419</td></tr><tr><td><span class="mono">compass 0 HostilePillbox</span></td><td class="num">0.144</td></tr><tr><td><span class="mono">compass 0 NeutralPillbox</span></td><td class="num">0.206</td></tr><tr><td><span class="mono">compass 0 OurPillbox</span></td><td class="num">0.366</td></tr><tr><td><span class="mono">compass 0 DepotToTake</span></td><td class="num">0.124</td></tr><tr><td><span class="mono">compass 0 OurDepot</span></td><td class="num">0.395</td></tr><tr><td><span class="mono">compass 1 AlliedTank</span></td><td class="num">0.453</td></tr><tr><td><span class="mono">compass 1 OurPillbox</span></td><td class="num">0.393</td></tr><tr><td><span class="mono">compass 3 Cover</span></td><td class="num">0.548</td></tr><tr><td><span class="mono">body armour</span></td><td class="num">1.000</td></tr><tr><td><span class="mono">body shells</span></td><td class="num">0.375</td></tr><tr><td><span class="mono">body fuel</span></td><td class="num">1.000</td></tr><tr><td><span class="mono">body reload</span></td><td class="num">0.812</td></tr><tr><td><span class="mono">body pillboy out</span></td><td class="num">1.000</td></tr><tr><td><span class="mono">body pillboy material</span></td><td class="num">0.250</td></tr><tr><td><span class="mono">body recon bay</span></td><td class="num">0.500</td></tr><tr><td><span class="mono">body interceptor bay</span></td><td class="num">0.333</td></tr><tr><td><span class="mono">body strike bay</span></td><td class="num">0.333</td></tr><tr><td><span class="mono">nav X</span></td><td class="num">0.595</td></tr><tr><td><span class="mono">nav Y</span></td><td class="num">0.160</td></tr><tr><td><span class="mono">nav Sin</span></td><td class="num">0.594</td></tr><tr><td><span class="mono">nav Cos</span></td><td class="num">0.009</td></tr><tr><td><span class="mono">nav Edge</span></td><td class="num">0.281</td></tr><tr><td><span class="mono">contact EnemySin</span></td><td class="num">-0.944</td></tr><tr><td><span class="mono">contact EnemyCos</span></td><td class="num">-0.331</td></tr><tr><td><span class="mono">contact Enemy</span></td><td class="num">0.145</td></tr><tr><td><span class="mono">contact EnemyClosing</span></td><td class="num">0.822</td></tr><tr><td><span class="mono">contact EnemyAspect</span></td><td class="num">0.983</td></tr><tr><td><span class="mono">contact TakeSin</span></td><td class="num">-0.947</td></tr><tr><td><span class="mono">contact TakeCos</span></td><td class="num">-0.321</td></tr><tr><td><span class="mono">contact Take</span></td><td class="num">0.438</td></tr><tr><td><span class="mono">contact HomeSin</span></td><td class="num">-0.110</td></tr><tr><td><span class="mono">air Sin</span></td><td class="num">-0.769</td></tr><tr><td><span class="mono">air Cos</span></td><td class="num">0.640</td></tr><tr><td><span class="mono">air Near</span></td><td class="num">0.090</td></tr><tr><td><span class="mono">air Threat</span></td><td class="num">1.000</td></tr><tr><td><span class="mono">air Bubble</span></td><td class="num">1.000</td></tr></tbody></table></div>
+  <div class="stack">
+  <p><b>The first matrix.</b> Each of the 64 first-layer units takes every sense times its weight,
+  adds a bias, and keeps the sum only if it is positive. On this moment 21 of
+  the 64 fire, and 20 of the 64 in the second layer. The strongest is unit
+  16 at 3.843; Table II is what made it, sense by sense.</p>
+  <div class="tablewrap"><table><caption>Table II · unit 16 of layer 1: sense × weight</caption><thead><tr><th>sense</th><th class="num">x</th><th class="num">weight</th><th class="num">x × w</th></tr></thead><tbody><tr><td><span class="mono">body fuel</span></td><td class="num">1.000</td><td class="num">+1.728</td><td class="num">+1.728</td></tr><tr><td><span class="mono">nav X</span></td><td class="num">0.595</td><td class="num">+0.275</td><td class="num">+0.164</td></tr><tr><td><span class="mono">nav Edge</span></td><td class="num">0.281</td><td class="num">-0.257</td><td class="num">-0.072</td></tr><tr><td><span class="mono">compass 0 OurPillbox</span></td><td class="num">0.366</td><td class="num">+0.144</td><td class="num">+0.053</td></tr><tr><td><span class="mono">contact Home</span></td><td class="num">0.445</td><td class="num">-0.107</td><td class="num">-0.047</td></tr><tr><td><span class="mono">contact EnemyClosing</span></td><td class="num">0.822</td><td class="num">-0.049</td><td class="num">-0.040</td></tr><tr><td><span class="mono">compass 0 NeutralPillbox</span></td><td class="num">0.206</td><td class="num">+0.149</td><td class="num">+0.031</td></tr><tr><td><span class="mono">compass 6 NeutralPillbox</span></td><td class="num">0.438</td><td class="num">+0.063</td><td class="num">+0.028</td></tr></tbody></table></div>
+  <p>Its bias is +1.804. This is the transform the Net page draws: each pixel of
+  a heat map is one of these weights, its colour the sign.</p>
+  </div>
+  </div>
+  <div class="tablewrap"><table><caption>Table III · the scores out, by head: the three best choices, the net's, the scripted brain's</caption><thead><tr><th>head</th><th>best three scores</th><th>net</th><th>scripted</th><th>same</th></tr></thead><tbody><tr><td><b>drive</b></td><td>stop 3.32, SE -0.43, E -0.80</td><td>stop</td><td>stop</td><td>yes</td></tr><tr><td><b>gun</b></td><td>hold 4.73, sector 1 0.10, sector 5 -0.13</td><td>hold</td><td>hold</td><td>yes</td></tr><tr><td><b>lead</b></td><td>at 8.41, between -6.75, led -10.95</td><td>at</td><td>at</td><td>yes</td></tr><tr><td><b>mortar</b></td><td>sector 8 2.03, sector 7 1.78, sector 5 1.26</td><td>sector 8</td><td>hold</td><td>no</td></tr><tr><td><b>drone</b></td><td>recon 4.64, hold 0.58, interceptor -0.55</td><td>recon</td><td>strike</td><td>no</td></tr><tr><td><b>squad</b></td><td>mine 2.53, mend 0.69, harvest 0.69</td><td>mine</td><td>hold</td><td>no</td></tr><tr><td><b>signal</b></td><td>help 0.89, take 0.37, attack 0.30</td><td>help</td><td>hold</td><td>no</td></tr></tbody></table></div>
+  <p style="margin-top:1em">The net agrees on driving, the gun and the lead. It would fire the
+  mortar and launch a recon where the scripted brain held and launched a strike; at play these
+  choices are masked to the ones allowed at that moment. Its squad and signal heads were never
+  trained (the scripted brain's labels for them are zero; LR 109), which this table shows plainly.</p>
+  <figure class="fig"><div class="shot"><img src="guide/training-zoom-0.png" alt="The first matrix, enlarged." loading="lazy"></div><figcaption><b>Fig. 4.</b> <b>The first matrix, enlarged.</b> Senses across (by group), the 64 units down. Point at any cell for its weight and what its row and column are.</figcaption></figure>
+  <figure class="fig"><div class="shot"><img src="guide/training-zoom-2.png" alt="The last matrix." loading="lazy"></div><figcaption><b>Fig. 5.</b> <b>The last matrix.</b> The 64 units of the second layer across, the 47 scores down, by head.</figcaption></figure>
+</section>
+
+<section id="data">
+  <p class="kicker">V · Test data</p>
+  <h2>The simulation as the only teacher</h2>
+  <p>There is no human play to learn from at scale. All of the data is the simulation, played
+  headless at many times real time: a 15-minute match of sixteen seats takes about 30 seconds of
+  one core. On 28 October alone the fleet played 72,285 matches of 15 minutes (18,071 hours of
+  play), made 2.76 billion brain decisions and advanced 19.8 billion seat-ticks; the GPU fitted
+  416 million samples. That volume is what makes a difference of half a seat visible at all.</p>
+  <div class="tablewrap"><table><caption>Table IV · what one day of the fleet produced (28 October, from 02:17)</caption><thead><tr><th>measure</th><th class="num">count</th></tr></thead><tbody><tr><td>matches of 15 minutes</td><td class="num">72,285</td></tr><tr><td>hours of play</td><td class="num">18,071</td></tr><tr><td>brain decisions (thinks)</td><td class="num">2,763,823,140</td></tr><tr><td>seat-ticks</td><td class="num">19,785,988,688</td></tr><tr><td>planned moves</td><td class="num">721,567,278</td></tr><tr><td>training sample-steps (GPU)</td><td class="num">416,116,764</td></tr></tbody></table></div>
+</section>
+
+<section id="fleet">
+  <p class="kicker">VI · The cluster</p>
+  <h2>CPUs for play, CUDA for fitting</h2>
+  <p>Play is integer- and branch-heavy and runs one match a core: it wants many CPU threads.
+  Fitting a net is dense arithmetic: it wants a GPU. The fleet has both.</p>
+  <div class="tablewrap"><table><caption>Table V · the fleet, grove</caption><thead><tr><th>machine</th><th>role</th><th class="num">threads</th><th>GPU</th><th>note</th></tr></thead><tbody><tr><td>saskatchewan</td><td>census</td><td class="num">24</td><td></td><td>the census machine; ran 64 generations of the search alone</td></tr><tr><td>boburner</td><td>census, GPU</td><td class="num">16</td><td>GTX 1070 Ti, 8 GB</td><td>Ryzen 7 3700X; joined 28 October; CUDA 12.9 on driver 580</td></tr><tr><td>calber</td><td>census, GPU, store</td><td class="num">8</td><td>GTX 1080 Ti, 11 GB</td><td>trains the net; holds the recordings</td></tr><tr><td>columbia</td><td>census, judge</td><td class="num">8</td><td></td><td>i3-N300; judges net rounds</td></tr><tr><td>nasser</td><td>census</td><td class="num">4</td><td></td><td>i3-2310M; busybox login shell</td></tr><tr><td>the Mac</td><td>coordinator, census</td><td class="num">8</td><td></td><td>runs orrery, pushes the code; the only machine with ssh to all</td></tr></tbody></table></div>
+  <p>Measured rates: saskatchewan alone read 2,229 seeds of 15 minutes an hour over 41 hours;
+  the whole fleet reads about 5,200. The 1080 Ti fits about 2.55 million samples a second at a
+  batch of 32,768; a round of 52 million samples takes 90 seconds.</p>
+</section>
+
+<section id="orrery">
+  <p class="kicker">VII · Orrery</p>
+  <h2>The engine, the plan, the view</h2>
+  <div class="tablewrap"><table><caption>Table VI · the parts</caption><thead><tr><th>part</th><th>file</th><th>role</th><th>applies to</th></tr></thead><tbody><tr><td>the engine</td><td><code>tools/fleet-queue.py</code></td><td>the queue, a lane a machine, the keeper, stop adding, stop now, sync, shutdown, runs</td><td><span class="use or">orchestration</span></td></tr><tr><td>the plan</td><td><code>tools/plans/treadcore.py</code></td><td>what to measure next: builds, the weight search, held-out reads, families, net rounds, runs, promotion, sync</td><td><span class="use tc">treadcore</span></td></tr><tr><td>the view</td><td><code>tools/plans/treadcore-view.py</code></td><td>the document the Training view draws</td><td><span class="use tc">treadcore</span></td></tr><tr><td>the console</td><td><code>src/training.rs</code>, <code>src/sessions.rs</code></td><td>the Training and Sessions views</td><td><span class="use or">orchestration</span></td></tr><tr><td>the work</td><td>treadcore <code>scripts/census.sh</code>, the brain's tests, <code>ledger.py</code>, <code>suggest.py</code>, <code>tools/bc</code></td><td>one census, the families, the ledger, the fit, the trainer</td><td><span class="use tc">treadcore</span></td></tr></tbody></table></div>
+  <h3>The queue is a folder</h3>
+  <p><code>~/code/treadcore/build/queue/grove</code> holds <code>config.json</code> (who works, how each
+  powers off, how often to gather) and <code>plan.json</code> (what to train). Jobs are files moved
+  between <code>queue/</code>, <code>running/HOST/</code>, <code>done/</code> and <code>failed/</code>; a move
+  is atomic, so two machines never take one job. Everything is readable with <code>ls</code>.</p>
+  <h3>Always the newest code</h3>
+  <p>The plan follows <code>origin/main</code>. The Mac pushes; at each top-up the plan fetches, and
+  every machine fast-forwards its own checkout and builds the commit once, in its own folder. A
+  census plays the binary its machine built for that commit and never rebuilds (a shared build
+  folder once handed a census another commit's binary; LR 117).</p>
+  <h3>Nothing is promoted by a machine</h3>
+  <p>A candidate is prepared on a branch: its numbers written into <code>weights.rs</code>, the
+  brain's tests and the families run, the commit pushed as the branch. It reaches main only when
+  a person presses Approve.</p>
+</section>
+
+<section id="interface">
+  <p class="kicker">VIII · The interface</p>
+  <h2>View by view</h2>
+  <p>Start orrery as an operator on the standing queue; Command-1 to 4 switch views:</p>
+  <pre class="code">cd ~/code/orrery &amp;&amp; cargo run --release -- --gui --operator paul --fleet grove \
+  --fleet-cmd "$HOME/.local/bin/copal fleet" --queue $HOME/code/treadcore/build/queue/grove</pre>
+  <figure class="fig"><div class="shot"><img src="guide/training-0.png" alt="Training · Fleet." loading="lazy"></div><figcaption><b>Fig. 6.</b> <b>Training · Fleet.</b> The band: the queue's state, its bar (jobs done, running, queued; not machine load), the last finished job and the last sync, and the operator's buttons. Under it, the newest change, one line. Then a row a machine: CPU is the load average against its cores (amber past 90%), GPU the card's use, and the job it is running.</figcaption></figure>
+  <figure class="fig"><div class="shot"><img src="guide/training-1.png" alt="Training · Runs." loading="lazy"></div><figcaption><b>Fig. 7.</b> <b>Training · Runs.</b> A button for each kind of run, with what it does; on the right, every run asked for and where it is, with Cancel and Approve.</figcaption></figure>
+  <figure class="fig"><div class="shot"><img src="guide/training-2.png" alt="Training · Found." loading="lazy"></div><figcaption><b>Fig. 8.</b> <b>Training · Found.</b> Found Improvement by variable (how often a weight was in an improvement past two errors), by machine (improvements found of censuses read), and the newest changes in columns.</figcaption></figure>
+  <figure class="fig"><div class="shot"><img src="guide/training-3.png" alt="Training · Net." loading="lazy"></div><figcaption><b>Fig. 9.</b> <b>Training · Net.</b> The learned tank's three matrices as heat maps; its heads; how often it makes the scripted brain's choice on unseen matches; its census against the official net.</figcaption></figure>
+  <figure class="fig"><div class="shot"><img src="guide/training-readonly.png" alt="Read-only." loading="lazy"></div><figcaption><b>Fig. 10.</b> <b>Read-only.</b> The same view without --operator: no buttons are drawn at all, because a button that must not be pressed should not exist.</figcaption></figure>
+  <figure class="fig"><div class="shot"><img src="guide/sessions.png" alt="Sessions." loading="lazy"></div><figcaption><b>Fig. 11.</b> <b>Sessions.</b> A terminal per machine, each a tmux session named orrery (screen on boburner), opened with copal-tm. Click to type; Enlarge for one machine. The sessions outlive orrery: ssh -t user@HOST tmux attach -t orrery joins one from anywhere.</figcaption></figure>
+  <figure class="fig"><div class="shot"><img src="guide/lab.png" alt="Lab." loading="lazy"></div><figcaption><b>Fig. 12.</b> <b>Lab.</b> The room as the Copal fleet sees it. The grove machines run no Copal agent yet, so each reads off bus; their training is on the Training view.</figcaption></figure>
+</section>
+
+<section id="buttons">
+  <p class="kicker">IX · Every button</p>
+  <h2>What it does and when to use it</h2>
+  <p>Each button below is cut from the screenshots above, at its real size.</p>
+  <div class="tablewrap"><table><caption>Table VII · the band (every page of Training)</caption><thead><tr><th>button</th><th>what it does</th><th>when to use it</th><th>applies to</th></tr></thead><tbody><tr><td><div class="crop" role="img" aria-label="Stop adding" style="width:130px;height:26px;background-image:url(guide/training-0.png);background-position:-850px -70px;background-size:1280px 760px"></div></td><td>The queue drains: queued and running jobs finish, results are collected, the keeper stops.</td><td>Before maintenance, or to end the day cleanly.</td><td><span class="use or">orchestration</span></td></tr><tr><td><div class="crop" role="img" aria-label="Collect results and stop now" style="width:280px;height:26px;background-image:url(guide/training-0.png);background-position:-990px -70px;background-size:1280px 760px"></div></td><td>Every running job is stopped on every machine; what there is is collected.</td><td>When something is wrong and must stop now.</td><td><span class="use or">orchestration</span></td></tr><tr><td><div class="crop" role="img" aria-label="Sync now" style="width:130px;height:26px;background-image:url(guide/training-0.png);background-position:-850px -102px;background-size:1280px 760px"></div></td><td>Every machine's census ledger and records gathered into the fleet's ledger.</td><td>Before reading results; otherwise every 30 minutes by itself.</td><td><span class="use or">orchestration</span></td></tr><tr><td><div class="crop" role="img" aria-label="Shut the fleet down" style="width:280px;height:26px;background-image:url(guide/training-0.png);background-position:-990px -102px;background-size:1280px 760px"></div></td><td>Press twice. Nothing new starts; each machine finishes its job, reports, and powers off; a report says who finished what.</td><td>At the end of a run, or before a power cut. Needs each machine's power-off rule.</td><td><span class="use or">orchestration</span></td></tr><tr><td><span class="btn">Resume adding</span> <span class="btn">Start the queue</span></td><td>Shown while draining, or when the keeper is stopped.</td><td>To undo Stop adding; to start after a stop.</td><td><span class="use or">orchestration</span></td></tr></tbody></table></div>
+  <div class="tablewrap"><table><caption>Table VIII · the Runs page</caption><thead><tr><th>button</th><th>what it asks the fleet for</th><th>when to use it</th><th>applies to</th></tr></thead><tbody><tr><td><div class="crop" role="img" aria-label="census" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -230px;background-size:1280px 760px"></div></td><td>The search's newest best against the defaults: 55 seeds of 15 minutes, every map.</td><td>To read a candidate yourself.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="parts" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -248px;background-size:1280px 760px"></div></td><td>Each part of the brain off, against all on (31 censuses).</td><td>After a brain change: what is each part worth now?</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="switches" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -266px;background-size:1280px 760px"></div></td><td>Each capability that is off, turned on alone.</td><td>Before turning a feature on by default.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="roundrobin" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -284px;background-size:1280px 760px"></div></td><td>Every ordered pair of play-style profiles: the payoff matrix.</td><td>To see whether styles beat each other in a cycle.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="spsa" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -302px;background-size:1280px 760px"></div></td><td>SPSA on named weights, a step a census.</td><td>To tune a few weights together.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="tune" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -320px;background-size:1280px 760px"></div></td><td>The (1 + λ) evolution strategy over the target weights.</td><td>A broader search than SPSA.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="train" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -338px;background-size:1280px 760px"></div></td><td>The learned tank by evolution strategies (the harness).</td><td>Training a net phase by phase.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="gauntlet" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -356px;background-size:1280px 760px"></div></td><td>Single-decision tests of every milestone net.</td><td>After a net changes.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="clips" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -374px;background-size:1280px 760px"></div></td><td>A short GIF of each milestone net, on the Mac.</td><td>For a report.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="school" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -392px;background-size:1280px 760px"></div></td><td>The learned tank's curriculum, map by map.</td><td>Long runs; stop with Cancel.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="record" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -410px;background-size:1280px 760px"></div></td><td>Recordings of the scripted brain for cloning, streamed to calber with their hashes checked.</td><td>Before a cloning round.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="families" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -428px;background-size:1280px 760px"></div></td><td>Every candidate against the families again.</td><td>After a promotion.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><div class="crop" role="img" aria-label="promote" style="width:96px;height:18px;background-image:url(guide/training-1.png);background-position:-10px -446px;background-size:1280px 760px"></div></td><td>The strongest candidate onto a branch: defaults written, tests and families run, pushed as the branch.</td><td>When a candidate has passed both held-out reads and its families.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><span class="btn">Cancel</span> <span class="btn">Approve</span></td><td>Cancel takes a run's queued jobs off the queue. Approve moves main to a prepared promotion; the fleet then trains on it.</td><td>Approve is the only way a change reaches the code.</td><td><span class="use or">orchestration</span></td></tr></tbody></table></div>
+  <div class="tablewrap"><table><caption>Table IX · the other views</caption><thead><tr><th>control</th><th>what it does</th><th>applies to</th></tr></thead><tbody><tr><td><span class="btn">Fleet · Runs · Found · Net</span></td><td>The four pages of Training.</td><td><span class="use or">orchestration</span></td></tr><tr><td>point at a matrix cell</td><td>Its weight, and what its row and column are (Net page).</td><td><span class="use tc">treadcore</span></td></tr><tr><td>click a matrix</td><td>Enlarged with labelled axes; Escape or Close to go back.</td><td><span class="use tc">treadcore</span></td></tr><tr><td><span class="btn">Enlarge</span> <span class="btn">Grid</span></td><td>One machine's session full size, or back (Sessions).</td><td><span class="use or">orchestration</span></td></tr><tr><td>click a session tile</td><td>Type into that machine's session; click outside to stop.</td><td><span class="use or">orchestration</span></td></tr></tbody></table></div>
+  <p style="margin-top:1em">Everything a button does is also a command:
+  <code>fleet-queue.py Q stop-adding | resume-adding | stop-now | sync | shutdown-now | new KIND k=v | runs | cancel RID | approve RID</code>.</p>
+</section>
+
+<section id="candidates">
+  <p class="kicker">X · Every matrix and variable a candidate</p>
+  <h2>Keeping track of what has been refined</h2>
+  <p>A search that keeps reading what looked good last stops looking at the rest. The fleet keeps
+  three records so that every variable stays a candidate:</p>
+  <ul class="plain">
+    <li><b>The ledger.</b> Every census the fleet has read, one row each, with the weights it moved
+    (<code>build/ledger/fleet.tsv</code>, 3,673 rows).</li>
+    <li><b>The coverage.</b> From the ledger, how often each weight has been read. The plan screens
+    every weight at half and double before it follows any curve, so a weight never read is read next.</li>
+    <li><b>The ticker.</b> Every finished census, each coefficient it moved, its offset from the default,
+    and which machine read it (<code>plan/ticker.jsonl</code>; the Found page).</li>
+  </ul>
+  <div class="two">
+  <div class="tablewrap"><table><caption>Table X · how often each of the 111 weights has been read (55 seeds or more)</caption><thead><tr><th>times read</th><th class="num">weights</th></tr></thead><tbody><tr><td>never</td><td class="num">1</td></tr><tr><td>1-4</td><td class="num">21</td></tr><tr><td>5-19</td><td class="num">3</td></tr><tr><td>20-99</td><td class="num">75</td></tr><tr><td>100+</td><td class="num">11</td></tr></tbody></table></div>
+  <div class="tablewrap"><table><caption>Table XI · the most read</caption><thead><tr><th>weight</th><th class="num">censuses</th></tr></thead><tbody><tr><td><span class="mono">dodge_horizon</span></td><td class="num">269</td></tr><tr><td><span class="mono">castle_inside</span></td><td class="num">244</td></tr><tr><td><span class="mono">w_in_range</span></td><td class="num">212</td></tr><tr><td><span class="mono">kite_in</span></td><td class="num">175</td></tr><tr><td><span class="mono">w_near</span></td><td class="num">172</td></tr><tr><td><span class="mono">answer_cap</span></td><td class="num">120</td></tr><tr><td><span class="mono">alpha</span></td><td class="num">117</td></tr><tr><td><span class="mono">base_r</span></td><td class="num">110</td></tr></tbody></table></div>
+  </div>
+  <p style="margin-top:1em">The one weight never read is <code>focus_blend</code>, added on 28 October; the
+  search reads it at half and double at its next generation. <b>For the net</b> the same idea needs
+  blocks rather than single numbers: 16,431 parameters cannot each be read by a census. Each matrix
+  is cut into tiles (16 × 16 weights: 36 tiles in the first matrix, 16 in the second, 12 in the third, and the biases in 11 more, 75 in all), and the
+  coverage ledger keeps, for each tile, how many candidate nets moved it and with what verdict. A
+  generation's perturbations are drawn tile by tile, least-read first, so that no part of a matrix
+  is left at its cloned values for want of looking.</p>
+</section>
+
+<section id="distribute">
+  <p class="kicker">XI · Distributing the matrix</p>
+  <h2>A clustering design for refining the net</h2>
+  <p>The queue already distributes the scripted brain's search: a trial is a weights file, a job a
+  census. The net's refinement fits the same shape, because a census can play any net
+  (<code>CENSUS_NET=</code>). Three methods, each a kind of job:</p>
+  <div class="tablewrap"><table><caption>Table XII · three ways to refine the net on the fleet</caption><thead><tr><th>method</th><th>a job is</th><th>machines</th><th>what it needs</th></tr></thead><tbody><tr><td>Evolution strategies over tiles</td><td>a census of the best net with one tile perturbed (± σ)</td><td>every CPU</td><td>a population of 2k perturbations a generation; the update weighted by each census's difference</td></tr><tr><td>SPSA over the whole net</td><td>a census of θ + cΔ against θ − cΔ, paired by seed</td><td>every CPU</td><td>one census a step; the noise of ±0.45 a seat at 55 seeds sets the step size</td></tr><tr><td>PPO from bc2</td><td>rollouts of self-play recorded on CPUs; an update on the GPU</td><td>CPUs record, calber and boburner fit</td><td>a reward: the census score's terms, as weights (below)</td></tr></tbody></table></div>
+  <h3>The shell program</h3>
+  <p>The distribution is orrery's job file, nothing more: a job carries its command, the files to send,
+  and the path to fetch back. A tile perturbation is a 66 KB net sent with the job; the census on the
+  host plays it with <code>CENSUS_NET</code>; the planner reads the pooled difference and moves the
+  best net. The same keeper restarts dead lanes, waits for lost machines, and stops on five failures in
+  a row, so a generation of 200 censuses needs no care beyond reading it.</p>
+  <h3>Training weights of rewards</h3>
+  <p>The census score is a sum of terms (kills, deaths, pillboxes taken, damage, defends and more).
+  For PPO those terms become the reward, each with a weight; the plan is eleven reward-term weights,
+  all starting at 0 as placeholders for feedback, read by the same census and screened like any other
+  weight. The scripted brain's 111 weights, the net's tiles and the reward's terms then share one
+  ledger, one search and one rule: a change is kept only past two errors, twice held out, with the
+  families holding.</p>
+</section>
+
+<section id="convergence">
+  <p class="kicker">XII · Convergence</p>
+  <h2>Approximations at today's run rate</h2>
+  <p>All of these are arithmetic from measured rates, not promises: about 5,200 seeds of 15 minutes
+  an hour across the fleet, an error of 3.3 / √seeds a seat, and the GPU at 2.55 million samples a
+  second.</p>
+  <dl class="arith">
+    <dt>Screen all 111 weights at half and double (222 trials × 55 seeds)</dt><dd>12,210 seeds · 2.3 h</dd>
+    <dt>Confirm one candidate (2 × 400 held-out seeds)</dt><dd>800 seeds · 9 min</dd>
+    <dt>One generation of the search (12 trials, about 2 candidates confirmed)</dt><dd>2,260 seeds · 26 min</dd>
+    <dt>The search's plateau (saskatchewan took 64 generations, about +2.5 a seat)</dt><dd>≈ 28 h on the fleet · 41 h alone</dd>
+    <dt>Read a change of 0.1 a seat at two errors (error 0.05)</dt><dd>4,460 seeds · 52 min</dd>
+    <dt>One ES generation of the net (200 tile censuses × 55 seeds)</dt><dd>11,000 seeds · 2.1 h</dd>
+    <dt>1,000 SPSA steps over the whole net (110 seeds a step)</dt><dd>110,000 seeds · 21 h</dd>
+    <dt>A cloning round: 1,200 recorded matches + 4 epochs of 52 M samples</dt><dd>≈ 14 min CPU + 1.5 min GPU</dd>
+    <dt>PPO: 10⁹ samples of self-play recorded (≈ 200 M an hour)</dt><dd class="hot">≈ 5 h of play, minutes of GPU</dd>
+  </dl>
+  <p style="margin-top:1em">The bottleneck is the CPUs, by a wide margin: the GPU fits a round in a
+  minute and a half and then waits. Every machine added to the fleet shortens every line above in
+  proportion; a second GPU matters only once rounds are recorded faster than one card can fit them.</p>
+</section>
+
+<section id="procedures">
+  <p class="kicker">XIII · Operating procedures</p>
+  <h2>Day to day</h2>
+  <div class="tablewrap"><table><caption>Table XIII · procedures</caption><thead><tr><th>to</th><th>do</th><th>applies to</th></tr></thead><tbody><tr><td>start</td><td>Start the queue, or <code>fleet-queue.py Q ensure</code></td><td><span class="use or">orchestration</span></td></tr><tr><td>watch</td><td>Training · Fleet; Found for results; Sessions for a machine's own state</td><td><span class="use or">orchestration</span></td></tr><tr><td>ask for a measurement</td><td>a button on Runs, or <code>new KIND k=v</code></td><td><span class="use tc">treadcore</span></td></tr><tr><td>add a machine</td><td>add it to <code>config.json</code>; it builds the newest commit and takes work</td><td><span class="use or">orchestration</span></td></tr><tr><td>set up a CUDA machine</td><td><code>sudo bash cuda-node.sh</code> on it: driver, CUDA 12.9, tmux, copal-tm</td><td><span class="use or">orchestration</span></td></tr><tr><td>take a machine out</td><td>delete it from <code>config.json</code>; its lane ends after its job</td><td><span class="use or">orchestration</span></td></tr><tr><td>bring a change into treadcore</td><td>promote, read the prepared branch, Approve</td><td><span class="use tc">treadcore</span></td></tr><tr><td>end the day</td><td>Stop adding, or Shut the fleet down</td><td><span class="use or">orchestration</span></td></tr><tr><td>resume in a new session</td><td><code>fleet-queue.py Q status</code> and <code>runs</code>; Start the queue if stopped</td><td><span class="use or">orchestration</span></td></tr></tbody></table></div>
+</section>
+
+<section id="limits">
+  <p class="kicker">XIV · Limits and open problems</p>
+  <h2>What is not done</h2>
+  <ul class="plain">
+    <li>No machine can power itself off yet: each needs the one rule of <code>fleet-poweroff-setup.sh</code>.</li>
+    <li>The net's squad and signal heads are untrained, and the clones are at their ceiling: the next
+    generations need ES, SPSA or PPO on the fleet (section XI), not more cloning.</li>
+    <li>The tile coverage ledger and the reward-term weights are designs here, not yet code.</li>
+    <li>The grove machines run no Copal fleet agent, so the Lab view sees them as off bus.</li>
+    <li>Orrery's planner is treadcore's; a second project would add its own <code>tools/plans/NAME.py</code>
+    and view, and the engine and console would not change.</li>
+  </ul>
+</section>
+
+<section id="refs">
+  <p class="kicker">References</p>
+  <h2>Sources</h2>
+  <ol class="refs">
+    <li>treadcore, <code>documentation/LAB-REPORT-BRAIN.md</code>, sections 92 (the census as a learner), 106–110 (cloning, the fleet records), 111–117 (orrery takes over training).</li>
+    <li>treadcore, <code>documentation/CENSUS.md</code>: running, reading and resuming the census.</li>
+    <li>orrery, <code>docs/fleet-train.md</code>: the queue, its files and commands.</li>
+    <li>orrery, <code>docs/cuda-node-lab-report.md</code>: making an Ubuntu machine a CUDA node.</li>
+    <li>J. C. Spall, "Multivariate stochastic approximation using a simultaneous perturbation gradient approximation," IEEE Trans. Automatic Control, 37(3), 1992.</li>
+    <li>T. Salimans et al., "Evolution strategies as a scalable alternative to reinforcement learning," arXiv:1703.03864, 2017.</li>
+    <li>J. Schulman et al., "Proximal policy optimization algorithms," arXiv:1707.06347, 2017.</li>
+    <li>S. Ross, G. Gordon, D. Bagnell, "A reduction of imitation learning and structured prediction to no-regret online learning" (DAgger), AISTATS 2011.</li>
+  </ol>
+</section>
+
+<footer>
+  <p>Orrery user guide, written 28 October 2026 from the live grove fleet. Every figure is a frame
+  orrery drew from real data (<code>--frame</code>), every number measured. MIT, with the code.</p>
+</footer>
+</div>

@@ -303,14 +303,15 @@ pub fn draw(ui: &mut Ui, s: &mut Sessions) -> Option<nav::View> {
         let (title, screen) = r.cut_top(TITLE_H);
         ui.panel(title, t.panel);
         let status = tile.status.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let label = format!("{}  {}", tile.name, if tile.target == "-" { "this Mac" } else { &tile.target });
-        ui.label_in(title.x + 6, title.y + 3, title.w / 2, &label, &F8X13, if focused { t.ink } else { t.dim });
+        let label = if tile.target == "-" { "this Mac".to_string() } else { tile.name.clone() };
+        let lx = ui.label_in(title.x + 6, title.y + 3, title.w / 3, &label, &F8X13, if focused { t.ink } else { t.dim });
         let bw = 70;
         let br = rect(title.right() - bw - 2, title.y + 1, bw, TITLE_H - 2);
         if ui.button(br, if s.big == Some(i) { "Grid" } else { "Enlarge" }, true) {
             toggle_big = Some(i);
         }
-        ui.label_in(title.x + title.w / 2, title.y + 3, title.w / 2 - bw - 10, &status, &F8X13, t.dim);
+        let sx = lx.max(title.x + 6) + 16;
+        ui.label_in(sx, title.y + 3, br.x - sx - 8, &status, &F8X13, t.dim);
 
         // The characters the tile can show; the session is told, so a program
         // in it lays itself out to fit.
