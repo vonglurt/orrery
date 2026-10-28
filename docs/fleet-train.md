@@ -38,7 +38,11 @@ tiles say "off bus" until they are enrolled.
   cores, calber's GPU, what it is doing now in words, and the command doing
   it;
 - **the net being trained**: its three weight matrices as heat maps (green
-  positive, red negative, stronger is larger), the 47 scores split into the
+  positive, red negative, stronger is larger, with a legend), **click one to
+  enlarge it**: its axes say what the inputs and outputs are (the senses by
+  group, the units, the scores by head), a legend runs from its most negative
+  weight to its most positive, and the cell under the pointer reads out its
+  weight; Escape or Close goes back. Then the 47 scores split into the
   heads they choose for, how often it makes the scripted brain's choice on
   matches it never saw (against the first clone and against always the
   commonest choice), and its census against the official net.
@@ -49,7 +53,8 @@ It reads one document, printed by treadcore's `scripts/fleet-view.py` every
 5 s: each machine asked over ssh for its cores, load, memory and GPU; the
 newest recording run's lanes; the loop's state; the best net's weights; its
 results. `--frame out.ppm --frame-view training --frame-state doc.json`
-draws a saved document, for review.
+draws a saved document, for review (`ORRERY_FRAME_ZOOM=N` with a matrix
+enlarged). Text is drawn a pixel bolder than the font; `--thin` goes back.
 
 ## What it is
 

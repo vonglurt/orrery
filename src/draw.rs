@@ -86,6 +86,11 @@ pub fn mix(a: Rgb, b: Rgb, t: u8) -> Rgb {
 }
 
 /// Somewhere to draw: a borrowed pixel buffer and its shape.
+/// Text is drawn bold, a pixel wider a stroke, unless `--thin`. Paul found
+/// the one-pixel strokes hard to read on the Mac's screen (28 October 2026);
+/// the cells and their spacing are the same either way.
+pub static BOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 pub struct Canvas<'a> {
     px: &'a mut [u8],
     pub w: usize,
@@ -213,6 +218,7 @@ impl<'a> Canvas<'a> {
     }
 
     fn glyph(&mut self, x: i32, y: i32, ch: char, font: &Font, c: Rgb) {
+        let bold = BOLD.load(std::sync::atomic::Ordering::Relaxed);
         // Wholly off-canvas: the common case when a layout runs past an edge.
         if x + (font.width as i32) <= 0
             || y + (font.height as i32) <= 0
@@ -229,6 +235,12 @@ impl<'a> Canvas<'a> {
             for dx in 0..font.width {
                 if (bits >> dx) & 1 == 1 {
                     self.set(x + dx as i32, y + dy as i32, c);
+                    // Bold: each lit pixel once more to its right. The
+                    // advance is unchanged, so the spacing is the same text
+                    // and only the strokes are thicker.
+                    if bold {
+                        self.set(x + dx as i32 + 1, y + dy as i32, c);
+                    }
                 }
             }
         }

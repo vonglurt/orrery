@@ -23,6 +23,7 @@ use crate::draw::{mix, Rgb};
 use crate::font::{F10X20, F8X13};
 use crate::json;
 use crate::nav;
+use crate::surface::Sym;
 use crate::ui::{rect, Light, Rect, Ui};
 
 const HEADER_H: i32 = 32;
@@ -88,6 +89,15 @@ pub struct Net {
     pub parameters: i64,
     pub heads: Vec<(String, i64)>,
     pub layers: Vec<Layer>,
+    /// What the inputs and outputs are, by group: (name, first, last).
+    pub input_groups: Vec<(String, i64, i64)>,
+    pub output_groups: Vec<(String, i64, i64)>,
+}
+
+/// What the view remembers between frames: which matrix is enlarged.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct State {
+    pub zoom: Option<usize>,
 }
 
 /// (head, the net's agreement, bc1's, always-the-commonest's), percent.
@@ -201,6 +211,8 @@ impl Model {
                 sizes: arr(x, "sizes").iter().filter_map(|v| v.as_num()).map(|v| v as i64).collect(),
                 parameters: n(x, "parameters") as i64,
                 heads: arr(x, "heads").iter().map(|h| (s(h, "name"), n(h, "choices") as i64)).collect(),
+                input_groups: arr(x, "input_groups").iter().map(|g| (s(g, "name"), n(g, "from") as i64, n(g, "to") as i64)).collect(),
+                output_groups: arr(x, "output_groups").iter().map(|g| (s(g, "name"), n(g, "from") as i64, n(g, "to") as i64)).collect(),
                 layers: arr(x, "layers")
                     .iter()
                     .map(|l| Layer {
@@ -265,7 +277,7 @@ fn bar(ui: &mut Ui, r: Rect, frac: f64, c: Rgb) {
     ui.c.rect(r.x + 1, r.y + 1, w, r.h - 2, c);
 }
 
-pub fn draw(ui: &mut Ui, m: &Model) -> Option<nav::View> {
+pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
     let (w, h) = (ui.c.w as i32, ui.c.h as i32);
     let t = ui.t;
     ui.panel(rect(0, 0, w, h), t.base);
@@ -296,6 +308,16 @@ pub fn draw(ui: &mut Ui, m: &Model) -> Option<nav::View> {
 
     // ---- what is happening, in a sentence, and the three steps ------------
     let mut y = body.y;
+    // An enlarged matrix takes the whole body; Escape or Close puts it away.
+    if let (Some(i), Some(net)) = (st.zoom, &m.net) {
+        if i < net.layers.len() {
+            if ui.f.pressed(Sym::Escape) || draw_zoom(ui, body, net, i) {
+                st.zoom = None;
+            }
+            return go;
+        }
+        st.zoom = None;
+    }
     let (sentence, step) = headline(m);
     ui.label_in(body.x, y, body.w, &sentence, &F10X20, t.ink);
     y += F10X20.height as i32 + 8;
@@ -307,7 +329,9 @@ pub fn draw(ui: &mut Ui, m: &Model) -> Option<nav::View> {
     let left = rect(body.x, y, left_w, body.bottom() - y);
     let right = rect(body.x + left_w + 14, y, body.w - left_w - 14, body.bottom() - y);
     draw_machines(ui, left, m);
-    draw_net(ui, right, m);
+    if let Some(i) = draw_net(ui, right, m) {
+        st.zoom = Some(i);
+    }
     go
 }
 
@@ -430,12 +454,158 @@ fn draw_machines(ui: &mut Ui, at: Rect, m: &Model) {
     }
 }
 
-fn draw_net(ui: &mut Ui, at: Rect, m: &Model) {
+/// The colour of weight `v` in a layer whose largest weight is `max`: the
+/// sign picks the hue (up positive, alarm negative), the size its strength,
+/// on a square-root scale so that small weights still show.
+fn weight_colour(ui: &Ui, v: f64, max: f64) -> Rgb {
+    let t = ui.t;
+    let k = (v.abs() / max.max(1e-9)).sqrt().min(1.0);
+    mix(t.tile, if v >= 0.0 { t.up } else { t.alarm }, (k * 255.0) as u8)
+}
+
+/// A colour bar from -max through 0 to +max, `r` wide, labelled under it.
+fn legend(ui: &mut Ui, r: Rect, max: f64, vertical: bool) {
+    let t = ui.t;
+    let steps = if vertical { r.h } else { r.w };
+    for k in 0..steps {
+        // -1 .. 1 along the bar; the value is that squared, signed, times
+        // max: the inverse of weight_colour's scale.
+        let p = 2.0 * k as f64 / (steps - 1).max(1) as f64 - 1.0;
+        let p = if vertical { -p } else { p };
+        let c = weight_colour(ui, p.signum() * p * p * max, max);
+        if vertical {
+            ui.c.rect(r.x, r.y + k, r.w, 1, c);
+        } else {
+            ui.c.rect(r.x + k, r.y, 1, r.h, c);
+        }
+    }
+    ui.outline(r, t.line);
+    let marks = [(-1.0, format!("{:+.2}", -max)), (-0.5, format!("{:+.2}", -max / 4.0)), (0.0, "0".to_string()), (0.5, format!("{:+.2}", max / 4.0)), (1.0, format!("{:+.2}", max))];
+    for (p, label) in marks.iter() {
+        if vertical {
+            let y = r.y + (((1.0 - p) / 2.0) * (r.h - 1) as f64) as i32;
+            ui.c.rect(r.right(), y, 4, 1, t.dim);
+            ui.label(r.right() + 7, y - F8X13.height as i32 / 2, label, &F8X13, t.dim);
+        } else {
+            let x = r.x + (((p + 1.0) / 2.0) * (r.w - 1) as f64) as i32;
+            ui.c.rect(x, r.bottom(), 1, 4, t.dim);
+            let lw = F8X13.measure(label) as i32;
+            let lx = (x - lw / 2).clamp(r.x - 20, r.right() + 20 - lw);
+            ui.label(lx, r.bottom() + 5, label, &F8X13, t.dim);
+        }
+    }
+}
+
+const LAYER_NAMES: [&str; 3] = ["senses -> layer 1", "layer 1 -> layer 2", "layer 2 -> scores"];
+
+/// The groups along one side of layer `i`'s matrix: the senses' groups for
+/// the first layer's inputs, the heads for the last layer's outputs, and the
+/// hidden units otherwise (as a group per 16).
+fn axis_groups(net: &Net, i: usize, inputs: bool) -> Vec<(String, i64, i64)> {
+    let last = net.layers.len().saturating_sub(1);
+    if inputs && i == 0 && !net.input_groups.is_empty() {
+        return net.input_groups.clone();
+    }
+    if !inputs && i == last && !net.output_groups.is_empty() {
+        return net.output_groups.clone();
+    }
+    let n = net.layers.get(i).map(|l| if inputs { l.inputs } else { l.outputs }).unwrap_or(0);
+    (0..n).step_by(16).map(|a| (format!("{}-{}", a, (a + 15).min(n - 1)), a, (a + 15).min(n - 1))).collect()
+}
+
+/// One matrix, large: its axes labelled with what the inputs and outputs
+/// are, a legend, and the weight under the pointer. Returns true to close.
+fn draw_zoom(ui: &mut Ui, at: Rect, net: &Net, i: usize) -> bool {
+    let t = ui.t;
+    let l = &net.layers[i];
+    ui.panel(at, t.base);
+    let title = format!(
+        "{}: {} inputs across, {} outputs down; weights from {:+.2} to {:+.2}",
+        LAYER_NAMES.get(i).copied().unwrap_or("layer"),
+        l.inputs,
+        l.outputs,
+        -l.max_abs,
+        l.max_abs
+    );
+    ui.label_in(at.x, at.y, at.w - 110, &title, &F10X20, t.ink);
+    let close = rect(at.right() - 90, at.y, 90, 24);
+    let closed = ui.button(close, "Close", true);
+    let hint_y = at.y + F10X20.height as i32 + 6;
+
+    let rows = l.cells.len().max(1) as i32;
+    let cols = l.cells.first().map(|r| r.len()).unwrap_or(1).max(1) as i32;
+    let xg = axis_groups(net, i, true);
+    let yg = axis_groups(net, i, false);
+    let ml = yg.iter().map(|g| F8X13.measure(&g.0) as i32).max().unwrap_or(20) + 28;
+    let (mt, mb, mr) = (hint_y + F8X13.height as i32 + 10 - at.y, 52, 110);
+    let cell = ((at.w - ml - mr) / cols).min((at.h - mt - mb) / rows).max(1);
+    let (gw, gh) = (cell * cols, cell * rows);
+    let (gx, gy) = (at.x + ml, at.y + mt);
+
+    for (r, row) in l.cells.iter().enumerate() {
+        for (c, v) in row.iter().enumerate() {
+            ui.c.rect(gx + c as i32 * cell, gy + r as i32 * cell, cell, cell, weight_colour(ui, *v, l.max_abs));
+        }
+    }
+    ui.outline(rect(gx - 1, gy - 1, gw + 2, gh + 2), t.line);
+
+    // The x axis: a bracket a group, its name under it (shortened to fit).
+    for (k, (name, a, b)) in xg.iter().enumerate() {
+        let x0 = gx + *a as i32 * cell;
+        let x1 = gx + (*b as i32 + 1) * cell;
+        ui.c.rect(x0, gy + gh + 2, 1, 6, t.dim);
+        ui.c.hline(x0, gy + gh + 7, x1 - x0, t.dim);
+        let room = x1 - x0 - 2;
+        let lab = if F8X13.measure(name) as i32 <= room { name.clone() } else { name.chars().take(((room / 8).max(1)) as usize).collect() };
+        let ly = gy + gh + 10 + if k % 2 == 1 && room < 40 { F8X13.height as i32 } else { 0 };
+        ui.label(x0 + (room - F8X13.measure(&lab) as i32) / 2 + 1, ly, &lab, &F8X13, t.ink);
+    }
+    let xt = if i == 0 { "inputs: the 143 senses, by group" } else { "inputs: the units of the layer before" };
+    ui.label(gx, gy + gh + 38, xt, &F8X13, t.dim);
+
+    // The y axis: the same, down the left.
+    for (name, a, b) in yg.iter() {
+        let y0 = gy + *a as i32 * cell;
+        let y1 = gy + (*b as i32 + 1) * cell;
+        ui.c.rect(gx - 8, y0, 6, 1, t.dim);
+        ui.c.vline(gx - 7, y0, y1 - y0, t.dim);
+        let ty = y0 + (y1 - y0 - F8X13.height as i32) / 2;
+        if y1 - y0 >= F8X13.height as i32 - 2 {
+            ui.label_right(gx - 12, ty, name, &F8X13, t.ink);
+        }
+    }
+    let last = net.layers.len().saturating_sub(1);
+    let yt = if i == last { "outputs: the 47 scores, by head" } else { "outputs: this layer's 64 units" };
+    ui.label(at.x, hint_y, yt, &F8X13, t.dim);
+
+    // The legend, upright beside the matrix.
+    let lr = rect(gx + gw + 24, gy, 14, gh.min(260).max(80));
+    legend(ui, lr, l.max_abs, true);
+    ui.label(lr.x - 4, lr.bottom() + 8, "weight", &F8X13, t.dim);
+
+    // The weight under the pointer.
+    let (px, py) = ui.pointer();
+    let readout = if px >= gx && py >= gy && px < gx + gw && py < gy + gh {
+        let (c, r) = ((px - gx) / cell, (py - gy) / cell);
+        let v = l.cells.get(r as usize).and_then(|row| row.get(c as usize)).copied().unwrap_or(0.0);
+        ui.outline(rect(gx + c * cell - 1, gy + r * cell - 1, cell + 2, cell + 2), t.ink);
+        let gname = |g: &[(String, i64, i64)], k: i64| g.iter().find(|x| k >= x.1 && k <= x.2).map(|x| format!(" ({})", x.0)).unwrap_or_default();
+        format!("output {}{}, input {}{}: weight {:+.3}", r, gname(&yg, r as i64), c, gname(&xg, c as i64), v)
+    } else {
+        "point at a cell to read its weight; Escape or Close to go back".to_string()
+    };
+    ui.label_in(at.x + 260, hint_y, at.w - 260, &readout, &F8X13, t.ink);
+    closed
+}
+
+/// The net, small. Returns the matrix clicked, to enlarge.
+fn draw_net(ui: &mut Ui, at: Rect, m: &Model) -> Option<usize> {
     let t = ui.t;
     let Some(net) = &m.net else {
         ui.label_in(at.x, at.y, at.w, "No net to show yet.", &F8X13, t.dim);
-        return;
+        return None;
     };
+    let mut clicked = None;
     let title = format!("The net being trained: {}", net.name);
     ui.label_in(at.x, at.y, at.w, &title, &F8X13, t.ink);
     let mut y = at.y + F8X13.height as i32 + 4;
@@ -447,30 +617,50 @@ fn draw_net(ui: &mut Ui, at: Rect, m: &Model) {
     // The three weight matrices, as heat maps: a cell a group of weights,
     // its colour the sign (up for positive, alarm for negative), its strength
     // the size. Inputs run across, outputs down.
-    let labels = ["senses -> layer 1", "layer 1 -> layer 2", "layer 2 -> scores"];
+    let labels = LAYER_NAMES;
     let gap = 14;
     let side = ((at.w - gap * 2) / 3).min(150).max(60);
     let mut x = at.x;
     for (i, l) in net.layers.iter().enumerate() {
         let rows = l.cells.len().max(1) as i32;
         let cols = l.cells.first().map(|r| r.len()).unwrap_or(1).max(1) as i32;
-        let cell = (side / cols.max(rows)).max(1);
-        let (gw, gh) = (cell * cols, cell * rows);
+        // Each cell a weight when there is room for it, else the matrix drawn
+        // smaller than one pixel a weight: a box of `side`, sampled.
+        let (gw, gh) = if cols >= rows { (side, (side * rows / cols).max(8)) } else { ((side * cols / rows).max(8), side) };
         ui.label_in(x, y, side + 10, labels.get(i).copied().unwrap_or(""), &F8X13, t.dim);
         let gy = y + F8X13.height as i32 + 3;
-        for (r, row) in l.cells.iter().enumerate() {
-            for (c, v) in row.iter().enumerate() {
-                let k = (v.abs() / l.max_abs.max(1e-9)).sqrt().min(1.0);
-                let hue = if *v >= 0.0 { t.up } else { t.alarm };
-                ui.c.rect(x + c as i32 * cell, gy + r as i32 * cell, cell, cell, mix(t.tile, hue, (k * 255.0) as u8));
+        for py in 0..gh {
+            let r = (py * rows / gh) as usize;
+            for px in 0..gw {
+                let c = (px * cols / gw) as usize;
+                if let Some(v) = l.cells.get(r).and_then(|row| row.get(c)) {
+                    ui.c.rect(x + px, gy + py, 1, 1, weight_colour(ui, *v, l.max_abs));
+                }
             }
         }
-        ui.outline(rect(x - 1, gy - 1, gw + 2, gh + 2), t.line);
-        let dims = format!("{} x {}", l.inputs, l.outputs);
-        ui.label(x, gy + gh + 3, &dims, &F8X13, t.dim);
+        let boxr = rect(x - 1, gy - 1, gw + 2, gh + 2);
+        let hot = ui.is_hot(boxr);
+        ui.outline(boxr, if hot { t.ink } else { t.line });
+        if ui.button_hit(boxr) {
+            clicked = Some(i);
+        }
+        let dims = format!("{} x {}  {}", l.inputs, l.outputs, if hot { "click to enlarge" } else { "" });
+        ui.label_in(x, gy + gh + 3, side + gap, &dims, &F8X13, if hot { t.ink } else { t.dim });
         x += side + gap;
     }
-    y += F8X13.height as i32 + 3 + side + F8X13.height as i32 + 10;
+    let tallest = net.layers.iter().map(|l| {
+        let rows = l.cells.len().max(1) as i32;
+        let cols = l.cells.first().map(|r| r.len()).unwrap_or(1).max(1) as i32;
+        if cols >= rows { (side * rows / cols).max(8) } else { side }
+    }).max().unwrap_or(side);
+    y += F8X13.height as i32 + 3 + tallest + F8X13.height as i32 + 8;
+    // The legend for all three: the colour of a weight.
+    let lw = (at.w / 3).clamp(120, 220);
+    let max = net.layers.iter().map(|l| l.max_abs).fold(0.0, f64::max);
+    ui.label(at.x, y, "weight:", &F8X13, t.dim);
+    legend(ui, rect(at.x + 64, y + 2, lw, 9), max, false);
+    ui.label_in(at.x + 64 + lw + 26, y, at.right() - (at.x + 64 + lw + 26), "red takes away, green adds; click a matrix to enlarge it", &F8X13, t.dim);
+    y += 9 + F8X13.height as i32 + 16;
 
     // The 47 scores, split into the heads they belong to.
     let total: i64 = net.heads.iter().map(|(_, c)| *c).sum::<i64>().max(1);
@@ -532,6 +722,7 @@ fn draw_net(ui: &mut Ui, at: Rect, m: &Model) {
             }
         }
     }
+    clicked
 }
 
 #[cfg(test)]

@@ -186,6 +186,7 @@ fn main() {
                 i += 2
             }
             "--dark" => { dark = true; i += 1 }
+            "--thin" => { draw::BOLD.store(false, std::sync::atomic::Ordering::Relaxed); i += 1 }
             "--copal" => { copal = need(i, "--copal"); i += 2 }
             // The account on the node -- `copal-prep.sh`'s PI_USER. It is a
             // flag rather than a guess because the certificate names
@@ -634,10 +635,15 @@ fn write_frame(
             }
             Frame::Training { ref doc } => {
                 let m = training::Model::parse(doc, "");
+                // ORRERY_FRAME_ZOOM=N draws matrix N enlarged, the only way to
+                // review a picture that exists after a click.
+                let mut st = training::State {
+                    zoom: std::env::var("ORRERY_FRAME_ZOOM").ok().and_then(|v| v.parse().ok()),
+                };
                 let mut ui_state = ui::UiState::default();
                 ui_state.pointer = (-1, -1);
                 let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
-                training::draw(&mut u, &m);
+                training::draw(&mut u, &m, &mut st);
             }
             Frame::Files { ref nodes } => {
                 let here = std::env::current_dir().unwrap_or_else(|_| ".".into());
@@ -746,6 +752,7 @@ fn gui_loop<S: surface::Surface>(
         });
     }
     let jobs_source = jobs_cmd.to_string();
+    let mut training_state = training::State::default();
 
     // THE READ MODEL IS REFRESHED ON A SECOND THREAD, and it has to be.
     // `copal fleet state` may take forty-five seconds, and a console that
@@ -921,7 +928,7 @@ fn gui_loop<S: surface::Surface>(
                 (None, nav::View::Lab) => action = lab::draw(&mut u, &model, &mut lab_state),
                 (None, nav::View::Training) => {
                     let text = jobs_doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                    if let Some(v) = training::draw(&mut u, &training::Model::parse(&text, &jobs_source)) {
+                    if let Some(v) = training::draw(&mut u, &training::Model::parse(&text, &jobs_source), &mut training_state) {
                         action = Some(lab::Action::Go(v));
                     }
                 }
@@ -1309,6 +1316,8 @@ fn usage() {
     --operator TOKEN     enable the write verbs; without it the console is
                          the read-mostly face §12 describes
     --demo               serve the lab report's museum from a fixture
+    --thin               one-pixel strokes; text is drawn a pixel bolder
+                         by default
     --training-cmd CMD   what the Training view shows: a command that prints
                          what the fleet is training, run with sh every 5 s,
                          e.g. treadcore's \"python3 -I scripts/fleet-view.py\"
