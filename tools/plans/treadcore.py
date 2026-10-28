@@ -1659,6 +1659,13 @@ if __name__ == "__main__":
         p.judged(sys.argv[3])
     elif cmd == "sync":
         p.sync(sys.argv[3] if len(sys.argv) > 3 else None)
+        # A plan after every sync, whatever the queue's length: a keeper
+        # plans when its queue runs low or runs/ changes, and a prepared
+        # promotion or a finished rotation run would otherwise wait for the
+        # queue to drain. A file made and removed in runs/ is a change.
+        poke = os.path.join(p.q, "runs", ".sync-poke")
+        open(poke, "w").close()
+        os.remove(poke)
     elif cmd == "runs":
         print(json.dumps(p.runs_status(), indent=1))
     elif cmd == "approve":

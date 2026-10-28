@@ -581,6 +581,8 @@ def keeper(q):
     last_sync = 0.0
     # A run asked for (DIR/runs/) is planned at once, not at the low-water mark.
     runs_seen = 0.0
+    planned_at = 0.0
+    plan_s = cfg.get("plan_s", 300)
 
     try:
         while True:
@@ -642,8 +644,12 @@ def keeper(q):
                     q.event("drained")
                     alive.clear()
                     break
-            elif planner and (queued < low or runs_mtime(q) > runs_seen):
+            elif planner and (queued < low or runs_mtime(q) > runs_seen or time.time() - planned_at > plan_s):
+                # Also every plan_s (300 s) whatever the queue's length, so
+                # auto mode's promotions and the rotation never wait for it
+                # to drain.
                 runs_seen = runs_mtime(q)
+                planned_at = time.time()
                 try:
                     plan(max(2 * low - queued, low))
                 except (subprocess.TimeoutExpired, ValueError) as e:
