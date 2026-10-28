@@ -138,6 +138,22 @@ passed `-qq` to `apt-get`, which hides apt's own fetch lines. The script now
 installs the toolkit without `-qq` and says first that it is about 4 GB.
 The first run kept the old behaviour and finished normally.
 
+### After a reboot
+
+Paul rebooted calber (`ssh -t user@calber sudo reboot`); the console watched
+over the network and checked as `user`, without root:
+
+| | |
+| --- | --- |
+| down, back | down 17:41:37 (Mac's clock); SSH answering 17:42:02, 25 s later; booted 00:41:47 UTC |
+| kernel | 7.0.0-38-generic, as before |
+| driver | `nvidia` in use for the GPU; no `nouveau` module loaded |
+| `nvidia-smi` | `NVIDIA GeForce GTX 1080 Ti, 580.178.04, 11264 MiB, 35, P0` |
+| services | 0 failed units (the deferred restarts cleared) |
+| CUDA | `nvcc` on a new login's PATH (`/usr/local/cuda-12.9/bin/nvcc`); a program compiled for the card and run as `user`: `CUDA after reboot: NVIDIA GeForce GTX 1080 Ti, compute 6.1: correct` |
+
+The node keeps all of it across a reboot, with nothing to do by hand.
+
 ## VI. Discussion
 
 **Ubuntu's installer did half the work.** "Third-party" put in the right
