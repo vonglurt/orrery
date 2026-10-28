@@ -26,6 +26,7 @@ a keeper that keeps it all running, and two ways to stop.
     tools/fleet-queue.py DIR cancel RID      a run takes no more jobs; its queued
                                              jobs leave the queue
     tools/fleet-queue.py DIR approve RID     a prepared promotion becomes main
+    tools/fleet-queue.py DIR push-check      can this machine push the project's branch?
     tools/fleet-queue.py DIR status [--json]
     tools/fleet-queue.py DIR add JOB.json    put a job on the queue by hand
 
@@ -714,6 +715,10 @@ def main(argv):
         # Paul's word on a prepared promotion: the planner moves main to it.
         r = subprocess.run(["bash", "-c", "%s approve %s" % (q.config()["planner"], shlex.quote(argv[2]))], text=True)
         q.event("approved" if r.returncode == 0 else "approve failed", run=argv[2])
+        sys.exit(r.returncode)
+    elif cmd == "push-check":
+        # Can this coordinator push the project's branch (Approve is a push)?
+        r = subprocess.run(["bash", "-c", "%s push-check" % q.config()["planner"]], text=True)
         sys.exit(r.returncode)
     elif cmd == "cancel":
         rid = argv[2]

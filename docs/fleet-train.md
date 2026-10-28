@@ -99,7 +99,8 @@ shutdown, and how often to gather:
  "history": "build/ledger/fleet.tsv",
  "weights": {"seeds": 55, "secs": 900, "map": "all", "seed0": 20000000,
              "held_seeds": 400, "held_seed0": 60000000},
- "families": {"converge": ["build/fleet-sync/saskatchewan/converge/20261026-181011"], "queue": true, "batch": 8}}
+ "families": {"converge": ["build/fleet-sync/saskatchewan/converge/20261026-181011"], "queue": true, "batch": 8},
+ "push": {"remote": "origin", "branch": "main"}}
 ```
 
 - **`commit`.** `origin/main` is read again, after a fetch, at every
@@ -154,6 +155,29 @@ The same from a shell:
 Q=~/code/treadcore/build/queue/grove; F="python3 $HOME/code/orrery/tools/fleet-queue.py $Q"
 $F ensure; $F status; $F stop-adding; $F resume-adding; $F stop-now; $F sync; $F shutdown-now
 ```
+
+### Push permission: what a template must have
+
+A promotion reaches the project only by a push. A prepared promotion becomes
+the project's branch when Approve pushes it, as a fast-forward. So a template
+must say where it lands, and the coordinator must be able to push there:
+
+```json
+"push": {"remote": "origin", "branch": "main"}
+```
+
+- **Checking.** Orrery checks the permission with a dry-run push of the
+  remote's own head to that branch. That reaches the remote, proves the
+  key, and changes nothing. It runs at every sync, before every promotion
+  and before every approval, and the result is kept in `plan/push.json`.
+- **On screen.** The Runs page shows it: green "push: ok to URL BRANCH", or
+  red when it is not permitted.
+- **Without it,** no promotion starts.
+- **By hand:** `fleet-queue.py $Q push-check`.
+
+treadcore's: `ssh://git@ssh.github.com:443/treadcore/treadcore.git main`,
+from the Mac. A machine with no key that can push may still run the queue's
+censuses, but not promote.
 
 ### 3. Gathering: sync
 

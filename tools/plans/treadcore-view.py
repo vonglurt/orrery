@@ -155,6 +155,10 @@ def queue():
     q["name"] = os.path.basename(os.path.abspath(QDIR))
     q.update(ticker())
     q["runs"] = runs()
+    try:
+        q["push"] = json.load(open(os.path.join(QDIR, "plan", "push.json")))
+    except (OSError, ValueError):
+        q["push"] = None
     s = read(os.path.join(QDIR, "plan", "summary.json"))
     if s:
         try:

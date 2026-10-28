@@ -23,6 +23,12 @@ defaults); new jobs use the newest, and a job runs on the build it was
 planned with. Before building, a host fast-forwards its own checkout
 (~/code/treadcore) when it is clean and on main.
 
+PUSH PERMISSION. A template's plan.json names the remote and branch a
+promotion lands on ("push": {"remote": "origin", "branch": "main"}), and the
+coordinator must be able to push there: Approve is a push. It is checked by
+a dry-run push at each sync and before every promotion and approval
+(plan/push.json; `push-check`); without it no promotion starts.
+
 FOUR KINDS OF WORK share the one queue:
 
 - weights: the scripted brain's named weights (weights.rs), a census trial
@@ -669,7 +675,8 @@ class Plan:
         by = {}
         for r in csv.DictReader(open(fleet), delimiter="\t"):
             by[r["host"]] = by.get(r["host"], 0) + 1
-        summary = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "rows": sum(by.values()), "by_host": by, "hosts": lines}
+        ps = self.push_check() if not only else load(os.path.join(self.pd, "push.json"), {})
+        summary = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "rows": sum(by.values()), "by_host": by, "hosts": lines, "push": ps}
         save(os.path.join(out, "sync.json"), summary)
         print("sync: fleet.tsv %d rows (%s); read: %s" % (summary["rows"], ", ".join("%s %d" % kv for kv in sorted(by.items())), "; ".join(lines)))
 
@@ -1062,6 +1069,29 @@ class Plan:
         return jobs
 
 
+    # ---- push permission: what a template must have for Approve to mean anything ----
+    def push_target(self):
+        p = self.cfg.get("push") or {}
+        return p.get("remote", "origin"), p.get("branch", "main")
+
+    def push_check(self):
+        """Can this coordinator push the project's branch? A dry-run push of
+        the remote's own head to it: it reaches the remote, proves the
+        credentials, and changes nothing. Kept in plan/push.json."""
+        remote, branch = self.push_target()
+        url = run(["git", "-C", self.tc, "remote", "get-url", "--push", remote]).stdout.strip()
+        run(["git", "-C", self.tc, "fetch", "-q", remote], timeout=120)
+        head = run(["git", "-C", self.tc, "rev-parse", "%s/%s" % (remote, branch)]).stdout.strip()
+        if not url or not head:
+            ok, detail = False, "no remote %s with a branch %s in %s" % (remote, branch, self.tc)
+        else:
+            r = run(["git", "-C", self.tc, "push", "--dry-run", "--porcelain", remote, "%s:refs/heads/%s" % (head, branch)], timeout=120)
+            ok = r.returncode == 0
+            detail = "ok" if ok else (r.stderr.strip().splitlines() or ["refused"])[-1][:200]
+        st = {"ok": ok, "remote": remote, "url": url, "branch": branch, "detail": detail, "checked": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        save(os.path.join(self.pd, "push.json"), st)
+        return st
+
     # ---- promotion: a candidate prepared for treadcore, approved by Paul ---------
     def evidence(self):
         """Every candidate with its weights and evidence: the census, the two
@@ -1113,6 +1143,12 @@ class Plan:
         if st["status"] in ("prepared", "approved", "rejected"):
             return []
         if st["status"] == "new":
+            # Approve pushes the branch to the project's remote: without
+            # push permission a promotion could never land, so none starts.
+            ps = self.push_check()
+            if not ps["ok"]:
+                self.rsave(rid, {"status": "failed", "why": "no push permission to %s %s (%s): give this coordinator a key that can push, then ask again" % (ps["url"] or ps["remote"], ps["branch"], ps["detail"])})
+                return []
             name = p.get("candidate", "@strongest")
             if name == "@strongest":
                 name, ev = self.strongest()
@@ -1160,9 +1196,9 @@ class Plan:
                 "cargo test -q -p treadcore-brain --release -- --ignored every_family_holds_its_floor --nocapture > $O/families-full.txt 2>&1 || { grep -E '^family|panicked|under' $O/families-full.txt; echo 'a family fell under its floor: not committed'; exit 1; }\n"
                 "grep -E '^family' $O/families-full.txt > $O/families.txt; cat $O/families.txt\n"
                 "git add source/treadcore-brain/src/weights.rs && echo %s | base64 -d > $O/msg.txt && git commit -q -F $O/msg.txt\n"
-                "git push -q origin $B\n"
+                "git push -q %s $B\n"
                 "git rev-parse HEAD > $O/commit.txt; echo \"prepared $(cat $O/commit.txt) on $B\"\n"
-            ) % (self.home, rid, branch, out, b1, b2)
+            ) % (self.home, rid, branch, out, b1, b2, self.push_target()[0])
             st = {"status": "running", "job": jid, "candidate": name, "branch": branch, "changed": changed, "evidence": {k: ev.get(k) for k in ("census", "held", "families")}}
             self.rsave(rid, st)
             return [{"id": jid, "kind": "promote", "title": "promote %s: tests and families on a branch" % name, "needs": "host:" + host,
@@ -1187,10 +1223,12 @@ class Plan:
         st = self.rstate(rid)
         if st.get("status") != "prepared" or not st.get("commit"):
             raise SystemExit("%s is not a prepared promotion (%s)" % (rid, st.get("status")))
-        r = run(["git", "-C", self.tc, "push", "origin", "%s:refs/heads/main" % st["commit"]])
+        remote, branch = self.push_target()
+        r = run(["git", "-C", self.tc, "push", remote, "%s:refs/heads/%s" % (st["commit"], branch)])
         if r.returncode != 0:
             raise SystemExit("main has moved since it was prepared (a fast-forward only): ask for the promotion again\n" + r.stderr[-300:])
-        run(["git", "-C", self.tc, "fetch", "-q", "origin"])
+        run(["git", "-C", self.tc, "fetch", "-q", remote])
+        self.push_check()
         st["status"] = "approved"
         st["detail"] = "on main at %s" % st["commit"][:7]
         st["approved"] = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -1297,6 +1335,10 @@ if __name__ == "__main__":
         print(json.dumps(p.runs_status(), indent=1))
     elif cmd == "approve":
         p.approve(sys.argv[3])
+    elif cmd == "push-check":
+        st = p.push_check()
+        print("push to %s %s: %s" % (st["url"] or st["remote"], st["branch"], "ok" if st["ok"] else "NO: " + st["detail"]))
+        sys.exit(0 if st["ok"] else 1)
     elif cmd == "evidence":
         ev = p.evidence()
         for k, v in sorted(ev.items(), key=lambda kv: -(kv[1]["held_mean"] or -99)):

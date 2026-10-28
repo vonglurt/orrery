@@ -146,6 +146,9 @@ pub struct Queue {
     pub lead_hosts: Vec<(String, i64, i64)>,
     /// The runs a person asked for.
     pub runs: Vec<RunRow>,
+    /// Push permission to the project's branch: (ok, "url branch", detail).
+    /// Approve is a push, so a template must have it.
+    pub push: Option<(bool, String, String)>,
 }
 
 /// One coefficient one census moved: what, to what, how far from its
@@ -338,6 +341,9 @@ impl Model {
                         _ => None,
                     })
                     .collect(),
+                push: q.get("push").filter(|p| p.get("ok").is_some()).map(|p| {
+                    (p.get("ok").and_then(|b| b.as_bool()).unwrap_or(false), format!("{} {}", s(p, "url"), s(p, "branch")), s(p, "detail"))
+                }),
                 runs: arr(q, "runs")
                     .iter()
                     .map(|r| RunRow { id: s(r, "id"), kind: s(r, "kind"), status: s(r, "status"), detail: if s(r, "why").is_empty() { s(r, "detail") } else { s(r, "why") } })
@@ -680,6 +686,14 @@ fn draw_runs_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     let mut y = at.y;
     ui.label(rx, y, "Runs asked for", &F8X13, t.ink);
     y += lh;
+    // Approve pushes to the project's branch: say whether this machine can.
+    let (pushline, pc) = match &q.push {
+        Some((true, at, _)) => (format!("push: ok to {}", at), t.up),
+        Some((false, at, why)) => (format!("push: NOT PERMITTED to {} ({}); Approve cannot land", at, why), t.alarm),
+        None => ("push: not checked yet (Sync now checks it)".to_string(), t.dim),
+    };
+    ui.label_in(rx, y, rw, &pushline, &F8X13, pc);
+    y += lh + 2;
     if q.runs.is_empty() {
         ui.label_in(rx, y, rw, "none yet", &F8X13, t.dim);
     }

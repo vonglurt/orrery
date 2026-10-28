@@ -527,10 +527,18 @@ ol.refs li { margin-bottom: .45em; }
   every machine fast-forwards its own checkout and builds the commit once, in its own folder. A
   census plays the binary its machine built for that commit and never rebuilds (a shared build
   folder once handed a census another commit's binary; LR 117).</p>
-  <h3>Nothing is promoted by a machine</h3>
+  <h3>Nothing is promoted by a machine; Approve is a push</h3>
   <p>A candidate is prepared on a branch: its numbers written into <code>weights.rs</code>, the
   brain's tests and the families run, the commit pushed as the branch. It reaches main only when
-  a person presses Approve.</p>
+  a person presses Approve, and <b>Approve is itself a push</b>: orrery pushes the prepared commit
+  to the project's branch as a fast-forward, and every machine builds it at the next top-up.</p>
+  <p><b>So a template must have push permission.</b> Its <code>plan.json</code> names where a promotion
+  lands, <code>"push": {"remote": "origin", "branch": "main"}</code>, and the coordinator (the machine
+  running orrery) must hold a key that can push there. Orrery checks it with a dry-run push, which
+  reaches the remote and proves the key without changing anything: at every sync, before every
+  promotion and before every approval. The result is on the Runs page, green when it is permitted.
+  Without it no promotion starts, because one could never land. treadcore's is
+  <code>ssh://git@ssh.github.com:443/treadcore/treadcore.git main</code>, pushed from the Mac.</p>
 </section>
 
 <section id="interface">
@@ -632,7 +640,7 @@ ol.refs li { margin-bottom: .45em; }
 <section id="procedures">
   <p class="kicker">XIII · Operating procedures</p>
   <h2>Day to day</h2>
-  <div class="tablewrap"><table><caption>Table XIII · procedures</caption><thead><tr><th>to</th><th>do</th><th>applies to</th></tr></thead><tbody><tr><td>start</td><td>Start the queue, or <code>fleet-queue.py Q ensure</code></td><td><span class="use or">orchestration</span></td></tr><tr><td>watch</td><td>Training · Fleet; Found for results; Sessions for a machine's own state</td><td><span class="use or">orchestration</span></td></tr><tr><td>ask for a measurement</td><td>a button on Runs, or <code>new KIND k=v</code></td><td><span class="use tc">treadcore</span></td></tr><tr><td>add a machine</td><td>add it to <code>config.json</code>; it builds the newest commit and takes work</td><td><span class="use or">orchestration</span></td></tr><tr><td>set up a CUDA machine</td><td><code>sudo bash cuda-node.sh</code> on it: driver, CUDA 12.9, tmux, copal-tm</td><td><span class="use or">orchestration</span></td></tr><tr><td>take a machine out</td><td>delete it from <code>config.json</code>; its lane ends after its job</td><td><span class="use or">orchestration</span></td></tr><tr><td>bring a change into treadcore</td><td>promote, read the prepared branch, Approve</td><td><span class="use tc">treadcore</span></td></tr><tr><td>end the day</td><td>Stop adding, or Shut the fleet down</td><td><span class="use or">orchestration</span></td></tr><tr><td>resume in a new session</td><td><code>fleet-queue.py Q status</code> and <code>runs</code>; Start the queue if stopped</td><td><span class="use or">orchestration</span></td></tr></tbody></table></div>
+  <div class="tablewrap"><table><caption>Table XIII · procedures</caption><thead><tr><th>to</th><th>do</th><th>applies to</th></tr></thead><tbody><tr><td>start</td><td>Start the queue, or <code>fleet-queue.py Q ensure</code></td><td><span class="use or">orchestration</span></td></tr><tr><td>watch</td><td>Training · Fleet; Found for results; Sessions for a machine's own state</td><td><span class="use or">orchestration</span></td></tr><tr><td>ask for a measurement</td><td>a button on Runs, or <code>new KIND k=v</code></td><td><span class="use tc">treadcore</span></td></tr><tr><td>add a machine</td><td>add it to <code>config.json</code>; it builds the newest commit and takes work</td><td><span class="use or">orchestration</span></td></tr><tr><td>set up a CUDA machine</td><td><code>sudo bash cuda-node.sh</code> on it: driver, CUDA 12.9, tmux, copal-tm</td><td><span class="use or">orchestration</span></td></tr><tr><td>take a machine out</td><td>delete it from <code>config.json</code>; its lane ends after its job</td><td><span class="use or">orchestration</span></td></tr><tr><td>bring a change into treadcore</td><td>promote, read the prepared branch, Approve (a push to main)</td><td><span class="use tc">treadcore</span></td></tr><tr><td>check push permission</td><td>the push line on Runs, or <code>fleet-queue.py Q push-check</code></td><td><span class="use or">orchestration</span></td></tr><tr><td>end the day</td><td>Stop adding, or Shut the fleet down</td><td><span class="use or">orchestration</span></td></tr><tr><td>resume in a new session</td><td><code>fleet-queue.py Q status</code> and <code>runs</code>; Start the queue if stopped</td><td><span class="use or">orchestration</span></td></tr></tbody></table></div>
 </section>
 
 <section id="limits">
@@ -645,7 +653,8 @@ ol.refs li { margin-bottom: .45em; }
     <li>The tile coverage ledger and the reward-term weights are designs here, not yet code.</li>
     <li>The grove machines run no Copal fleet agent, so the Lab view sees them as off bus.</li>
     <li>Orrery's planner is treadcore's; a second project would add its own <code>tools/plans/NAME.py</code>
-    and view, and the engine and console would not change.</li>
+    and view, and the engine and console would not change. Its template must name a remote and a branch
+    the coordinator can push to, or nothing it finds can be approved.</li>
   </ul>
 </section>
 
