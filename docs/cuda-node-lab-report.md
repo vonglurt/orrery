@@ -1,6 +1,6 @@
 # A CUDA Node for the Fleet: a GTX 1080 Ti on Ubuntu 24.04, Set Up over SSH
 
-*Lab Report — IEEE Format · 27–28 October 2026 · interim: the toolkit install in progress*
+*Lab Report — IEEE Format · 27–28 October 2026*
 
 Copyright (c) 2026 Paul Richeson. MIT licensed, as orrery.
 
@@ -22,9 +22,10 @@ CUDA repository for Ubuntu 26.04 carries only CUDA 13, so the release is
 the 580-server driver with Ubuntu's prebuilt, signed kernel modules. The
 script keeps it, adds `nvidia-smi`, adds CUDA 12.9 from NVIDIA's repository
 at a priority too low for any of its driver packages to replace Ubuntu's,
-and ends with a CUDA program compiled for the card and run. Its first run
-looked stopped for five minutes; it was downloading at 7.7 MB/s with its
-progress hidden, and the script now shows it.
+and ends with a CUDA program compiled for the card and run: on the first
+run, the 1080 Ti reported compute 6.1, 28 SMs and 10.9 GB, and added a
+million floats correctly. That run looked stopped for five minutes while it
+downloaded at 7.7 MB/s with its progress hidden; the script now shows it.
 
 ## I. Objective
 
@@ -91,8 +92,34 @@ password). From its output:
 | checks | `GPU: NVIDIA Corporation GP102 [GeForce GTX 1080 Ti] [10de:1b06] (rev a1)` |
 | driver | `nvidia-utils-580-server 580.178.04-0ubuntu0.24.04.1` installed beside `nvidia-kernel-common-580-server` of the same version |
 | repository | `cuda-keyring installed` (sha256 matched) |
-| toolkit | **in progress** (below) |
-| check | TOOLKIT_RESULT |
+| toolkit | `cuda-toolkit-12-9` (12.9.2) installed; `/etc/profile.d/cuda.sh` and the library path written |
+| `nvidia-smi` | `NVIDIA GeForce GTX 1080 Ti, 580.178.04, 11264 MiB, 36` (°C) |
+| CUDA program | `device: NVIDIA GeForce GTX 1080 Ti, compute 6.1, 28 SMs, 10.9 GB`; `vector add of 1048576 floats: correct` |
+| end | `Done: calber is a CUDA node (driver 580-server, CUDA 12.9)` |
+
+`nvcc` warned while compiling: "Support for offline compilation for
+architectures prior to `sm_75` will be removed in a future release". That is
+NVIDIA's own statement of the boundary this report chose around: CUDA 12.9
+still compiles for Pascal (`sm_61`), and the toolkit after it will not.
+
+### What the toolkit brought with it
+
+From the run's full output (Paul's terminal) and the node:
+
+| | |
+| --- | --- |
+| time | started 00:30:28 UTC; the toolkit's directory written 00:38:40; done shortly after: about 8 to 9 minutes, most of it the download |
+| size | `/usr/local/cuda-12.9`: 7.3 GB on disk |
+| packages | about 215 new packages for `cuda-toolkit-12-9` (12.9.2): the compiler (`cuda-nvcc-12-9` 12.9.86), runtime and libraries (cuBLAS, cuFFT, cuRAND, cuSOLVER, cuSPARSE, NPP, nvJPEG, nvJitLink, cuFile), debugger and profilers |
+| pulled in from Ubuntu | `build-essential` (gcc and g++ 13, which `nvcc` calls), and, for NVIDIA's graphical profilers (Nsight Systems 2025.1.3, Nsight Compute 2025.2.1, the Visual Profiler), a Java 21 runtime, GTK 3, Mesa and X libraries |
+| links | `update-alternatives` points `/usr/local/cuda` and `/usr/local/cuda-12` at `/usr/local/cuda-12.9` |
+| from NVIDIA's repository besides the toolkit | `cuda-toolkit-config-common` 13.4.92, a shared configuration package (no driver), which the low pin allows because only that repository has it |
+| left for later | `needrestart` deferred restarts of `dbus`, `systemd-logind` and `unattended-upgrades`, and named the login session as running outdated binaries; a reboot or a new login clears it |
+
+A headless compute node has no use for the graphical profilers or their Java
+and desktop libraries. A lighter set is possible (`cuda-compiler-12-9`,
+`cuda-libraries-dev-12-9`, `cuda-command-line-tools-12-9`), at the cost of
+those tools; open item 4.
 
 ### The toolkit step that looked stopped
 
@@ -109,7 +136,7 @@ Paul could find no activity. Read over SSH:
 It was downloading, at a steady rate, with nothing on the screen: the script
 passed `-qq` to `apt-get`, which hides apt's own fetch lines. The script now
 installs the toolkit without `-qq` and says first that it is about 4 GB.
-The run in progress keeps the old behaviour.
+The first run kept the old behaviour and finished normally.
 
 ## VI. Discussion
 
@@ -135,7 +162,10 @@ script.
 
 ## VII. Open items
 
-1. The toolkit's install and the CUDA check (TOOLKIT_RESULT).
+1. Done: the toolkit and the CUDA check (V).
 2. Running treadcore's GPU work on it (Burn, `AI-BRAINZ-PLAN.md` section 8)
    is a step of its own.
 3. A non-Copal node in `copal fleet state`: how, if at all.
+4. A headless toolkit set in `cuda-node.sh` (compiler, libraries, command-line
+   tools), without the graphical profilers and their Java and desktop
+   packages: smaller and faster, for nodes nobody sits at.
