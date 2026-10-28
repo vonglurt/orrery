@@ -102,11 +102,13 @@ pub struct Net {
 pub struct State {
     pub zoom: Option<usize>,
     pub operator: bool,
-    pub ctl: Option<&'static str>,
+    pub ctl: Option<String>,
     /// What the last control said, shown until the next.
     pub said: String,
     /// Shut the fleet down was pressed once: the next press does it.
     pub arm_shutdown: bool,
+    /// Frames drawn: the ticker's clock.
+    pub frames: u64,
 }
 
 /// One machine's lane in the queue.
@@ -136,6 +138,37 @@ pub struct Queue {
     pub shutdown: String,
     /// The last sync: when, and how many censuses the fleet's ledger holds.
     pub synced: String,
+    /// The newest coefficients the fleet changed, oldest first.
+    pub ticker: Vec<Tick>,
+    /// Found Improvement, by variable: (name, times).
+    pub lead_vars: Vec<(String, i64)>,
+    /// By machine: (name, censuses read, improvements found).
+    pub lead_hosts: Vec<(String, i64, i64)>,
+    /// The runs a person asked for.
+    pub runs: Vec<RunRow>,
+}
+
+/// One coefficient one census moved: what, to what, how far from its
+/// default, what the census read, and which machine read it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Tick {
+    pub t: String,
+    pub kind: String,
+    pub var: String,
+    pub value: Option<f64>,
+    pub offset: Option<f64>,
+    pub d: Option<f64>,
+    pub se: Option<f64>,
+    pub host: String,
+    pub improved: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RunRow {
+    pub id: String,
+    pub kind: String,
+    pub status: String,
+    pub detail: String,
 }
 
 /// (head, the net's agreement, bc1's, always-the-commonest's), percent.
@@ -273,6 +306,42 @@ impl Model {
                     .map(|j| (s(j, "kind"), s(j, "title"), j.get("ok").and_then(|b| b.as_bool()).unwrap_or(false)))
                     .collect(),
                 shutdown: q.get("shutdown").map(|r| s(r, "summary")).unwrap_or_default(),
+                ticker: arr(q, "ticker")
+                    .iter()
+                    .map(|e| Tick {
+                        t: s(e, "t"),
+                        kind: s(e, "kind"),
+                        var: s(e, "var"),
+                        value: e.get("value").and_then(|x| x.as_num()),
+                        offset: e.get("offset").and_then(|x| x.as_num()),
+                        d: e.get("d").and_then(|x| x.as_num()),
+                        se: e.get("se").and_then(|x| x.as_num()),
+                        host: s(e, "host"),
+                        improved: e.get("improved").and_then(|b| b.as_bool()).unwrap_or(false),
+                    })
+                    .collect(),
+                lead_vars: arr(q, "lead_vars")
+                    .iter()
+                    .filter_map(|p| match p {
+                        json::Value::Arr(v) if v.len() == 2 => Some((v[0].as_str().unwrap_or("").to_string(), v[1].as_num().unwrap_or(0.0) as i64)),
+                        _ => None,
+                    })
+                    .collect(),
+                lead_hosts: arr(q, "lead_hosts")
+                    .iter()
+                    .filter_map(|p| match p {
+                        json::Value::Arr(v) if v.len() == 3 => Some((
+                            v[0].as_str().unwrap_or("").to_string(),
+                            v[1].as_num().unwrap_or(0.0) as i64,
+                            v[2].as_num().unwrap_or(0.0) as i64,
+                        )),
+                        _ => None,
+                    })
+                    .collect(),
+                runs: arr(q, "runs")
+                    .iter()
+                    .map(|r| RunRow { id: s(r, "id"), kind: s(r, "kind"), status: s(r, "status"), detail: if s(r, "why").is_empty() { s(r, "detail") } else { s(r, "why") } })
+                    .collect(),
                 synced: q
                     .get("sync")
                     .filter(|x| x.get("t").is_some())
@@ -405,7 +474,13 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
     ui.label_in(body.x, y, body.w, &sentence, &F10X20, t.ink);
     y += F10X20.height as i32 + 8;
     if let Some(q) = &m.queue {
-        y = draw_queue(ui, rect(body.x, y, body.w, 64), q, st) + 10;
+        y = draw_queue(ui, rect(body.x, y, body.w, 64), q, st) + 6;
+        st.frames += 1;
+        draw_ticker(ui, rect(body.x, y, body.w, 18), q, st.frames);
+        y += 18 + 8;
+        let ph = 128;
+        draw_panels(ui, rect(body.x, y, body.w, ph), q, st);
+        y += ph + 10;
     } else {
         draw_steps(ui, rect(body.x, y, body.w, 34), m, step);
         y += 34 + 10;
@@ -420,6 +495,175 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
         st.zoom = Some(i);
     }
     go
+}
+
+/// The slim ticker: the newest coefficients the fleet changed, scrolling
+/// right to left, each with its new value, its offset from the default, the
+/// census's difference and the machine that read it. A Found Improvement
+/// (past two errors, no map below) is lit.
+fn draw_ticker(ui: &mut Ui, at: Rect, q: &Queue, frames: u64) {
+    let t = ui.t;
+    ui.panel(at, t.tile);
+    ui.outline(at, t.line);
+    let head = "newest coefficients ";
+    let hw = F8X13.measure(head) as i32 + 8;
+    ui.panel(rect(at.x, at.y, hw, at.h), t.panel);
+    ui.label(at.x + 4, at.y + 3, head, &F8X13, t.dim);
+    if q.ticker.is_empty() {
+        ui.label_in(at.x + hw + 6, at.y + 3, at.w - hw - 8, "none yet: each finished census adds the coefficients it moved", &F8X13, t.dim);
+        return;
+    }
+    // Newest first, then round again.
+    let items: Vec<(String, bool)> = q
+        .ticker
+        .iter()
+        .rev()
+        .map(|k| {
+            let v = k.value.map(|v| format!("{:.4}", v)).unwrap_or_default();
+            let off = k.offset.map(|o| format!(" ({:+.3})", o)).unwrap_or_default();
+            let d = match (k.d, k.se) {
+                (Some(d), Some(e)) => format!(" {:+.2}+/-{:.2}", d, e),
+                _ => String::new(),
+            };
+            (format!("{}{} = {}{}{} {}{}", if k.improved { "FOUND " } else { "" }, k.var, v, off, d, k.host, if k.improved { " *" } else { "" }), k.improved)
+        })
+        .collect();
+    let gap = 28;
+    let total: i32 = items.iter().map(|(s, _)| F8X13.measure(s) as i32 + gap).sum::<i32>().max(1);
+    let lane = rect(at.x + hw, at.y, at.w - hw, at.h);
+    let shift = ((frames * 3) % total as u64) as i32;
+    let mut x = lane.x + 6 - shift;
+    // Two passes so the loop is seamless.
+    for _ in 0..2 {
+        for (text, found) in &items {
+            let tw = F8X13.measure(text) as i32;
+            if x + tw > lane.x && x < lane.right() {
+                let vis_x = x.max(lane.x + 2);
+                let skip = ((vis_x - x) / F8X13.width as i32).max(0) as usize;
+                let shown: String = text.chars().skip(skip).collect();
+                ui.label_in(vis_x, at.y + 3, lane.right() - vis_x - 2, &shown, &F8X13, if *found { t.up } else { t.ink });
+            }
+            x += tw + gap;
+            if x > lane.right() {
+                break;
+            }
+        }
+        if x > lane.right() {
+            break;
+        }
+    }
+}
+
+/// Three small panels: the runs a person asked for (and, for an operator,
+/// a button for each kind of run and to cancel one), and the two Found
+/// Improvement leaderboards.
+fn draw_panels(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
+    let t = ui.t;
+    let gap = 10;
+    let rw = at.w * 46 / 100;
+    let lw = (at.w - rw - gap * 2) / 2;
+    let runs = rect(at.x, at.y, rw, at.h);
+    let lv = rect(runs.right() + gap, at.y, lw, at.h);
+    let lh = rect(lv.right() + gap, at.y, lw, at.h);
+    for r in [runs, lv, lh] {
+        ui.panel(r, t.tile);
+        ui.outline(r, t.line);
+    }
+    let lh13 = F8X13.height as i32 + 2;
+
+    // Runs.
+    ui.label(runs.x + 6, runs.y + 4, "Runs asked for", &F8X13, t.ink);
+    let mut y = runs.y + 4 + lh13;
+    if st.operator {
+        // A button a kind of run, with the defaults its make target had.
+        const KINDS: [(&str, &str); 13] = [
+            ("census", "new census trial=@best name=best"),
+            ("parts", "new parts"),
+            ("switches", "new switches"),
+            ("roundrobin", "new roundrobin"),
+            ("spsa", "new spsa"),
+            ("tune", "new tune"),
+            ("train", "new train"),
+            ("gauntlet", "new gauntlet"),
+            ("clips", "new clips host=mac"),
+            ("school", "new school"),
+            ("record", "new record"),
+            ("families", "new families"),
+            ("promote", "new promote candidate=@strongest"),
+        ];
+        let mut x = runs.x + 6;
+        for (label, verb) in KINDS.iter() {
+            let bw = F8X13.measure(label) as i32 + 12;
+            if x + bw > runs.right() - 4 {
+                x = runs.x + 6;
+                y += 22;
+            }
+            if ui.button(rect(x, y, bw, 20), label, true) {
+                st.ctl = Some(verb.to_string());
+            }
+            x += bw + 4;
+        }
+        y += 24;
+    }
+    let shown = ((runs.bottom() - y - 2) / lh13).max(0) as usize;
+    let start = q.runs.len().saturating_sub(shown);
+    for r in &q.runs[start..] {
+        let line = format!("{} {} {} {}", r.id, r.kind, r.status, r.detail);
+        let live = r.status == "running" || r.status == "new";
+        // A prepared promotion waits on Paul: Approve moves main to it.
+        let ready = r.kind == "promote" && r.status == "prepared";
+        let cw = if st.operator && (live || ready) { 64 } else { 0 };
+        let colour = if r.status == "failed" { t.alarm } else if ready { t.up } else if live { t.ink } else { t.dim };
+        ui.label_in(runs.x + 6, y, runs.w - 12 - cw, &line, &F8X13, colour);
+        if cw > 0 && live && ui.button(rect(runs.right() - cw - 4, y - 1, cw, lh13), "Cancel", true) {
+            st.ctl = Some(format!("cancel {}", r.id));
+        }
+        if cw > 0 && ready && ui.button(rect(runs.right() - cw - 4, y - 1, cw, lh13), "Approve", true) {
+            st.ctl = Some(format!("approve {}", r.id));
+        }
+        y += lh13;
+    }
+    if q.runs.is_empty() {
+        ui.label_in(runs.x + 6, y, runs.w - 12, if st.operator { "none: a button above asks for one" } else { "none" }, &F8X13, t.dim);
+    }
+
+    // Found Improvement: by variable.
+    ui.label(lv.x + 6, lv.y + 4, "Found Improvement: variables", &F8X13, t.ink);
+    let mut y = lv.y + 4 + lh13;
+    if q.lead_vars.is_empty() {
+        ui.label_in(lv.x + 6, y, lv.w - 12, "none yet", &F8X13, t.dim);
+    }
+    let top = q.lead_vars.first().map(|v| v.1).unwrap_or(1).max(1);
+    for (name, n) in q.lead_vars.iter() {
+        if y + lh13 > lv.bottom() {
+            break;
+        }
+        let bar = ((lv.w - 150) as i64 * n / top) as i32;
+        ui.c.rect(lv.x + 140, y + 2, bar.max(2), lh13 - 4, t.up);
+        ui.label_in(lv.x + 6, y, 130, name, &F8X13, t.ink);
+        ui.label(lv.x + 144 + bar, y, &n.to_string(), &F8X13, t.dim);
+        y += lh13;
+    }
+
+    // By machine: censuses read, and improvements found.
+    ui.label(lh.x + 6, lh.y + 4, "Found Improvement: machines", &F8X13, t.ink);
+    let mut y = lh.y + 4 + lh13;
+    if q.lead_hosts.is_empty() {
+        ui.label_in(lh.x + 6, y, lh.w - 12, "none yet", &F8X13, t.dim);
+    }
+    let top = q.lead_hosts.iter().map(|h| h.1).max().unwrap_or(1).max(1);
+    for (name, read, found) in q.lead_hosts.iter() {
+        if y + lh13 > lh.bottom() {
+            break;
+        }
+        let bar = ((lh.w - 200) as i64 * read / top) as i32;
+        let fbar = ((lh.w - 200) as i64 * found / top) as i32;
+        ui.c.rect(lh.x + 110, y + 2, bar.max(2), lh13 - 4, t.line);
+        ui.c.rect(lh.x + 110, y + 2, fbar, lh13 - 4, t.up);
+        ui.label_in(lh.x + 6, y, 100, name, &F8X13, t.ink);
+        ui.label(lh.x + 114 + bar, y, &format!("{} found, {} read", found, read), &F8X13, t.dim);
+        y += lh13;
+    }
 }
 
 /// The sentence on top, and which step (0 record, 1 train, 2 judge) is lit.
@@ -533,30 +777,30 @@ fn draw_queue(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) -> i32 {
         let running_keeper = q.state != "stopped";
         let mut x = bx;
         if running_keeper && q.adding && ui.button(rect(x, at.y, 130, 26), "Stop adding", true) {
-            st.ctl = Some("stop-adding");
+            st.ctl = Some("stop-adding".into());
         }
         if running_keeper && !q.adding && ui.button(rect(x, at.y, 130, 26), "Resume adding", true) {
-            st.ctl = Some("resume-adding");
+            st.ctl = Some("resume-adding".into());
         }
         if !running_keeper && ui.button(rect(x, at.y, 130, 26), "Start the queue", true) {
-            st.ctl = Some("ensure");
+            st.ctl = Some("ensure".into());
         }
         x += 140;
         if running_keeper && ui.button(rect(x, at.y, 280, 26), "Collect results and stop now", true) {
-            st.ctl = Some("stop-now");
+            st.ctl = Some("stop-now".into());
         }
         // The second row: gather now, and shut the fleet down. Shutdown
         // powers machines off, so it asks twice: the first press arms it.
         let y2 = at.y + 32;
         if ui.button(rect(bx, y2, 130, 26), "Sync now", true) {
-            st.ctl = Some("sync");
+            st.ctl = Some("sync".into());
         }
         let shutting = q.state.starts_with("shutting down") || q.state == "shut down";
         if running_keeper && !shutting {
             let label = if st.arm_shutdown { "Press again: shut the fleet down" } else { "Shut the fleet down" };
             if ui.button(rect(bx + 140, y2, 280, 26), label, true) {
                 if st.arm_shutdown {
-                    st.ctl = Some("shutdown-now");
+                    st.ctl = Some("shutdown-now".into());
                     st.arm_shutdown = false;
                 } else {
                     st.arm_shutdown = true;
@@ -816,6 +1060,7 @@ fn draw_net(ui: &mut Ui, at: Rect, m: &Model) -> Option<usize> {
     let gap = 14;
     let side = ((at.w - gap * 2) / 3).min(150).max(60);
     let mut x = at.x;
+    let mut hover: Option<String> = None;
     for (i, l) in net.layers.iter().enumerate() {
         let rows = l.cells.len().max(1) as i32;
         let cols = l.cells.first().map(|r| r.len()).unwrap_or(1).max(1) as i32;
@@ -836,6 +1081,20 @@ fn draw_net(ui: &mut Ui, at: Rect, m: &Model) -> Option<usize> {
         let boxr = rect(x - 1, gy - 1, gw + 2, gh + 2);
         let hot = ui.is_hot(boxr);
         ui.outline(boxr, if hot { t.ink } else { t.line });
+        // The cell under the pointer: what its row and column are, and its
+        // weight, read without enlarging.
+        let (px, py) = ui.pointer();
+        if px >= x && py >= gy && px < x + gw && py < gy + gh {
+            let (r, c) = (((py - gy) * rows / gh) as usize, ((px - x) * cols / gw) as usize);
+            if let Some(v) = l.cells.get(r).and_then(|row| row.get(c)) {
+                let xg = axis_groups(net, i, true);
+                let yg = axis_groups(net, i, false);
+                let gname = |g: &[(String, i64, i64)], k: i64| g.iter().find(|x| k >= x.1 && k <= x.2).map(|x| format!(" {}", x.0)).unwrap_or_default();
+                hover = Some(format!("{}: output {}{}, input {}{}: weight {:+.3}", labels.get(i).copied().unwrap_or(""), r, gname(&yg, r as i64), c, gname(&xg, c as i64), v));
+                ui.c.rect(px - 3, py, 7, 1, t.ink);
+                ui.c.rect(px, py - 3, 1, 7, t.ink);
+            }
+        }
         if ui.button_hit(boxr) {
             clicked = Some(i);
         }
@@ -854,7 +1113,8 @@ fn draw_net(ui: &mut Ui, at: Rect, m: &Model) -> Option<usize> {
     let max = net.layers.iter().map(|l| l.max_abs).fold(0.0, f64::max);
     ui.label(at.x, y, "weight:", &F8X13, t.dim);
     legend(ui, rect(at.x + 64, y + 2, lw, 9), max, false);
-    ui.label_in(at.x + 64 + lw + 26, y, at.right() - (at.x + 64 + lw + 26), "red takes away, green adds; click a matrix to enlarge it", &F8X13, t.dim);
+    let hint = hover.unwrap_or_else(|| "red takes away, green adds; point at a cell to read it, click to enlarge".to_string());
+    ui.label_in(at.x + 64 + lw + 26, y, at.right() - (at.x + 64 + lw + 26), &hint, &F8X13, t.dim);
     y += 9 + F8X13.height as i32 + 16;
 
     // The 47 scores, split into the heads they belong to.

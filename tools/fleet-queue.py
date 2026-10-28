@@ -17,6 +17,15 @@ a keeper that keeps it all running, and two ways to stop.
                                              ledger come back, then it powers off;
                                              a report says who finished what
     tools/fleet-queue.py DIR sync            gather every machine's record now
+    tools/fleet-queue.py DIR new KIND [k=v ...]
+                                             ask the planner for a run (a census,
+                                             parts, switches, spsa, train ...):
+                                             DIR/runs/RID.json; the planner turns
+                                             it into jobs at its next top-up
+    tools/fleet-queue.py DIR runs            the runs asked for, and where each is
+    tools/fleet-queue.py DIR cancel RID      a run takes no more jobs; its queued
+                                             jobs leave the queue
+    tools/fleet-queue.py DIR approve RID     a prepared promotion becomes main
     tools/fleet-queue.py DIR status [--json]
     tools/fleet-queue.py DIR add JOB.json    put a job on the queue by hand
 
@@ -119,8 +128,10 @@ class Queue:
             raise ValueError("a job needs an id of letters, digits, - and _")
         if job["id"] in self.known():
             return False
-        # The file name orders the queue: the planner's order, kept.
-        seq = int(now() * 1000)
+        # The file name orders the queue: the planner's order, kept. A job
+        # marked "priority": "high" (what a person asked for) goes ahead of
+        # the standing work: its number is set back a few years.
+        seq = int(now() * 1000) - (10 ** 11 if job.get("priority") == "high" else 0)
         tmp = self.p("queue", ".%s.tmp" % job["id"])
         with open(tmp, "w") as f:
             json.dump(job, f, indent=1)
@@ -475,6 +486,8 @@ def keeper(q):
 
     sync_s = cfg.get("sync_s", 1800)
     last_sync = 0.0
+    # A run asked for (DIR/runs/) is planned at once, not at the low-water mark.
+    runs_seen = 0.0
 
     try:
         while True:
@@ -531,9 +544,10 @@ def keeper(q):
                     q.event("drained")
                     alive.clear()
                     break
-            elif planner and queued < low:
+            elif planner and (queued < low or runs_mtime(q) > runs_seen):
+                runs_seen = runs_mtime(q)
                 try:
-                    plan(2 * low - queued)
+                    plan(max(2 * low - queued, low))
                 except (subprocess.TimeoutExpired, ValueError) as e:
                     q.event("planner failed", detail=str(e))
             time.sleep(poll)
@@ -543,6 +557,13 @@ def keeper(q):
             os.remove(q.p("keeper.pid"))
         except OSError:
             pass
+
+
+def runs_mtime(q):
+    try:
+        return os.stat(q.p("runs")).st_mtime
+    except OSError:
+        return 0.0
 
 
 def shutdown_report(q):
@@ -675,6 +696,38 @@ def main(argv):
         cfg = q.config()
         r = subprocess.run(["bash", "-c", "%s sync" % cfg["planner"]], text=True)
         sys.exit(r.returncode)
+    elif cmd == "new":
+        if len(argv) < 3:
+            sys.exit("new KIND [key=value ...]")
+        os.makedirs(q.p("runs"), exist_ok=True)
+        n = 1 + max([int(f[1:5]) for f in os.listdir(q.p("runs")) if f[:1] == "r" and f[1:5].isdigit()] or [0])
+        rid = "r%04d" % n
+        params = dict(kv.split("=", 1) for kv in argv[3:] if "=" in kv)
+        with open(q.p("runs", rid + ".json"), "w") as f:
+            json.dump({"kind": argv[2], "params": params, "asked": time.strftime("%Y-%m-%dT%H:%M:%S")}, f, indent=1)
+        q.event("run asked", run=rid, kind=argv[2], params=params)
+        print("%s: %s asked; the planner turns it into jobs at its next top-up" % (rid, argv[2]))
+    elif cmd == "runs":
+        r = subprocess.run(["bash", "-c", "%s runs" % q.config()["planner"]], text=True)
+        sys.exit(r.returncode)
+    elif cmd == "approve":
+        # Paul's word on a prepared promotion: the planner moves main to it.
+        r = subprocess.run(["bash", "-c", "%s approve %s" % (q.config()["planner"], shlex.quote(argv[2]))], text=True)
+        q.event("approved" if r.returncode == 0 else "approve failed", run=argv[2])
+        sys.exit(r.returncode)
+    elif cmd == "cancel":
+        rid = argv[2]
+        try:
+            os.rename(q.p("runs", rid + ".json"), q.p("runs", rid + ".cancelled"))
+        except OSError:
+            sys.exit("no run %s" % rid)
+        n = 0
+        for j in q.jobs_in("queue"):
+            if j["id"].startswith(rid + "-"):
+                os.rename(j["_file"], q.p("stopped", os.path.basename(j["_file"])))
+                n += 1
+        q.event("run cancelled", run=rid, dropped=n)
+        print("%s cancelled: %d queued jobs left the queue; running ones finish" % (rid, n))
     elif cmd == "status":
         s = status(q)
         if "--json" in argv:

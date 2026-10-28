@@ -25,6 +25,9 @@ pub enum View {
     /// What the fleet is training, and which machines are doing it
     /// (training.rs).
     Training,
+    /// The machines' terminals in a grid, each a resumable tmux session
+    /// (sessions.rs).
+    Sessions,
 }
 
 impl Default for View {
@@ -39,11 +42,12 @@ impl View {
             View::Lab => "Lab",
             View::Media => "Media",
             View::Training => "Training",
+            View::Sessions => "Sessions",
         }
     }
 
     /// Every view, in the order the strip draws them.
-    pub const ALL: &'static [View] = &[View::Lab, View::Media, View::Training];
+    pub const ALL: &'static [View] = &[View::Lab, View::Media, View::Training, View::Sessions];
 }
 
 /// Draw the strip and report a click on a view that is not the current one.

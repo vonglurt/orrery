@@ -59,6 +59,7 @@ mod rfb;
 #[allow(dead_code)]
 mod screen;
 mod seat;
+mod sessions;
 #[allow(dead_code)]
 mod sftp;
 #[allow(dead_code)]
@@ -288,6 +289,8 @@ fn main() {
             }
         } else if frame_view == "media" {
             Frame::Media { copal: copal.clone(), demo }
+        } else if frame_view == "sessions" {
+            Frame::Sessions { fleet: fleet_name.clone() }
         } else if frame_view == "training" || frame_view == "jobs" {
             // A saved document, or the training command's answer.
             let doc = if !frame_state.is_empty() {
@@ -486,6 +489,9 @@ enum Frame {
     Files { nodes: Vec<String> },
     /// What the fleet is training, against a document (training.rs).
     Training { doc: String },
+    /// The machines' sessions, live: joined, then drawn after a wait
+    /// (ORRERY_FRAME_WAIT seconds, 8 by default) for their screens to arrive.
+    Sessions { fleet: String },
 }
 
 /// THE SPECIMEN, which is phase 2's deliverable and its own regression test.
@@ -666,6 +672,22 @@ fn write_frame(
                 let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
                 training::draw(&mut u, &m, &mut st);
             }
+            Frame::Sessions { ref fleet } => {
+                let mut sv = sessions::Sessions::open(fleet);
+                let wait = std::env::var("ORRERY_FRAME_WAIT").ok().and_then(|v| v.parse().ok()).unwrap_or(8u64);
+                // A first draw tells each session its size; then wait for the screens.
+                {
+                    let mut ui_state = ui::UiState::default();
+                    ui_state.pointer = (-1, -1);
+                    let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
+                    sessions::draw(&mut u, &mut sv);
+                }
+                std::thread::sleep(std::time::Duration::from_secs(wait));
+                let mut ui_state = ui::UiState::default();
+                ui_state.pointer = (-1, -1);
+                let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
+                sessions::draw(&mut u, &mut sv);
+            }
             Frame::Files { ref nodes } => {
                 let here = std::env::current_dir().unwrap_or_else(|_| ".".into());
                 let mut f = files::Files::specimen(nodes.clone(), here);
@@ -781,6 +803,7 @@ fn gui_loop<S: surface::Surface>(
         ..training::State::default()
     };
     let queue_said: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let mut sessions_view: Option<sessions::Sessions> = None;
 
     // THE READ MODEL IS REFRESHED ON A SECOND THREAD, and it has to be.
     // `copal fleet state` may take forty-five seconds, and a console that
@@ -979,6 +1002,14 @@ fn gui_loop<S: surface::Surface>(
                 }
                 (None, nav::View::Media) => {
                     if let Some(v) = media::draw(&mut u, &mut media) {
+                        action = Some(lab::Action::Go(v));
+                    }
+                }
+                (None, nav::View::Sessions) => {
+                    // The machines are joined when the view is first shown,
+                    // not at start: a console that never opens it opens no ssh.
+                    let s = sessions_view.get_or_insert_with(|| sessions::Sessions::open(&fleet.fleet));
+                    if let Some(v) = sessions::draw(&mut u, s) {
                         action = Some(lab::Action::Go(v));
                     }
                 }

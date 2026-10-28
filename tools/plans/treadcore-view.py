@@ -105,6 +105,45 @@ def machines(run, qd=None):
     return out
 
 
+def ticker(n=40):
+    """The newest coefficients the fleet changed, a line a variable, and the
+    two Found Improvement leaderboards: by variable, and by machine."""
+    out, by_var, by_host = [], {}, {}
+    try:
+        lines = open(os.path.join(QDIR, "plan", "ticker.jsonl")).read().splitlines()
+    except OSError:
+        lines = []
+    for l in lines:
+        try:
+            e = json.loads(l)
+        except ValueError:
+            continue
+        host = e.get("host") or "?"
+        h = by_host.setdefault(host, [0, 0])
+        h[0] += 1
+        if e.get("improved"):
+            h[1] += 1
+        for var, v in (e.get("vars") or {}).items():
+            value, offset = (v.get("value"), v.get("offset")) if isinstance(v, dict) else (v, None)
+            if e.get("improved"):
+                by_var[var] = by_var.get(var, 0) + 1
+            out.append({"t": e.get("t", "")[11:19], "kind": e.get("kind", ""), "var": var, "value": value, "offset": offset,
+                        "d": e.get("d"), "se": e.get("se"), "host": host, "improved": bool(e.get("improved"))})
+    return {"ticker": out[-n:],
+            "lead_vars": sorted(by_var.items(), key=lambda kv: -kv[1])[:10],
+            "lead_hosts": sorted(([k, v[0], v[1]] for k, v in by_host.items()), key=lambda r: (-r[2], -r[1]))}
+
+
+def runs():
+    """The runs a person asked for, and where each is (the planner's `runs`)."""
+    try:
+        cfg = json.load(open(os.path.join(QDIR, "config.json")))
+        out = subprocess.run(["bash", "-c", cfg["planner"] + " runs"], capture_output=True, text=True, timeout=30).stdout
+        return json.loads(out)
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        return []
+
+
 def queue():
     if not QDIR or not os.path.exists(os.path.join(QDIR, "config.json")):
         return None
@@ -114,6 +153,8 @@ def queue():
     except (subprocess.TimeoutExpired, ValueError):
         return None
     q["name"] = os.path.basename(os.path.abspath(QDIR))
+    q.update(ticker())
+    q["runs"] = runs()
     s = read(os.path.join(QDIR, "plan", "summary.json"))
     if s:
         try:

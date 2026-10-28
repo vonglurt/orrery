@@ -49,6 +49,9 @@ gathered by hand.
 """
 import base64
 import csv
+import math
+import random
+import shlex
 import glob
 import json
 import os
@@ -81,6 +84,29 @@ def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
+def env_file(p):
+    out = {}
+    try:
+        for l in open(p):
+            if "=" in l:
+                k, v = l.rstrip("\n").split("=", 1)
+                out[k] = v.strip("'\"")
+    except OSError:
+        pass
+    return out
+
+
+def parse_weights(text):
+    """name = number lines of a weights file (caps and comments left out)."""
+    out = {}
+    for l in text.splitlines():
+        l = l.split("#")[0].strip()
+        m = re.match(r"^([a-z_][a-z0-9_]*)\s*=\s*([-+0-9.eE]+)$", l)
+        if m:
+            out[m.group(1)] = float(m.group(2))
+    return out
+
+
 def write_tsv(path, rows):
     if not rows:
         return False
@@ -108,9 +134,13 @@ class Plan:
             self.state.setdefault(k, v)
         self.home = "fleet/q-%s" % self.name  # under each host's $HOME
         self._sha = None
+        self._rsaves = {}
 
     def keep(self):
         save(os.path.join(self.pd, "state.json"), self.state)
+        for rid, st in self._rsaves.items():
+            save(os.path.join(self.rdir(rid), "state.json"), st)
+        self._rsaves = {}
 
     def ids(self, *subs):
         out = set()
@@ -611,10 +641,580 @@ class Plan:
         save(os.path.join(out, "sync.json"), summary)
         print("sync: fleet.tsv %d rows (%s); read: %s" % (summary["rows"], ", ".join("%s %d" % kv for kv in sorted(by.items())), "; ".join(lines)))
 
+
+    # ---- runs: what a person asks for (fleet-queue.py Q new KIND k=v ...) -------------
+    # A run is a request in Q/runs/RID.json ({"kind", "params"}); its state and
+    # results are in plan/runs/RID/. The kinds are what treadcore's make
+    # targets were (LR 114):
+    #   census       one census: trial against base (TRIAL=, BASE= files or text)
+    #   parts        each part off (scripts/parts.sh LIST=1), a census each
+    #   switches     each switch alone (scripts/switches.sh LIST=1), a census each
+    #   roundrobin   every ordered pair of profiles (scripts/roundrobin.sh LIST=1)
+    #   spsa         SPSA over named weights, a step a census (scripts/spsa.sh's rule)
+    #   tune         a (1 + lambda) evolution strategy, a child a census (tune.sh's rule)
+    #   train, gauntlet, clips, school   the learning harness, one job on one host
+    #   record       recordings for behaviour cloning, a shard a job, to the store
+    #   families     every candidate's families read again
+    #   promote      a candidate written into weights.rs on a branch, tested,
+    #                its families read, committed and pushed as the branch;
+    #                main moves only when Paul approves (approve RID)
+    # Every census is one machine's; a run's censuses go to whichever is free.
+    CENSUS_KINDS = ("census", "parts", "switches", "roundrobin")
+    HARNESS_KINDS = ("train", "gauntlet", "clips", "school")
+
+    def runs(self):
+        out = []
+        for f in sorted(glob.glob(os.path.join(self.q, "runs", "*.json"))):
+            r = load(f)
+            if r and r.get("kind"):
+                r["id"] = os.path.basename(f)[:-5]
+                out.append(r)
+        return out
+
+    def rdir(self, rid):
+        d = os.path.join(self.pd, "runs", rid)
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def rstate(self, rid):
+        if rid in self._rsaves:
+            return self._rsaves[rid]
+        return load(os.path.join(self.rdir(rid), "state.json"), {"status": "new"})
+
+    def rsave(self, rid, st):
+        # Kept until the top-up succeeds (keep()): a run is never marked as
+        # having jobs the keeper did not receive.
+        self._rsaves[rid] = st
+
+    def text(self, v):
+        """A weights parameter: a file under treadcore, or the text itself ("a = 1;b = 2")."""
+        if not v:
+            return ""
+        if v == "@best":
+            # The newest best the queue's search suggested.
+            gens = sorted(glob.glob(os.path.join(self.pd, "gen*", "best.weights")), key=lambda f: int(re.search(r"gen(\d+)", f).group(1)))
+            return open(gens[-1]).read() if gens else ""
+        p = os.path.join(self.tc, v) if not os.path.isabs(v) else v
+        if os.path.isfile(p):
+            return open(p).read()
+        return v.replace(";", "\n") + "\n"
+
+    def census_job(self, jid, title, trial, base, seeds, seed0, secs, mp, respawns=3, net=None, host=None):
+        b1 = base64.b64encode(trial.encode()).decode()
+        b2 = base64.b64encode(base.encode()).decode()
+        net_env = ""
+        send = []
+        if net:
+            send = [{"src": net, "dst": "~/%s/trials/%s.net" % (self.home, jid)}]
+            net_env = "CENSUS_NET=$Q/trials/%s.net " % jid
+        cmd = (
+            "set -e; [ -f ~/.cargo/env ] && . ~/.cargo/env; export PATH=$HOME/.cargo/bin:$PATH\n"
+            "Q=~/%s; C=%s; mkdir -p $Q/trials\n"
+            "echo %s | base64 -d > $Q/trials/%s.trial; echo %s | base64 -d > $Q/trials/%s.base\n"
+            "cd $C/wt && export CARGO_TARGET_DIR=$HOME/fleet/target\n"
+            "%s%s%sSEEDS=%d SEED0=%d SECS=%s MAP=%s RESPAWNS=%s JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) scripts/census.sh 2>&1 | tail -3\n"
+            "d=$(ls -td build/census/*/ | head -1); s=$(basename $d)\n"
+            "rm -rf $Q/out/%s; mkdir -p $Q/out/%s/$s; cp $d/*.txt $d/*.env $d/*.weights $d/g-*.log $Q/out/%s/$s/ 2>/dev/null; rm -rf $d\n"
+        ) % (self.home, self.cdir(), b1, jid, b2, jid,
+             "TRIAL=$Q/trials/%s.trial " % jid if trial.strip() else "",
+             "BASE=$Q/trials/%s.base " % jid if base.strip() else "", net_env,
+             int(seeds), int(seed0), secs, mp, respawns, jid, jid, jid)
+        j = {"id": jid, "kind": "census", "title": title, "needs": "host:" + host if host else "cpu",
+             "after_host": self.after_host(), "cmd": cmd, "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 12 * 3600}
+        if send:
+            j["send"] = send
+        return j
+
+    def job_census(self, jid):
+        """(d, se, verdict line, host) of a fetched census job, or None."""
+        ds = glob.glob(os.path.join(self.q, "results", jid, self.home, "out", jid, "*", "pooled.txt"))
+        if not ds:
+            return None
+        lines = open(ds[0]).read().splitlines()
+        for l in lines:
+            m = re.match(r"^every map\s+([-+][\d.]+) \+/- ([\d.]+) over\s+(\d+) seeds \((.*)\)", l)
+            if m:
+                envs = env_file(os.path.join(os.path.dirname(ds[0]), "run.env"))
+                host = self.qcfg.get("aliases", {}).get(envs.get("HOST", ""), envs.get("HOST", ""))
+                return float(m.group(1)), float(m.group(2)), m.group(4), host
+        return None
+
+    def list_items(self, kind, params):
+        """The censuses of parts, switches or roundrobin, from treadcore's LIST=1."""
+        env = dict(os.environ, LIST="1")
+        for k, v in params.items():
+            env[k.upper()] = str(v)
+        r = run(["bash", os.path.join(self.tc, "scripts", "%s.sh" % kind)], env=env, cwd=self.tc, timeout=60)
+        if r.returncode != 0:
+            raise SystemExit("%s LIST=1: %s" % (kind, r.stderr[-300:]))
+        settings, items = {}, []
+        for l in r.stdout.splitlines():
+            if l.startswith("#settings"):
+                settings = dict(kv.split("=", 1) for kv in l.split()[1:])
+            elif l.strip():
+                name, trial, base = (l.split("\t") + ["", ""])[:3]
+                items.append({"name": name, "trial": trial.replace(";", "\n") + "\n", "base": base.replace(";", "\n") + "\n"})
+        return settings, items
+
+    def run_jobs(self, n):
+        jobs = []
+        if not self.cpu_ready():
+            return jobs
+        for r in self.runs():
+            if len(jobs) >= n:
+                break
+            rid, kind, p = r["id"], r["kind"], r.get("params", {})
+            st = self.rstate(rid)
+            if st["status"] in ("done", "failed", "stopped", "approved", "rejected"):
+                continue
+            if kind in self.CENSUS_KINDS:
+                jobs += self.census_run(rid, kind, p, st)
+            elif kind == "spsa":
+                jobs += self.spsa_run(rid, p, st)
+            elif kind == "tune":
+                jobs += self.tune_run(rid, p, st)
+            elif kind in self.HARNESS_KINDS:
+                jobs += self.harness_run(rid, kind, p, st)
+            elif kind == "record":
+                jobs += self.record_run(rid, p, st, n - len(jobs))
+            elif kind == "promote":
+                jobs += self.promote_run(rid, p, st)
+            elif kind == "families":
+                # Every candidate's families read again (after a promotion,
+                # say): the next top-ups queue them all.
+                self.state["families_queued"] = []
+                self.rsave(rid, {"status": "done", "detail": "every candidate queued again"})
+            else:
+                st.update({"status": "failed", "why": "no such kind %s" % kind})
+                self.rsave(rid, st)
+        # What a person asked for goes ahead of the standing search.
+        for j in jobs:
+            j["priority"] = "high"
+        return jobs
+
+    # census, parts, switches, roundrobin: a census an item, then a table.
+    def census_run(self, rid, kind, p, st):
+        if st["status"] == "new":
+            if kind == "census":
+                settings = {"SEEDS": p.get("seeds", 55), "SEED0": p.get("seed0", 0), "SECS": p.get("secs", 900),
+                            "MAP": p.get("map", "all"), "RESPAWNS": p.get("respawns", 3)}
+                items = [{"name": p.get("name", "trial"), "trial": self.text(p.get("trial", "")), "base": self.text(p.get("base", ""))}]
+            else:
+                settings, items = self.list_items(kind, {k: v for k, v in p.items() if k.upper() in
+                                                         ("PARTS", "SWITCHES", "PROFILES", "SEEDS", "SEED0", "SECS", "MAP", "RESPAWNS")})
+            st = {"status": "running", "settings": settings, "items": [], "commit": self.short()}
+            jobs = []
+            for i, it in enumerate(items):
+                jid = "%s-%02d" % (rid, i)
+                st["items"].append({"name": it["name"], "job": jid})
+                jobs.append(self.census_job(jid, "%s %s: %s" % (kind, rid, it["name"]), it["trial"], it["base"],
+                                            settings["SEEDS"], settings.get("SEED0", 0), settings["SECS"], settings["MAP"],
+                                            settings.get("RESPAWNS", 3), net=p.get("net")))
+            self.rsave(rid, st)
+            return jobs
+        # Running: the table, when every census is back.
+        done = self.ids("done")
+        gone = self.ids("failed", "stopped")
+        rows, left = [], 0
+        for it in st["items"]:
+            c = self.job_census(it["job"]) if it["job"] in done else None
+            if c:
+                rows.append("%-28s %+8.2f %6.2f  %-22s %s" % (it["name"], c[0], c[1], c[2], c[3]))
+            elif it["job"] in gone:
+                rows.append("%-28s %8s %6s  %s" % (it["name"], "?", "?", "failed"))
+            else:
+                left += 1
+        if left == 0:
+            with open(os.path.join(self.rdir(rid), "table.txt"), "w") as f:
+                f.write("%s %s at %s: %s\n" % (kind, rid, st.get("commit"), " ".join("%s=%s" % kv for kv in st["settings"].items())))
+                f.write("%-28s %8s %6s  %-22s %s\n" % ("name", "diff", "se", "verdict", "machine"))
+                f.write("\n".join(rows) + "\n")
+            st["status"] = "done"
+            self.rsave(rid, st)
+        return []
+
+    # SPSA (scripts/spsa.sh's rule, a step a census on one machine).
+    def theta0(self, p):
+        if p.get("start"):
+            return parse_weights(self.text(p["start"]))
+        return parse_weights(open(self.defaults()).read())
+
+    def spsa_run(self, rid, p, st):
+        tune = p.get("tune", "dodge_horizon dodge_margin dodge_clear").replace(",", " ").split()
+        steps, seeds, seed0 = int(p.get("steps", 8)), int(p.get("seeds", 12)), int(p.get("seed0", 1000))
+        A, C, maxstep, bound = float(p.get("a", 0.6)), float(p.get("c", 0.4)), float(p.get("maxstep", 0.5)), float(p.get("bound", 2))
+        if st["status"] == "new":
+            if not p.get("start") and not self.defaults():
+                return []  # the census host has not built this commit yet
+            th = self.theta0(p)
+            for w in tune:
+                if w not in th or th[w] <= 0:
+                    st.update({"status": "failed", "why": "%s is not a positive weight" % w})
+                    self.rsave(rid, st)
+                    return []
+            st = {"status": "running", "k": 0, "theta": {w: th[w] for w in tune}, "start": {w: th[w] for w in tune},
+                  "steps": [], "pending": None, "commit": self.short()}
+        if st.get("pending"):
+            pend = st["pending"]
+            if pend["job"] in self.ids("failed", "stopped"):
+                st.update({"status": "failed", "why": "step %d's census failed" % pend["k"]})
+                self.rsave(rid, st)
+                return []
+            c = self.job_census(pend["job"]) if pend["job"] in self.ids("done") else None
+            if not c:
+                return []
+            d, se = c[0], c[1]
+            k, ak, ck = pend["k"], pend["ak"], pend["ck"]
+            row = {"k": k, "d": d, "se": se, "host": c[3]}
+            for w in tune:
+                sgn = pend["sign"][w]
+                step = ak * d / (2 * ck * sgn)
+                step = max(-maxstep, min(maxstep, step))
+                x = st["theta"][w] * math.exp(step)
+                if bound > 0:
+                    x = max(st["start"][w] / bound, min(st["start"][w] * bound, x))
+                st["theta"][w] = round(x, 4)
+                row[w] = st["theta"][w]
+            st["steps"].append(row)
+            st["pending"] = None
+            self.tick({"kind": "spsa", "run": rid, "step": k, "d": d, "se": se, "host": c[3],
+                       "vars": {w: st["theta"][w] for w in tune}, "improved": False})
+            write_tsv(os.path.join(self.rdir(rid), "steps.tsv"), st["steps"])
+            with open(os.path.join(self.rdir(rid), "theta.weights"), "w") as f:
+                f.write("".join("%s = %s\n" % kv for kv in st["theta"].items()))
+        if st["k"] >= steps:
+            st["status"] = "done"
+            self.rsave(rid, st)
+            return []
+        k = st["k"] + 1
+        ak, ck = A / (k + 1) ** 0.602, C / k ** 0.101
+        rnd = random.Random("%s-%d" % (rid, k))
+        sign = {w: rnd.choice((-1, 1)) for w in tune}
+        plus = "".join("%s = %.4f\n" % (w, st["theta"][w] * math.exp(ck * sign[w])) for w in tune)
+        minus = "".join("%s = %.4f\n" % (w, st["theta"][w] * math.exp(-ck * sign[w])) for w in tune)
+        base_extra = self.text(p.get("start", "")) if p.get("start") else ""
+        jid = "%s-k%02d" % (rid, k)
+        st["k"] = k
+        st["pending"] = {"k": k, "ak": ak, "ck": ck, "sign": sign, "job": jid}
+        self.rsave(rid, st)
+        return [self.census_job(jid, "spsa %s: step %d of %d" % (rid, k, steps), base_extra + plus, base_extra + minus,
+                                seeds, seed0 + (k - 1) * seeds, p.get("secs", 900), p.get("map", "maps/naval.map"))]
+
+    # A (1 + lambda) evolution strategy (scripts/tune.sh's rule), a
+    # generation's children side by side, the best replacing the parent
+    # only by beating it.
+    def tune_run(self, rid, p, st):
+        default_tune = "w_near w_wounded w_finish w_focus w_overkill w_in_range w_threat w_stick engage_odds press_odds w_exposure w_flank k_long c_boat swap_gap"
+        tune = p.get("tune", default_tune).replace(",", " ").split()
+        gens, lam, sigma = int(p.get("generations", 5)), int(p.get("lambda", 4)), float(p.get("sigma", 0.15))
+        seeds, secs, mp = int(p.get("seeds", 2)), p.get("secs", 900), p.get("map", "all")
+        done, gone = self.ids("done"), self.ids("failed", "stopped")
+        if st["status"] == "new":
+            if not p.get("start") and not self.defaults():
+                return []  # the census host has not built this commit yet
+            th = self.theta0(p)
+            parent = {w: th[w] for w in tune if w in th}
+            jid = "%s-g00-parent" % rid
+            st = {"status": "running", "g": 0, "parent": parent, "fit": None, "children": [jid], "kids": {jid: parent},
+                  "log": [], "commit": self.short()}
+            self.rsave(rid, st)
+            return [self.census_job(jid, "tune %s: the parent" % rid, "".join("%s = %s\n" % kv for kv in parent.items()), "",
+                                    seeds, 0, secs, mp)]
+        if any(j in gone for j in st["children"]):
+            st.update({"status": "failed", "why": "a child's census failed"})
+            self.rsave(rid, st)
+            return []
+        if not all(j in done for j in st["children"]):
+            return []
+        fits = {j: self.job_census(j) for j in st["children"]}
+        for j, c in fits.items():
+            if c is None:
+                continue
+            better = st["fit"] is not None and c[0] > st["fit"]
+            if st["fit"] is None:
+                st["fit"] = c[0]
+            elif better:
+                st["parent"], st["fit"] = st["kids"][j], c[0]
+            st["log"].append({"g": st["g"], "job": j, "fit": c[0], "se": c[1], "host": c[3], "parent": better})
+            if st["g"] > 0:
+                self.tick({"kind": "tune", "run": rid, "job": j, "d": c[0], "se": c[1], "host": c[3],
+                           "vars": st["kids"][j], "improved": better})
+        write_tsv(os.path.join(self.rdir(rid), "children.tsv"), st["log"])
+        with open(os.path.join(self.rdir(rid), "best.weights"), "w") as f:
+            f.write("# tune %s: fitness %s\n" % (rid, st["fit"]) + "".join("%s = %s\n" % kv for kv in st["parent"].items()))
+        if st["g"] >= gens:
+            st["status"] = "done"
+            self.rsave(rid, st)
+            return []
+        st["g"] += 1
+        rnd = random.Random("%s-%d" % (rid, st["g"]))
+        st["children"], st["kids"] = [], {}
+        jobs = []
+        for c in range(1, lam + 1):
+            kid = {w: round(v * math.exp(sigma * rnd.gauss(0, 1)), 4) for w, v in st["parent"].items()}
+            jid = "%s-g%02d-c%d" % (rid, st["g"], c)
+            st["children"].append(jid)
+            st["kids"][jid] = kid
+            jobs.append(self.census_job(jid, "tune %s: generation %d child %d" % (rid, st["g"], c),
+                                        "".join("%s = %s\n" % kv for kv in kid.items()), "", seeds, 0, secs, mp))
+        self.rsave(rid, st)
+        return jobs
+
+    # The learning harness (train, gauntlet, clips, school): one job.
+    def harness_run(self, rid, kind, p, st):
+        if st["status"] != "new":
+            jid = st["job"]
+            if jid in self.ids("done"):
+                st["status"] = "done"
+            elif jid in self.ids("failed", "stopped"):
+                st["status"] = "failed"
+            self.rsave(rid, st)
+            return []
+        jid = "%s-%s" % (rid, kind)
+        env = {"train": "", "gauntlet": "GAUNTLET=1 ", "clips": "CLIPS=1 ", "school": "SCHOOL=1 "}[kind]
+        send = []
+        for k in ("start", "check"):
+            if p.get(k):
+                src = os.path.join(self.tc, p[k]) if not os.path.isabs(p[k]) else p[k]
+                send.append({"src": src, "dst": "~/%s/trials/%s.%s.bin" % (self.home, jid, k)})
+                env += "%s=$Q/trials/%s.%s.bin " % (k.upper(), jid, k)
+        # The harness's own names, where the Makefile renamed them.
+        alias = {"gauntlet": {"runs": "GAUNTLET_RUNS"}}.get(kind, {})
+        for k, v in p.items():
+            if k not in ("start", "check", "host"):
+                env += "%s=%s " % (alias.get(k, k.upper()), shlex.quote(str(v)))
+        cmd = (
+            "set -e; [ -f ~/.cargo/env ] && . ~/.cargo/env; export PATH=$HOME/.cargo/bin:$PATH\n"
+            "Q=~/%s; C=%s; O=$Q/out/%s; mkdir -p $O $Q/trials\n"
+            "cd $C/wt && %sOUT=$O THREADS=${THREADS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu)} "
+            "$C/census-bin --ignored learn::harness::train --nocapture 2>&1 | tee $O/harness.log | tail -20\n"
+        ) % (self.home, self.cdir(), jid, env)
+        job = {"id": jid, "kind": kind, "title": "%s %s" % (kind, rid), "needs": "host:%s" % p["host"] if p.get("host") else "cpu",
+               "after_host": self.after_host(), "cmd": cmd, "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 72 * 3600}
+        if send:
+            job["send"] = send
+        self.rsave(rid, {"status": "running", "job": jid, "commit": self.short()})
+        return [job]
+
+    # Recordings for behaviour cloning: a shard a job, streamed to the store.
+    def record_run(self, rid, p, st, n):
+        name = p.get("run", rid)
+        seed0, count, per, secs = int(p.get("seed0", 9100000)), int(p.get("count", 120)), int(p.get("per", 12)), int(p.get("secs", 600))
+        store = p.get("store", next((h["target"] for h in self.hosts if "gpu" in h.get("caps", [])), None))
+        if not store:
+            st.update({"status": "failed", "why": "no store: name one (store=user@host) or a gpu host"})
+            self.rsave(rid, st)
+            return []
+        if st["status"] == "new":
+            st = {"status": "running", "next": seed0, "end": seed0 + count, "jobs": [], "commit": self.short(), "store": store, "run": name}
+        jobs = []
+        while st["next"] < st["end"] and len(jobs) < max(1, n):
+            s0, k = st["next"], min(per, st["end"] - st["next"])
+            jid = "%s-%d" % (rid, s0)
+            cmd = (
+                "set -e -o pipefail; Q=~/%s; C=%s; mkdir -p $Q/out\n"
+                "cd $C/wt && RECORD=$Q/out/%s.bin SEED0=%d SEEDS=%d SECS=%d THREADS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) "
+                "$C/census-bin --ignored learn::harness::train --nocapture 2>&1 | tail -4\n"
+                "[ $(wc -c < $Q/out/%s.bin) -gt 16 ]\n"
+            ) % (self.home, self.cdir(), jid, s0, k, secs, jid)
+            jobs.append({"id": jid, "kind": "record", "title": "record %s: seeds %d to %d" % (name, s0, s0 + k - 1),
+                         "needs": "cpu", "after_host": self.after_host(), "cmd": cmd, "timeout_s": 12 * 3600,
+                         "deliver": {"src": "~/%s/out/%s.bin" % (self.home, jid), "to": store, "dst": "~/fleet/%s/shards/%d.bin" % (name, s0)}})
+            st["jobs"].append(jid)
+            st["next"] += k
+        done, gone = self.ids("done"), self.ids("failed", "stopped")
+        if st["next"] >= st["end"] and all(j in done or j in gone for j in st["jobs"]) and not jobs:
+            st["status"] = "done"
+            st["failed"] = [j for j in st["jobs"] if j in gone]
+        self.rsave(rid, st)
+        return jobs
+
+
+    # ---- promotion: a candidate prepared for treadcore, approved by Paul ---------
+    def evidence(self):
+        """Every candidate with its weights and evidence: the census, the two
+        held-out reads, and its families. {name: {...}}."""
+        fam = load(os.path.join(self.pd, "families.json"), {})
+        out = {}
+        # This queue's: trials that passed both held-out reads.
+        for jid, ds in self.held_pairs().items():
+            if len(ds) == 2 and all(self.passes(d) for d in ds):
+                tw = glob.glob(os.path.join(self.q, "results", jid, self.home, "out", jid, "*", "trial.weights"))
+                c = self.job_census(jid)
+                held = [self.job_census(d.rstrip("/").split(os.sep)[-2]) for d in ds]
+                if tw and c and all(held):
+                    out["%s/%s" % (self.name, jid)] = {"weights": open(tw[0]).read(), "census": c[:2], "held": [h[:2] for h in held]}
+        # Each converge run's: its progress lines.
+        for run_dir in (self.cfg.get("families") or {}).get("converge", []):
+            run_dir = os.path.join(self.tc, run_dir) if not os.path.isabs(run_dir) else run_dir
+            stamp = os.path.basename(run_dir.rstrip("/"))
+            try:
+                lines = open(os.path.join(run_dir, "progress.txt")).read().splitlines()
+            except OSError:
+                continue
+            census, held = {}, []
+            for l in lines:
+                m = re.match(r"^\S+ (gen\d+/\S+) every map\s+([-+][\d.]+) \+/- ([\d.]+)", l)
+                if m:
+                    census[m.group(1)] = (float(m.group(2)), float(m.group(3)))
+                    held = []
+                    continue
+                m = re.match(r"^\S+\s+held out from \d+: every map\s+([-+][\d.]+) \+/- ([\d.]+)", l)
+                if m:
+                    held.append((float(m.group(1)), float(m.group(2))))
+                    continue
+                m = re.match(r"^\S+\s+(gen\d+/\S+): pass pass, CANDIDATE", l)
+                if m and os.path.exists(os.path.join(run_dir, m.group(1) + ".weights")):
+                    out["%s/%s" % (stamp, m.group(1))] = {"weights": open(os.path.join(run_dir, m.group(1) + ".weights")).read(),
+                                                         "census": census.get(m.group(1)), "held": held[-2:]}
+        for k, v in out.items():
+            f = fam.get(k)
+            v["families"] = f["verdict"] if f else "not read"
+            v["held_mean"] = sum(h[0] for h in v["held"]) / len(v["held"]) if v["held"] else None
+        return out
+
+    def strongest(self):
+        ev = {k: v for k, v in self.evidence().items() if v["families"] == "holds" and v["held_mean"] is not None}
+        return max(ev.items(), key=lambda kv: kv[1]["held_mean"]) if ev else (None, None)
+
+    def promote_run(self, rid, p, st):
+        if st["status"] in ("prepared", "approved", "rejected"):
+            return []
+        if st["status"] == "new":
+            name = p.get("candidate", "@strongest")
+            if name == "@strongest":
+                name, ev = self.strongest()
+            else:
+                ev = self.evidence().get(name)
+            if p.get("weights"):
+                name, ev = p.get("name", "weights"), {"weights": self.text(p["weights"]), "census": None, "held": [], "families": "not read"}
+            if not ev:
+                self.rsave(rid, {"status": "failed", "why": "no candidate %s with evidence (families held, two held-out reads)" % name})
+                return []
+            if ev.get("families") == "UNDER":
+                self.rsave(rid, {"status": "failed", "why": "%s falls under a family floor" % name})
+                return []
+            # What would change, read against the coordinator's checkout of main.
+            tmp = os.path.join(self.rdir(rid), "promote.weights")
+            open(tmp, "w").write(ev["weights"])
+            r = run([sys.executable, "-I", os.path.join(self.tc, "scripts", "set-defaults.py"), tmp, "--check"], cwd=self.tc)
+            if r.returncode != 0:
+                self.rsave(rid, {"status": "failed", "why": r.stderr.strip()[-200:]})
+                return []
+            changed = r.stdout.strip().splitlines()
+            fmt = lambda c: "%+.2f +/- %.2f" % tuple(c) if c else "?"
+            msg = ("promote %s as the brain's defaults -- %s; census %s, held out %s; families %s; prepared by orrery (queue %s, run %s), "
+                   "on main only when Paul approves\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n") % (
+                name, "; ".join(changed) or "no change", fmt(ev.get("census")), " and ".join(fmt(h) for h in ev.get("held", [])) or "?",
+                ev.get("families"), self.name, rid)
+            jid = "%s-promote" % rid
+            branch = "promote/%s-%s" % (self.name, rid)
+            b1 = base64.b64encode(ev["weights"].encode()).decode()
+            b2 = base64.b64encode(msg.encode()).decode()
+            host = p.get("host", "mac")
+            out = "~/%s/out/%s" % (self.home, jid)
+            cmd = (
+                "set -e -o pipefail; [ -f ~/.cargo/env ] && . ~/.cargo/env; export PATH=$HOME/.cargo/bin:/opt/homebrew/bin:$PATH\n"
+                "T=~/code/treadcore; W=~/%s/promote/%s; B=%s; O=%s; mkdir -p $O\n"
+                "cd $T && git fetch -q origin\n"
+                "git worktree remove --force $W 2>/dev/null || true; git worktree prune; git branch -D $B 2>/dev/null || true\n"
+                "git worktree add -q -b $B $W origin/main\n"
+                "cd $W && echo %s | base64 -d > $O/promote.weights && python3 -I scripts/set-defaults.py $O/promote.weights | tee $O/changed.txt\n"
+                "export CARGO_TARGET_DIR=$HOME/fleet/target-promote\n"
+                "cargo test -q -p treadcore-brain --release > $O/tests.txt 2>&1 || { tail -30 $O/tests.txt; echo 'the tests failed: not committed'; exit 1; }\n"
+                "grep 'test result' $O/tests.txt\n"
+                "cargo test -q -p treadcore-brain --release -- --ignored every_family_holds_its_floor --nocapture > $O/families-full.txt 2>&1 || { grep -E '^family|panicked|under' $O/families-full.txt; echo 'a family fell under its floor: not committed'; exit 1; }\n"
+                "grep -E '^family' $O/families-full.txt > $O/families.txt; cat $O/families.txt\n"
+                "git add source/treadcore-brain/src/weights.rs && echo %s | base64 -d > $O/msg.txt && git commit -q -F $O/msg.txt\n"
+                "git push -q origin $B\n"
+                "git rev-parse HEAD > $O/commit.txt; echo \"prepared $(cat $O/commit.txt) on $B\"\n"
+            ) % (self.home, rid, branch, out, b1, b2)
+            st = {"status": "running", "job": jid, "candidate": name, "branch": branch, "changed": changed, "evidence": {k: ev.get(k) for k in ("census", "held", "families")}}
+            self.rsave(rid, st)
+            return [{"id": jid, "kind": "promote", "title": "promote %s: tests and families on a branch" % name, "needs": "host:" + host,
+                     "cmd": cmd, "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 4 * 3600}]
+        # Running: the branch is prepared when the job is done.
+        if st["job"] in self.ids("done"):
+            c = glob.glob(os.path.join(self.q, "results", st["job"], self.home, "out", st["job"], "commit.txt"))
+            st["commit"] = open(c[0]).read().strip() if c else ""
+            st["status"] = "prepared"
+            st["detail"] = "%s: ready for Paul's approval (%s)" % (st["branch"], st["commit"][:7])
+            self.tick({"kind": "promote", "run": rid, "host": "mac", "improved": True, "d": (st["evidence"].get("held") or [[None]])[0][0], "se": None,
+                       "vars": {l.split()[0]: {"value": float(l.split()[-1]), "offset": round(float(l.split()[-1]) - float(l.split()[1]), 4)} for l in st["changed"]}})
+        elif st["job"] in self.ids("failed", "stopped"):
+            st["status"] = "failed"
+            st["why"] = "the tests or a family failed: see logs/%s.log" % st["job"]
+        self.rsave(rid, st)
+        return []
+
+    def approve(self, rid):
+        """Paul's word: the prepared branch becomes main (a fast-forward), so
+        the fleet trains on it at its next top-up."""
+        st = self.rstate(rid)
+        if st.get("status") != "prepared" or not st.get("commit"):
+            raise SystemExit("%s is not a prepared promotion (%s)" % (rid, st.get("status")))
+        r = run(["git", "-C", self.tc, "push", "origin", "%s:refs/heads/main" % st["commit"]])
+        if r.returncode != 0:
+            raise SystemExit("main has moved since it was prepared (a fast-forward only): ask for the promotion again\n" + r.stderr[-300:])
+        run(["git", "-C", self.tc, "fetch", "-q", "origin"])
+        st["status"] = "approved"
+        st["detail"] = "on main at %s" % st["commit"][:7]
+        st["approved"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        save(os.path.join(self.rdir(rid), "state.json"), st)
+        # Every candidate's families again, on the new defaults.
+        self.state["families_queued"] = []
+        self.keep()
+        print("%s approved: main is %s; the fleet builds it at its next top-up" % (rid, st["commit"][:7]))
+
+    def runs_status(self):
+        out = []
+        for r in self.runs():
+            st = self.rstate(r["id"])
+            what = {"census": lambda: "%d censuses" % len(st.get("items", [])),
+                    "spsa": lambda: "step %s" % st.get("k"), "tune": lambda: "generation %s, fitness %s" % (st.get("g"), st.get("fit")),
+                    "record": lambda: "next seed %s of %s" % (st.get("next"), st.get("end"))}
+            k = r["kind"] if r["kind"] in what else "census" if r["kind"] in self.CENSUS_KINDS else None
+            detail = st.get("detail") or (what[k]() if k and st.get("status") != "new" else "")
+            if r["kind"] == "promote" and st.get("candidate") and st.get("status") == "running":
+                detail = "%s: tests and families on %s" % (st["candidate"], st.get("branch"))
+            out.append({"id": r["id"], "kind": r["kind"], "status": st.get("status"), "why": st.get("why", ""),
+                        "detail": detail, "params": r.get("params", {})})
+        return out
+
+    # ---- the ticker: every finished census, each coefficient it moved ----------------
+    def tick(self, e):
+        e.setdefault("t", time.strftime("%Y-%m-%dT%H:%M:%S"))
+        with open(os.path.join(self.pd, "ticker.jsonl"), "a") as f:
+            f.write(json.dumps(e) + "\n")
+
+    def ticker_scan(self):
+        """A ticker line for each weights census not yet ticked: each variable
+        it moved, the value, the offset from the default, the difference and
+        which machine read it; "improved" past two errors with no map below."""
+        seen = set(self.state.setdefault("ticked", []))
+        dflt = parse_weights(open(self.defaults()).read()) if self.defaults() else {}
+        for d in self.census_dirs():
+            jid = d.rstrip("/").split(os.sep)[-2]
+            if jid in seen or not jid[:1] in ("w", "h"):
+                continue
+            c = self.job_census(jid)
+            if not c:
+                continue
+            try:
+                vars_ = parse_weights(open(os.path.join(d, "trial.weights")).read())
+            except OSError:
+                vars_ = {}
+            self.tick({"kind": "weights", "job": jid, "d": c[0], "se": c[1], "host": c[3], "improved": bool(self.passes(d)),
+                       "vars": {k: {"value": v, "offset": round(v - dflt[k], 4) if k in dflt else None} for k, v in vars_.items()}})
+            self.state["ticked"].append(jid)
+
     # ---- the keeper's calls ---------------------------------------------------------------
     def plan(self, n):
         jobs = self.prepare_jobs()
         jobs += self.net_jobs()
+        # What a person asked for comes before the standing search.
+        jobs += self.run_jobs(n)
+        self.ticker_scan()
         # The families first, a share of the queue: a candidate waits on them.
         jobs += self.family_jobs(max(0, (n - len(jobs) + 1) // 2))
         jobs += self.weight_jobs(max(0, n - len(jobs)))
@@ -659,5 +1259,13 @@ if __name__ == "__main__":
         p.judged(sys.argv[3])
     elif cmd == "sync":
         p.sync(sys.argv[3] if len(sys.argv) > 3 else None)
+    elif cmd == "runs":
+        print(json.dumps(p.runs_status(), indent=1))
+    elif cmd == "approve":
+        p.approve(sys.argv[3])
+    elif cmd == "evidence":
+        ev = p.evidence()
+        for k, v in sorted(ev.items(), key=lambda kv: -(kv[1]["held_mean"] or -99)):
+            print("%-58s held %s  families %s" % (k, " ".join("%+.2f" % h[0] for h in v["held"]), v["families"]))
     else:
         sys.exit(__doc__)
