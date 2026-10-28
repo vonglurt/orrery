@@ -111,6 +111,10 @@ unsafe fn send2<A, B, R>(obj: Id, sel: Sel, a: A, b: B) -> R {
     let f: unsafe extern "C" fn(Id, Sel, A, B) -> R = std::mem::transmute(msg_ptr());
     f(obj, sel, a, b)
 }
+unsafe fn send3<A, B, C, R>(obj: Id, sel: Sel, a: A, b: B, c: C) -> R {
+    let f: unsafe extern "C" fn(Id, Sel, A, B, C) -> R = std::mem::transmute(msg_ptr());
+    f(obj, sel, a, b, c)
+}
 unsafe fn send4<A, B, C, D, R>(obj: Id, sel: Sel, a: A, b: B, c: C, d: D) -> R {
     let f: unsafe extern "C" fn(Id, Sel, A, B, C, D) -> R = std::mem::transmute(msg_ptr());
     f(obj, sel, a, b, c, d)
@@ -267,6 +271,39 @@ fn set1_of_char(c: char) -> u16 {
     ROW.iter().find(|(k, _)| *k == lower).map(|(_, s)| *s).unwrap_or(0)
 }
 
+/// The menu bar: the application's menu with Quit, and a Window menu with
+/// Minimize and Close, each with its usual Command key (Paul, 28 October:
+/// "add quit. exit close. minimize window features to orrery"). Each item's
+/// action goes to the first responder -- the window, or the application
+/// for terminate: -- so no class of orrery's own is needed. Closing the
+/// window ends the loop (poll sees it is not visible), and so the program.
+unsafe fn menus(app: Id) {
+    let item = |title: &str, action: &str, key: &str| -> Id {
+        let i: Id = send(class("NSMenuItem"), sel("alloc"));
+        send3::<Id, Sel, Id, Id>(i, sel("initWithTitle:action:keyEquivalent:"), nsstring(title), sel(action), nsstring(key))
+    };
+    let menu = |title: &str| -> Id {
+        let m: Id = send(class("NSMenu"), sel("alloc"));
+        send1(m, sel("initWithTitle:"), nsstring(title))
+    };
+    let bar = menu("");
+    // The application's menu: macOS titles it with the bundle's name.
+    let app_item: Id = send(send::<Id>(class("NSMenuItem"), sel("alloc")), sel("init"));
+    let app_menu = menu("orrery");
+    let _: () = send1(app_menu, sel("addItem:"), item("Quit Orrery", "terminate:", "q"));
+    let _: () = send1(app_item, sel("setSubmenu:"), app_menu);
+    let _: () = send1(bar, sel("addItem:"), app_item);
+    // The Window menu.
+    let win_item: Id = send(send::<Id>(class("NSMenuItem"), sel("alloc")), sel("init"));
+    let win_menu = menu("Window");
+    let _: () = send1(win_menu, sel("addItem:"), item("Minimize", "performMiniaturize:", "m"));
+    let _: () = send1(win_menu, sel("addItem:"), item("Close Window", "performClose:", "w"));
+    let _: () = send1(win_item, sel("setSubmenu:"), win_menu);
+    let _: () = send1(bar, sel("addItem:"), win_item);
+    let _: () = send1(app, sel("setMainMenu:"), bar);
+    let _: () = send1(app, sel("setWindowsMenu:"), win_menu);
+}
+
 fn mods_of(flags: u64) -> Mods {
     Mods {
         shift: flags & MOD_SHIFT != 0,
@@ -336,6 +373,7 @@ impl Window {
             // Without it a plain binary is an "accessory" and opens a window
             // nothing can type into.
             let _: bool = send1(app, sel("setActivationPolicy:"), ACTIVATION_REGULAR);
+            menus(app);
             let _: () = send(app, sel("finishLaunching"));
 
             let frame = CgRect {
@@ -520,9 +558,15 @@ impl Window {
         // A key orrery has read is not handed on: the content view is an
         // NSImageView, which takes no keys, so AppKit answered every one
         // with the system beep (28 October). The mouse still goes on, so the
-        // title bar drags and the buttons work.
+        // title bar drags and the buttons work. Command-Q, -W and -M do go
+        // on: they are the menus' (menus()), and AppKit runs them.
         if kind == EV_KEY_DOWN || kind == EV_KEY_UP {
-            return;
+            let flags: u64 = send(e, sel("modifierFlags"));
+            let code: u16 = send(e, sel("keyCode"));
+            // kVK_ANSI_Q 12, kVK_ANSI_W 13, kVK_ANSI_M 46
+            if !(flags & MOD_CMD != 0 && matches!(code, 12 | 13 | 46)) {
+                return;
+            }
         }
 
         let _: () = send1(self.app, sel("sendEvent:"), e);
