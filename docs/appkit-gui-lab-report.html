@@ -1,0 +1,791 @@
+<title>From Cargo to AppKit</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+/* Layout: a lab report on orrery's paper -- a sticky bar of section
+   numerals, a masthead, then numbered sections at a reading measure, with
+   code and diagrams set dark like a terminal. Palette: orrery's draw.rs
+   LIGHT and DARK, as the user guide. */
+:root {
+  --base: #fce2ab; --panel: #f7d79a; --tile: #fff2d4; --ink: #121212;
+  --dim: #6b5836; --line: #c4a870; --accent: #87704f; --up: #4a7c4e;
+  --term-bg: #1c1a16; --term-ink: #f0e3c4; --term-dim: #8a7d63;
+  --rule: color-mix(in srgb, var(--line) 70%, transparent);
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --cond: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --measure: 68ch;
+  --step--1: clamp(.78rem, .76rem + .1vw, .84rem);
+  --step-0: clamp(1rem, .97rem + .16vw, 1.08rem);
+  --step-1: clamp(1.18rem, 1.12rem + .3vw, 1.36rem);
+  --step-2: clamp(1.45rem, 1.32rem + .6vw, 1.9rem);
+  --step-3: clamp(1.9rem, 1.6rem + 1.3vw, 2.8rem);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+    --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+    --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+    --rule: color-mix(in srgb, var(--line) 100%, transparent);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+  --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+  --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+  --rule: color-mix(in srgb, var(--line) 100%, transparent);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--base); color: var(--ink);
+  font-family: var(--serif); font-size: var(--step-0); line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--base); }
+.wrap { max-width: 980px; margin: 0 auto; }
+
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  background: color-mix(in srgb, var(--base) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+  margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+  padding-inline: max(16px, env(safe-area-inset-left, 0px));
+}
+.bar-in {
+  max-width: 980px; margin: 0 auto; padding-block: 9px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  font-family: var(--cond); font-size: var(--step--1);
+}
+.bar-in strong { letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin-right: auto; }
+.bar-in a { color: var(--dim); text-decoration: none; border-bottom: 1px solid transparent; }
+.bar-in a:hover, .bar-in a:focus-visible { color: var(--ink); border-bottom-color: var(--accent); }
+
+header.mast { padding-block: clamp(36px, 6vw, 72px) clamp(24px, 4vw, 40px); }
+.eyebrow { font-family: var(--mono); font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+h1 { font-family: var(--cond); font-weight: 700; font-size: var(--step-3); line-height: 1.05; letter-spacing: -.015em; text-wrap: balance; margin: 0 0 18px; max-width: 22ch; }
+.front p, .front li { font-size: var(--step--1); color: var(--dim); }
+.front p.note { font-family: var(--mono); letter-spacing: .04em; color: var(--accent); }
+.front ul { margin: 0; }
+
+nav.toc { border-top: 1px solid var(--rule); padding-block: 22px 30px; }
+nav.toc h2 { font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-family: var(--mono); font-weight: 500; margin: 0 0 10px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; columns: 2 18rem; column-gap: 32px; }
+nav.toc li { break-inside: avoid; padding: 3px 0; font-family: var(--cond); }
+nav.toc a { color: var(--ink); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { text-decoration: underline; text-decoration-color: var(--accent); }
+
+section { padding-block: clamp(28px, 4vw, 48px); border-top: 1px solid var(--rule); scroll-margin-top: 48px; }
+h2 { font-family: var(--cond); font-weight: 700; font-size: var(--step-2); line-height: 1.12; text-wrap: balance; margin: 0 0 18px; }
+h3 { font-family: var(--cond); font-weight: 600; font-size: var(--step-1); line-height: 1.25; text-wrap: balance; margin: 30px 0 10px; scroll-margin-top: 48px; }
+p, ul, ol, blockquote { max-width: var(--measure); }
+p { margin: 0 0 1em; }
+ul, ol { margin: 0 0 1em; padding-left: 1.3em; }
+li { margin-bottom: .35em; }
+li > ul, li > ol { margin: .35em 0 .2em; }
+li::marker { color: var(--accent); }
+p.note { font-size: var(--step--1); color: var(--dim); }
+strong { font-weight: 600; }
+a { color: var(--ink); text-underline-offset: 3px; text-decoration-color: var(--accent); }
+code { font-family: var(--mono); font-size: .86em; }
+p code, li code, td code, th code { color: var(--accent); word-break: break-word; }
+blockquote { margin: 0 0 1.2em; padding: 12px 18px; border-left: 3px solid var(--accent); background: var(--tile); font-family: var(--mono); font-size: var(--step--1); line-height: 1.6; }
+blockquote p { margin: 0; }
+
+.code { position: relative; margin: 0 0 1.3em; background: var(--term-bg); border-radius: 4px; overflow-x: auto; max-width: 100%; }
+.code pre { margin: 0; padding: 16px 18px; color: var(--term-ink); font-family: var(--mono); font-size: .8rem; line-height: 1.55; tab-size: 4; }
+.code code { font-size: inherit; color: inherit; }
+.code .lang { position: absolute; top: 6px; right: 10px; font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--term-dim); }
+.code.diagram { background: var(--tile); border: 1px solid var(--rule); }
+.code.diagram pre { color: var(--ink); }
+
+.table { overflow-x: auto; max-width: 100%; margin: 0 0 1.4em; }
+table { border-collapse: collapse; font-size: var(--step--1); line-height: 1.5; min-width: 30rem; }
+th { font-family: var(--cond); font-weight: 600; text-align: left; padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line); vertical-align: bottom; }
+td { padding: 8px 14px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: none; }
+td:first-child { font-weight: 600; font-family: var(--cond); }
+
+figure { margin: 0 0 1.4em; }
+figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); }
+figcaption { margin-top: 8px; font-size: var(--step--1); color: var(--dim); max-width: var(--measure); }
+
+footer { border-top: 1px solid var(--rule); padding-block: 24px 48px; font-size: var(--step--1); color: var(--dim); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="bar"><div class="bar-in"><strong>orrery · lab report</strong><a href="#abstract">Abstract</a><a href="#si">I</a><a href="#sii">II</a><a href="#siii">III</a><a href="#siv">IV</a><a href="#sv">V</a><a href="#svi">VI</a><a href="#svii">VII</a><a href="#sviii">VIII</a><a href="#references">References</a><a href="#appendix-a">Appendix A</a></div></div>
+<div class="wrap">
+  <header class="mast">
+    <p class="eyebrow">Rust · AppKit · no crates</p>
+    <h1>From Cargo to a Mac Application: a Rust Program with an AppKit Window and No Crates</h1>
+    <div class="front"><p class="note">Lab Report — IEEE Format · 28 October 2026</p><p>Copyright (c) 2026 Paul Richeson. MIT licensed, as orrery.</p><p>Companions:</p><ul><li><code>docs/appkit-example/</code>, the working example this report teaches: <code>orbit</code>, 602 lines, its full source in Appendix A;</li><li>orrery's <code>src/surface.rs</code>, <code>src/mac.rs</code> and <code>src/main.rs</code> (<code>gui_loop</code>), the same structure at full size;</li><li><code>tools/mac-app.sh</code>, <code>tools/mem-guard.sh</code>, and <code>docs/mac-app-lab-report.md</code> (the bundles and their signatures).</li></ul></div>
+  </header>
+  <nav class="toc" aria-label="Contents"><h2>Contents</h2><ol><li><a href="#abstract">Abstract</a></li><li><a href="#si">I. Objective</a></li><li><a href="#sii">II. Materials</a></li><li><a href="#siii">III. Background: what each part is</a></li><li><a href="#siv">IV. Architecture</a></li><li><a href="#sv">V. Procedure: from cargo new to Orbit.app</a></li><li><a href="#svi">VI. Results</a></li><li><a href="#svii">VII. Discussion</a></li><li><a href="#sviii">VIII. Checklist</a></li><li><a href="#references">References</a></li><li><a href="#appendix-a">Appendix A. orbit, every file</a></li></ol></nav>
+  <main>
+  <section id="abstract"><h2>Abstract</h2><p>orrery is a fleet console written in Rust with an empty <code>[dependencies]</code> table. On a Mac it opens a native AppKit window. It runs from Finder, Launchpad and the Dock as <code>Orrery.app</code>, with an icon and an ad-hoc signature.</p><p>This report teaches how that is done, from <code>cargo new</code> to the application, through a small working example, <strong>orbit</strong>. orbit is an animated orrery in a window that answers the pointer and the keyboard, can draw a frame to a file, and becomes <code>Orbit.app</code>. It is 602 lines and has no crates.</p><p>The architecture has four layers:</p><ul><li><strong>The drawing</strong> writes pixels into a plain buffer and knows nothing of windows.</li><li><strong>A <code>Surface</code> trait</strong> is the seam: it hands over a buffer, takes it back to show, and says what the person did.</li><li><strong>An AppKit back end</strong> satisfies the trait using only message sends to the Objective-C runtime. No Objective-C class is ever defined, because AppKit never has to call into Rust.</li><li><strong>The program's own loop</strong> polls, draws, presents and sleeps.</li></ul><p>Then a script wraps the binary in a signed <code>.app</code> bundle.</p><p>Measured on an M1:</p><ul><li>orbit builds in 4.2 s (peak 197 MB) to a 320 KB binary and an 816 KB bundle;</li><li>its window holds a flat 284 MB, most of it AppKit's shared pages.</li></ul><p>The one error that matters was found the hard way the same day. The program's loop must push and pop an <strong>autorelease pool</strong> around every turn, because AppKit's own run loop, which would do it, is not running.</p><ul><li>Without the pools, orbit grows 150 MB a second and orrery grew 90 MB a second (504 MB to 2,292 MB in 20 s), until the Mac ran out of memory.</li><li>With them, both are flat.</li></ul></section><section id="si"><h2>I. Objective</h2><p>Paul's prompt:</p><blockquote><p>write a lab report about making orrery a mackit GUI. describe the procedure of Rust aplication from cargo to mak kit gui with application launcher. give sample code, enough to start an example project from this lab report. Teach sections and give working structure and architcture. lab report IEEE.</p></blockquote><ol><li>Explain how a Rust program gets an AppKit window, and why orrery does it the way it does.</li><li>Give a structure and a working example that a new project can start from.</li><li>Carry it to an application: a bundle, an icon, a signature and a launcher.</li><li>Record what was measured, and the faults met on the way.</li></ol></section><section id="sii"><h2>II. Materials</h2><div class="table"><table><thead><tr><th>Item</th><th>Detail</th></tr></thead><tbody><tr><td>Machine</td><td>iMac, Apple M1 (arm64), 16 GB, macOS 26.6.2</td></tr><tr><td>Toolchain</td><td>rustc 1.93.1, cargo 1.93.1; Apple's Command Line Tools (<code>/Library/Developer/CommandLineTools</code>): the linker, the SDK's frameworks, <code>codesign</code>. Xcode itself is not needed</td></tr><tr><td>Frameworks used</td><td>AppKit, Foundation, CoreGraphics, and libobjc (the Objective-C runtime), all part of macOS</td></tr><tr><td>macOS tools</td><td><code>sips</code>, <code>iconutil</code>, <code>PlistBuddy</code> (the icon), <code>codesign</code>, <code>spctl</code> (the signature), <code>open</code></td></tr><tr><td>The example</td><td><code>docs/appkit-example/</code> (orbit)</td></tr><tr><td>The full-size case</td><td>orrery: <code>src/mac.rs</code> 795 lines, <code>src/surface.rs</code> 328, beside the Wayland back end <code>src/wl.rs</code> 1,648</td></tr></tbody></table></div></section><section id="siii"><h2>III. Background: what each part is</h2><p>This section teaches the pieces in the order a program meets them.</p><h3 id="a-what-a-mac-application-is">A. What a Mac application is</h3><p>A Mac program that shows a window is an ordinary process with three connections to the system:</p><ol><li><strong><code>NSApplication</code></strong>, the one-per-process object that registers the process with the window server, owns the event queue and decides whether the process has a Dock icon (its <em>activation policy</em>).</li><li><strong><code>NSWindow</code></strong> objects, each a rectangle the window server composites, with a <em>content view</em> that fills it.</li><li><strong>An event loop.</strong> Normally <code>[NSApp run]</code>, which never returns: it takes events off the queue, hands each to <code>sendEvent:</code>, calls your code back, and drains an autorelease pool every turn.</li></ol><p>orrery and orbit keep the first two and replace the third with their own loop (§III-E).</p><p>A <code>.app</code> bundle (§III-G) is how Finder and the Dock know the process as an application. The window itself does not need the bundle: run from a terminal, the same binary opens the same window.</p><h3 id="b-calling-appkit-from-rust-the-objective">B. Calling AppKit from Rust: the Objective-C runtime</h3><p>AppKit is written in Objective-C. Every method call in Objective-C, <code>[window setTitle:@&quot;orbit&quot;]</code>, compiles to a C call:</p><div class="code"><span class="lang">c</span><pre><code>objc_msgSend(window, sel_registerName(&quot;setTitle:&quot;), title);</code></pre></div><p>So Rust needs three functions from <code>libobjc</code>:</p><ul><li><code>objc_getClass(&quot;NSWindow&quot;)</code> gives a class, which is itself an object;</li><li><code>sel_registerName(&quot;setTitle:&quot;)</code> gives a selector, a method's name;</li><li><code>objc_msgSend(receiver, selector, args...)</code> sends the message.</li></ul><p><strong><code>objc_msgSend</code> must be called through the exact signature of each message.</strong> Its header declares it variadic, but it is a trampoline that jumps to the method with the registers as they are. Calling it as a C variadic function puts floating-point and struct arguments in the wrong places. So it is declared with no arguments and cast, at each call, to the real signature:</p><div class="code"><span class="lang">rust</span><pre><code>extern &quot;C&quot; { fn objc_msgSend(); }
+
+unsafe fn send1&lt;A, R&gt;(o: Id, s: Sel, a: A) -&gt; R {
+    let f: unsafe extern &quot;C&quot; fn(Id, Sel, A) -&gt; R =
+        std::mem::transmute(objc_msgSend as unsafe extern &quot;C&quot; fn());
+    f(o, s, a)
+}</code></pre></div><p>One such helper per argument count (<code>send</code>, <code>send1</code>, <code>send2</code>, <code>send4</code>) covers every message the program sends.</p><p>On <strong>arm64</strong> this one entry point is correct even for messages that return structs: an <code>NSRect</code> (four <code>f64</code>) comes back in registers <code>v0</code> to <code>v3</code>. On <strong>Intel</strong> a struct larger than 16 bytes is returned through memory, by <code>objc_msgSend_stret</code>. orbit and orrery are built and tested on Apple silicon only; an Intel build would need that second entry point for <code>frame</code>.</p><h3 id="c-why-no-crates-and-what-the-crates-woul">C. Why no crates, and what the crates would give</h3><p>orrery's rule is an empty <code>[dependencies]</code> table. Its software must build on a node with no network, so a crate fetch is a failure. The frameworks are on every Mac, so declaring the dozen functions used is not a dependency. The usual alternatives, for a project without that rule:</p><div class="table"><table><thead><tr><th>Approach</th><th>What it gives</th><th>What it costs</th></tr></thead><tbody><tr><td><strong>Message sends by hand</strong> (this report)</td><td>nothing fetched; every call visible; about 300 lines for a window</td><td><code>unsafe</code> throughout; you own the details below (pools, struct returns, coordinates)</td></tr><tr><td><code>objc2</code> with <code>objc2-app-kit</code></td><td>typed bindings for all of AppKit, memory management by the type system</td><td>a large dependency tree</td></tr><tr><td><code>winit</code> and <code>softbuffer</code></td><td>a window and a pixel buffer on Mac, Windows, Linux</td><td>the event loop is winit's (a callback), several dozen crates</td></tr><tr><td><code>objc_allocateClassPair</code> and <code>class_addMethod</code></td><td>your own <code>NSView</code> subclass with <code>drawRect:</code>, delegates, AppKit calling Rust</td><td>the most delicate unsafe code of all; not needed when the program owns its loop</td></tr></tbody></table></div><p>orrery chose the first. It needs no callbacks: everything it wants from AppKit is a message it sends or a fact it polls (Table 1).</p><p class="note">Table 1. Everything the window needs, and how it is had without a callback.</p><div class="table"><table><thead><tr><th>Need</th><th>How</th></tr></thead><tbody><tr><td>a window</td><td><code>[[NSWindow alloc] initWithContentRect:styleMask:backing:defer:]</code></td></tr><tr><td>pixels on it</td><td>an <code>NSImageView</code> as the content view, given a new <code>NSImage</code> each frame</td></tr><tr><td>the pixels</td><td><code>CGDataProviderCreateWithData</code> over the program's buffer, then <code>CGImageCreate</code></td></tr><tr><td>events</td><td><code>[NSApp nextEventMatchingMask:untilDate:inMode:dequeue:]</code> with <code>[NSDate distantPast]</code>, so it returns at once when there are none</td></tr><tr><td>closed</td><td><code>[window isVisible]</code> went false</td></tr><tr><td>resized</td><td><code>[view frame]</code> no longer matches the canvas</td></tr></tbody></table></div><h3 id="d-pixels-a-software-canvas">D. Pixels: a software canvas</h3><p>The drawing is a <code>Vec&lt;u32&gt;</code>, a word a pixel, <code>0x00RRGGBB</code>. On a little-endian machine that word is the bytes <code>B G R 0</code> in memory. Core Graphics is told exactly that, so the buffer is handed over with no conversion and no copy:</p><div class="code"><span class="lang">rust</span><pre><code>// kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little
+const BITMAP_INFO: u32 = 6 | (2 &lt;&lt; 12);</code></pre></div><p>This is the one constant that must be exact. Get it wrong and the picture is blue, or black.</p><p><strong>Retina.</strong> A window's size is in <strong>points</strong>. Its backing store is in <strong>device pixels</strong>, <code>points × backingScaleFactor</code>: twice as many on every current Mac. The canvas is allocated in device pixels, and the <code>NSImage</code> is given its size in points. That one division is the whole of Retina support. orrery adds a <code>zoom</code>: it draws at the logical size and repeats each pixel, so its bitmap fonts keep their designed size.</p><p><strong>Coordinates.</strong> AppKit's origin is the bottom left of the view, the canvas's the top left. The pointer's y is flipped once, in the event translation, and nowhere else.</p><h3 id="e-the-loop-and-the-autorelease-pool">E. The loop, and the autorelease pool</h3><p>The program's loop, at a fixed frame rate:</p><div class="code" class="diagram"><pre><code>loop {
+    poll()      take every queued event; hand each to [NSApp sendEvent:]
+    update      the program&#x27;s state from the inputs
+    draw        into the buffer
+    present()   wrap the buffer as an image; give it to the view
+    sleep       1/30 s (orbit), 1/12 s (orrery)
+}</code></pre></div><p><strong>Every turn needs an autorelease pool.</strong> Objective-C methods return many objects <em>autoreleased</em>: owned by the innermost pool and freed when it is drained. Examples are the event from <code>nextEventMatchingMask:</code>, the <code>NSString</code> of a key's characters, and the copy of the frame <code>NSImageView</code> keeps to draw. <code>[NSApp run]</code> pushes and pops a pool every turn. A program that runs its own loop must do the same, or everything autoreleased since launch stays. That is a frame's worth of memory each frame:</p><div class="code"><span class="lang">rust</span><pre><code>fn present(&amp;mut self) {
+    unsafe {
+        let pool = objc_autoreleasePoolPush();
+        // ... CGImageCreate, NSImage, setImage: ...
+        objc_autoreleasePoolPop(pool);
+    }
+}</code></pre></div><p>This was missed in orrery for months. At first it showed only as a console that grew. It was found on 28 October, when Orrery.app was left running beside the fleet and filled the Mac (§VI-C).</p><p><strong>Ownership.</strong> Objects the program creates with <code>alloc</code>/<code>init</code> it must <code>release</code>. A Core Graphics object from a function with <code>Create</code> in its name it must <code>CFRelease</code> (or the type's own <code>…Release</code>). orbit releases the <code>NSImage</code> once the view holds it, and the previous <code>CGImage</code> when the next one replaces it. The buffer outlives every image made from it, so the data provider has no release callback.</p><h3 id="f-events">F. Events</h3><p><code>nextEventMatchingMask:u64::MAX untilDate:distantPast inMode:default dequeue:YES</code> returns the next event or nil, without blocking. orbit translates the few it uses into its own <code>Input</code> enum:</p><ul><li>mouse moved: <code>NSEventTypeMouseMoved</code>, 5 (it needs <code>setAcceptsMouseMovedEvents:YES</code>);</li><li>left button down: 1;</li><li>key down: 10, with <code>keyCode</code> for named keys (Escape is 53) and <code>charactersIgnoringModifiers</code> for the rest.</li></ul><p>Every event it does not consume goes on to <code>[NSApp sendEvent:]</code>, so the title bar drags, the buttons work and the window resizes. Keys it takes are not passed on: with no menu bar, AppKit would only beep at them. Command-Q is therefore the program's to handle.</p><h3 id="g-the-application-bundle">G. The application bundle</h3><p>A bundle is a folder with a fixed shape, which Launch Services (Finder, the Dock, Spotlight) reads:</p><div class="code" class="diagram"><pre><code>Orbit.app/
+  Contents/
+    Info.plist          name, identifier, which file to run, icon, version
+    MacOS/orbit         the executable named by CFBundleExecutable
+    Resources/orbit.icns
+    _CodeSignature/     written by codesign</code></pre></div><p>The <code>Info.plist</code> keys that matter:</p><ul><li><code>CFBundleExecutable</code> names the file to run;</li><li><code>CFBundleIdentifier</code> is a reverse-DNS name, one per app;</li><li><code>CFBundleIconFile</code> names the icon;</li><li><code>NSHighResolutionCapable</code> must be true, or a Retina Mac gets a blurry, doubled window.</li></ul><p><strong>A launcher.</strong> When the program needs arguments, a PATH, or its output kept, the executable is a small shell script that <code>exec</code>s the binary, as orrery's is:</p><div class="code"><span class="lang">sh</span><pre><code>#!/bin/sh
+export PATH=&quot;$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH&quot;
+exec &quot;$(dirname &quot;$0&quot;)/orrery&quot; --gui --operator paul ... &gt;&gt;&quot;$HOME/Library/Logs/orrery.log&quot; 2&gt;&amp;1</code></pre></div><p><code>exec</code> makes the binary the bundle's process, so the Dock icon is the window's. The script must not share the binary's name in any case: <code>Orrery</code> and <code>orrery</code> are one file on a Mac's case-insensitive disk.</p><p><strong>The icon</strong> is a 1,024-pixel PNG. <code>sips -z N N</code> makes the iconset's ten sizes, and <code>iconutil -c icns</code> makes the <code>.icns</code>. orrery draws its icon in Python with <code>zlib</code> alone (<code>tools/mac-icon.py</code>).</p><h3 id="h-signing">H. Signing</h3><p>Apple silicon runs only signed code. The Rust linker already signs every binary <strong>ad hoc</strong> (no certificate). The bundle is then sealed with <code>codesign --force --sign -</code>: the binary first, then the bundle, because <code>codesign</code> will not seal a bundle whose code inside is unsigned. An ad-hoc bundle opens on the Mac that built it. Gatekeeper (<code>spctl -a</code>) rejects it, as it rejects anything without a Developer ID. To hand the app to someone else's Mac you need a Developer ID and notarization (<code>xcrun notarytool</code>). <code>docs/mac-app-lab-report.md</code> §VII has the three levels.</p></section><section id="siv"><h2>IV. Architecture</h2><div class="code" class="diagram"><pre><code>                 +------------------------------------------+
+   the program   |  main.rs: the loop  poll &gt; update &gt; draw   |
+                 |           &gt; present &gt; sleep                |
+                 +------------------+-----------------------+
+                                    | Surface (surface.rs)
+                 +------------------+-------------------+
+                 |                                     |
+        +--------v---------+                 +---------v--------+
+        | mac.rs (macOS)   |                 | Offscreen        |
+        | NSApplication,   |                 | a Vec&lt;u32&gt;;      |
+        | NSWindow,        |                 | --frame F.ppm    |
+        | NSImageView,     |                 +------------------+
+        | CGImage, events, |    (orrery: wl.rs, a Wayland client,
+        | autorelease pool |     is a third implementation)
+        +--------+---------+
+                 | objc_msgSend, Core Graphics
+        +--------v---------+
+        | AppKit, libobjc, |    on every Mac; declared, not fetched
+        | CoreGraphics     |
+        +------------------+
+
+   draw.rs: fn frame(px: &amp;mut [u32], w, h, &amp;State)   no platform at all
+
+   mac-app.sh:  cargo build --release &gt; Orbit.app/{Info.plist, MacOS, Resources}
+                &gt; codesign (binary, then bundle) &gt; ~/Applications</code></pre></div><p class="note">Fig. 1. The layers. Only <code>mac.rs</code> knows AppKit exists; only <code>draw.rs</code> knows what a frame looks like.</p><p><strong>The seam.</strong> <code>Surface</code> has six methods: <code>pixels</code>, <code>size</code>, <code>poll</code>, <code>apply_resize</code>, <code>present</code>, and (in orrery) <code>closed</code>. The drawing is written once against a buffer. The loop is written once against the trait. A platform is one new file:</p><ul><li>orrery has two, AppKit and Wayland;</li><li>both have <code>Offscreen</code>, which makes every picture in orrery's documents without a screen.</li></ul><p><strong>The project layout</strong>, to start from:</p><div class="code" class="diagram"><pre><code>orbit/
+  Cargo.toml          [dependencies] empty; release: lto, one codegen unit, strip
+  src/main.rs         the loop, the --frame mode, the platform choice (#[cfg])
+  src/surface.rs      Input, the Surface trait, Offscreen
+  src/draw.rs         State, and frame(): pixels from state
+  src/mac.rs          #![cfg(target_os = &quot;macos&quot;)]: the AppKit window
+  mac-app.sh          the bundle, the icon, the signature</code></pre></div><p><strong>One frame, in order:</strong></p><ol><li><code>poll</code>, inside a pool: every queued event is translated and passed on. Then <code>updateWindows</code>, <code>isVisible</code> and the view's frame are read.</li><li>The loop updates its state: the pointer, paused, time turned.</li><li><code>draw::frame</code> fills the buffer.</li><li><code>present</code>, inside a pool:<ul><li>a data provider over the buffer, then a <code>CGImage</code> (no copy);</li><li>an <code>NSImage</code> sized in points, then <code>setImage:</code>;</li><li>the <code>NSImage</code> released, and the previous <code>CGImage</code> released.</li></ul></li><li>Sleep.</li></ol></section><section id="sv"><h2>V. Procedure: from <code>cargo new</code> to Orbit.app</h2><p>Each step is complete; Appendix A has every file whole.</p><p><strong>Step 1. The project.</strong></p><div class="code"><span class="lang">sh</span><pre><code>cargo new orbit &amp;&amp; cd orbit</code></pre></div><p>Then <code>Cargo.toml</code> as in Appendix A: no dependencies, and the release profile <code>lto = true</code>, <code>codegen-units = 1</code>, <code>strip = true</code>.</p><p><strong>Step 2. The seam</strong> (<code>src/surface.rs</code>): the <code>Input</code> enum in the program's own words, the <code>Surface</code> trait, and <code>Offscreen</code>, with <code>write_ppm</code>.</p><p><strong>Step 3. The drawing</strong> (<code>src/draw.rs</code>): <code>State</code>, and <code>frame(px, w, h, &amp;state)</code>, which writes every pixel from the state alone. Check it before any window exists:</p><div class="code"><span class="lang">sh</span><pre><code>cargo run -- --frame frame.ppm &amp;&amp; open frame.ppm</code></pre></div><figure><img alt="orbit&#x27;s frame" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAyAAAAH0CAIAAABKIt4vAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAADIKADAAQAAAABAAAB9AAAAADxKbWtAAAuhklEQVR4Ae3dwco0SXYe4J6h0R149l4abbQSwkagC5hL0N5oKxDMXMEMCLQ13ms3274AYWMjtNLGeGmY5egOzCyc7ejOrq8qqyorMyLynIjHNFJ9VZmRJ54TGfn+9f36/bM//v533/h/BAgQIECAAAEC9QR+Xm8oIxEgQIAAAQIECHwvIGBZBwQIECBAgACBygICVmVQwxEgQIAAAQIEBCxrgAABAgQIECBQWUDAqgxqOAIECBAgQICAgGUNECBAgAABAgQqCwhYlUENR4AAAQIECBAQsKwBAgQIECBAgEBlAQGrMqjhCBAgQIAAAQICljVAgAABAgQIEKgsIGBVBjUcAQIECBAgQEDAsgYIECBAgAABApUFBKzKoIYjQIAAAQIECAhY1gABAgQIECBAoLKAgFUZ1HAECBAgQIAAAQHLGiBAgAABAgQIVBYQsCqDGo4AAQIECBAgIGBZAwQIECBAgACBygICVmVQwxEgQIAAAQIEBCxrgAABAgQIECBQWUDAqgxqOAIECBAgQICAgGUNECBAgAABAgQqCwhYlUENR4AAAQIECBAQsKwBAgQIECBAgEBlAQGrMqjhCBAgQIAAAQICljVAgAABAgQIEKgsIGBVBjUcAQIECBAgQEDAsgYIECBAgAABApUFBKzKoIYjQIAAAQIECAhY1gABAgQIECBAoLKAgFUZ1HAECBAgQIAAAQHLGiBAgAABAgQIVBYQsCqDGo4AAQIECBAgIGBZAwQIECBAgACBygICVmVQwxEgQIAAAQIEBCxrgAABAgQIECBQWUDAqgxqOAIECBAgQICAgGUNECBAgAABAgQqCwhYlUENR4AAAQIECBAQsKwBAgQIECBAgEBlAQGrMqjhCBAgQIAAAQICljVAgAABAgQIEKgsIGBVBjUcAQIECBAgQEDAsgYIECBAgAABApUFBKzKoIYjQIAAAQIECAhY1gABAgQIECBAoLKAgFUZ1HAECBAgQIAAAQHLGiBAgAABAgQIVBYQsCqDGo4AAQIECBAgIGBZAwQIECBAgACBygICVmVQwxEgQIAAAQIEBCxrgAABAgQIECBQWUDAqgxqOAIECBAgQICAgGUNECBAgAABAgQqCwhYlUENR4AAAQIECBAQsKwBAgQIECBAgEBlAQGrMqjhCBAgQIAAAQICljVAgAABAgQIEKgsIGBVBjUcAQIECBAgQEDAsgYIECBAgAABApUFBKzKoIYjQIAAAQIECAhY1gABAgQIECBAoLKAgFUZ1HAECBAgQIAAAQHLGiBAgAABAgQIVBYQsCqDGo4AAQIECBAgIGBZAwQIECBAgACBygICVmVQwxEgQIAAAQIEBCxrgAABAgQIECBQWUDAqgxqOAIECBAgQICAgGUNECBAgAABAgQqCwhYlUENR4AAAQIECBAQsKwBAgQIECBAgEBlAQGrMqjhCBAgQIAAAQICljVAgAABAgQIEKgsIGBVBjUcAQIECBAgQEDAsgYIECBAgAABApUFBKzKoIYjQIAAAQIECAhY1gABAgQIECBAoLKAgFUZ1HAECBAgQIAAAQHLGiBAgAABAgQIVBYQsCqDGo4AAQIECBAgIGBZAwQIECBAgACBygICVmVQwxEgQIAAAQIEBCxrgAABAgQIECBQWUDAqgxqOAIECBAgQICAgGUNECBAgAABAgQqCwhYlUENR4AAAQIECBAQsKwBAgQIECBAgEBlAQGrMqjhCBAgQIAAAQICljVAgAABAgQIEKgsIGBVBjUcAQIECBAgQEDAsgYIECBAgAABApUFBKzKoIYjQIAAAQIECAhY1gABAgQIECBAoLKAgFUZ1HAECBAgQIAAAQHLGiBAgAABAgQIVBYQsCqDGo4AAQIECBAgIGBZAwQIECBAgACBygICVmVQwxEgQIAAAQIEBCxrgAABAgQIECBQWUDAqgxqOAIECBAgQICAgGUNECBAgAABAgQqCwhYlUENR4AAAQIECBAQsKwBAgQIECBAgEBlAQGrMqjhCBAgQIAAAQICljVAgAABAgQIEKgsIGBVBjUcAQIECBAgQEDAsgYIECBAgAABApUFBKzKoIYjQIAAAQIECAhY1gABAgQIECBAoLKAgFUZ1HAECBAgQIAAAQHLGiBAgAABAgQIVBYQsCqDGo4AAQIECBAgIGBZAwQIECBAgACBygICVmVQwxEgQIAAAQIEBCxrgAABAgQIECBQWUDAqgxqOAIECBAgQICAgGUNECBAgAABAgQqCwhYlUENR4AAAQIECBAQsKwBAgQIECBAgEBlAQGrMqjhCBAgQIAAAQLfIiBAgAABAlcJ/P0//OPmpf/ub/96831vEsgiIGBl6ZQ6CRAgMI7AmqueBam3B4xjYSaDCvzsj7//3aBTMy0CBAgQCCdQktOzXPVY7qfHP47gHQKXCAhYl7C7KAECBKYTOBOVzpw7HbQJxxDwl9xj9EEVBAgQGFrgZEIq33iVQYZ2MrlxBHyDNU4vzYQAAQIxBZZgtP93gq+nUHGo1xfyKYGTAr7BOgnodAIECBB4JVA3Ei1BzfdYr7h9FkZAwArTCoUQIEBgOIFGYajRsMPxm9CVAgLWlfquTYAAgeEFav1ycIWqPuA6shcEKgoIWBUxDUWAAAECPwnU/eXgT+N+841fFN5qeB1TQMCK2RdVESBAgAABAokFBKzEzVM6AQIEwgq0+/qqTNmXWGFbr7AiIGBZCQQIECBAgACBygICVmVQwxEgQIAAAQIEBCxrgAABAgQqC7T+/WAp128JK7fNcFUFBKyqnAYjQIAAAQIECHzzjYBlFRAgQIAAAQIEKgsIWJVBDUeAAAECBAgQELCsAQIECBAgQIBAZQEBqzKo4QgQIECAAAECApY1QIAAAQIECBCoLCBgVQY1HAECBAgQIEBAwLIGCBAgQKCyQJ9/oarPv7ZVmcZw0wgIWNO02kQJECBAgACBXgICVi9p1yFAgAABAgSmERCwpmm1iRIgQKCjQOvfEvr9YMdmutQRAQHriJpzCBAgQIAAAQIvBASsFzg+IkCAAIHjAu2+xPL11fGuOLOXgIDVS9p1CBAgMKXAEobqzrv6gHXLMxqBIvAtCAIECPQU+Of/+T96Xm691l/8x/+0vvaim0CjL7GWYbtNwYUIHBP42R9//7tjZzqLAIHJBY5FpauCTq5qB1taFX+jV3GowZBNJ5qAgBWtI+ohEEjgbSi5Ki31MZp8+nWRy+/1znzzdH6EujMyGoHXAgLWax+fEhhc4HWGGDs/nW8tvY8MzySkM+d+VKSDCdQSELBqSRqHQHSBZ2lAimrROdrPVD+NSp8e/+y63ifQWUDA6gzucgR6CGw+3QWpHvTvrqE1RajEpuX1s18avj3gnbTPCVwsIGBd3ACXJ3Be4PGZLUudV+05wswdXIPUHfiz4HV3mB8JhBUQsMK2RmEEtgUeH8bLcRLVNlbOd7U4Z99UTeCLgID1hcMPBAIKPD5uxamAbWpakjXQlNfgBFoICFgtVI1J4JSAp+kpvglOtkImaLIpphcQsNK30ATGELh7ZPqOaoy29pmFxdPH2VUIfCQgYH3E5WAC1QQ8FKtRGuirgKX11cNPBK4RELCucXfVOQU8+ebs+4WztuQuxHfpyQUErMkXgOn3EFgfcn7x14PbNZ4LWIrPbXxCoLKAgFUZ1HAEisD6JFt+lKusimgC1me0jqhnPAEBa7yemtFlAh5al9G78AkB6/YEnlMJPBUQsJ7S+IDATgHPp51QDgsuYCUHb5DycgkIWLn6pdpAAuvTyG8AA3VFKZUELO9KkIaZV0DAmrf3Zn5MwIPnmJuzkgpY8Ekbp+zLBQSsy1uggAQC6zNmqdX3VQkapsQGAu6CBqiGHFlAwBq5u+Z2UsAT5SSg04cUcF8M2VaTqi4gYFUnNeAIAusjxPdVI7TTHNoIuE3auBp1EAEBa5BGmkYVAQ+MKowGmU3AjTNbx813j4CAtUfJMYMLeDwM3mDT6yXgVuol7ToJBASsBE1SYiOB9WGwjO9XgY2QDTuhgDtrwqab8qOAgPVo4p3xBdYHgFw1frPN8DoBN9p19q58vYCAdX0PVNBToOz4clVPc9ci4L6zBiYUELAmbPqMU/Yn6Rm7bs7BBNyGwRqinLYCAlZbX6NfLmBPv7wFCiBwK+CWvNXwemABAWvg5s4+Nfv47CvA/AMLuD0DN0dpdQQErDqORgklUPZuf9EqVFMUQ2BTwN26yeLNAQQErAGaaAo/Cdisf7II/Gr99qJbjdJ2N+pjF3LnHnNzVmQBAStyd9S2V2B9YHuO7iVrc9zaiLfD9+xUzKreEk14wNqpnstjQmdT7iMgYPVxdpVWAnbkVrLPx13NNw/J+2gcdV6bbYr85tqIvGspMq/augkIWN2oXai+QNmI7cL1ZX8ccX3U/fjG9/97TnAUt2ugw2t3dwdkl2gqIGA15TV4KwGbbwtZGeIjVVwfcR072J1+zM1ZEQQErAhdUMMHAjbcD7DeHXoXEeb8auod0mefI/3Ma9/R7vp9To6KJSBgxeqHal4I2GRf4Oz8yON/J1Stw4DXklzGsQNUxDRUBwEBqwOyS5wVWJ9SvmL5lHKlKycC/BSw7vHacdJzBbSST0o6vYOAgNUB2SVOCZQt1X66H3F9CJVT0O2n63mkNh3WticcpnNiTwEBq6e2a30mYBvd7+Vpvd8q4JHad6Ap9ocDaE7pKSBg9dR2rQ8E7J57sNYHs6+p9nBlOUZbd3bKLrETymGXCAhYl7C76CsBm+YrnR//qm85Rq56bZX90zVpLRPR62fdtGM8k/H+tQIC1rX+rv5FwEb5hePrD+uz1oP2K8wsP1kArztt93jt49P+AgJWf3NX3BawP266eKxussz8piXxrPv2kGcy3r9EQMC6hN1FvwjYFr9w/P8fPEQfTbxzJ2CR3IGUH+0nmyze7C8gYPU3d8UvAnbDWw6PzFsNr3cKWDZ3UHaVOxA/XiIgYF3C7qI/CNgHC4QHpFuiioCFtDLaW1YKL64SELCukp/9ura/sgI8EWe/ExrM36JaUe0zK4UX/QUErP7mruj/T7Hv14CnoDuhqYAFVnhlrKbLzOAvBASsFzg+aiJgvyPw0cL6+3/4x83j/+5v/3rzfW/eCVhvBO6WhB/7CAhYfZxd5XuBybe5Mv3FwT9ktfN+eBatbk8Xs241Xry2/Cbff16sDR81EhCwGsEa9l5g5t3Ns+1+Nez4eU+6KsPIWDs4fzhk8qU48y60f5E4spaAgFVL0jivBKbd1yZ/nr1aEy8/25+uyjAy1kvO+w9nXpbT7kX3i8DP7QUErPbG019hzh1t5mfYySX/aboql5OxPmWfdonOuSN9ujwcf17g2/NDGIHAC4EJ97IJp/xiAfgorMD6dwFnW7HLxJcpL/+tAmF7pLDUAgJW6vZFL362LWy2B1X09ae+fQIlZ0y1etcpy1j71oijjgj4FeERNefsEZgqXZWH08Jiv96zNl4cc+z3g2VAvyV8AbvnowmX8VTb1J414JiKAj+vOJahCKwCU21b5bG0RCvpal0AXmQUWNfwmrQyzuKjmpcpzzPZj2QcfF7AN1jnDY1wLzBPulq3ZtHqfhF8/nPB/O///H8+P/WHM/7yL/798kovDgOuJ862sOfZstYWe9FBwN/B6oA81yXWrXn4aZeZepzvbPTbhVEkzwSsMsLOC+0se87DVskFc5IVPs9M51zSl8xawLqEfdiLlmfb8DvyJNM8vEyLz93p3VbF2wtdW94dS+Qfi+QMq32Z6TLN5b+3iydyv9QWTcCvCKN1JHE9M2zES3smmeb+hVhAbo8/85S66i+5153FrcYArydZ85NMc4AFmWUKAlaWTkWvc5K9aZnmmfQQvYv76iu9vj22isl3v/11GfN//8mf3g6+8/V/+L//qxz5y1/9ZucpLw5rNMcXV4z/0QyLv/S9ynqO31AVthYQsFoLTzH+DLvSDHN8vViLQDmm4hNozVXr1U8GrHWcKkmrjNZo7mupWV7McBfMMMcs6y17nQJW9g6GqH/Zkio+cUNM6WsR0+65ZeIFo3qLH6PVqv5pxlq/vlpHWF9UjFllzKYma9lhX8xwLyxzrL7awzZUYe0EBKx2trOMPPxmNPwEH1dqeYgu7zd6zLyIVmsx+zPWi3S1jlY9ZpWRW0Ot9Ud7MfxNMfwEo62oIesRsIZsa79JlQdMo8dwv2k8v9JU+2zp5oLRtKF70tVf/fkvljL+y7/+u+ed+eGTv/mzf1te/dO//OHtkY0yVrluH7q3c+x5wNi3Rmlo0xuhZ7Nc6xIBAesS9kEuOvYeNPbsbpdgmenyTuvHydtoVXLVbW2vM1ZJV7fHv01aTWPWUkk3zNtZX/V67Htk7NldtWamuq6ANVW7K0922YBaP5IrV7x7uEn21jLNRaVDH1+kq8dc9dio26T1mKsej3+RtFpnrKWYnrCPc+/5zth3yjK7DrdGz365Vk8BAaun9lDXGnjrGfuZsazCMsHlRbeHx7N0tSdanbltnsWsDhmrlN2f+gzXsXPHvl+W2XW7TY75OyusgIAVtjWhCxt4Sx14asuSKrNbXvR8ZlyVrsotdHnGuoq9TL/P/xz4rhl4an3WxsxXEbBm7v7xuS+bTs8n9PFCPzxz4M20TG3x6Nm4a6PVbfPFrFuNFq/Hvnd63jUtumPMSwR+fslVXTS1gHSVq31Lv9aHX4TnROtfC25255KL3lWy4Bf/tSN3B6T+cZ1a6llsFr9MrdxBm596k8AzAQHrmYz3twVG3WjWCLI97bTvrvMqz7+e89j8+urCoLN56c0imyotjRg1i4w6r7IeRt36mq72yQcXsCZfAEem3/9RfaTKz88ZbF7L82D5b5nUJfPaDC6bEefzRh0/Y7OAzVKPX2PfmaUvpUf7zshx1CWLrQPNqPPqQDfzJfwdrJm7//Hcy5/hxttrShD5mCPqCZe3aTOybIabSwg3/z5Wt/+7wscpX96vx5JOvjPYDVU0xmvTyS47/a2Ab7DeEjngi8CQ6erLDJP/cPljIHi6Wtq7GfU2y+6zFso9VRrX54odrjLYdBax8ba+Dstg8ksIWJMvgA+mP96OuUz+8jjyQQPeHbrMZflveQxEexJsBpp3s2n7ebSSStdKB9vOvMvoZQWWm6vLBftdZMhJ9eOb7EoC1mQNPzfdaE/uc7P54ewxJlX2/cvn8vg9ULQos66Zx8Iei18P7vNipFxy+VJs0bIhJ9UCyphFQMCyEuYVWELJGDumdHVsEctYx9x2nrXcXL7v2WnlsCEFBKwh21p/UsNkkZVmmK2/tGaMpLh2Z+YXSytHiibD3GhlTY7Umpnvsj5zF7D6OLtKRIEBQkmc4Pv4+7XH74cCLoLHIh8ncknZYzzIB7jFLum+i44hIGCN0ce2sxjsz6AL1hgzipOuHtffY3B5PCbIO2FLHSNjDXO73S7XMTaQ2xl53UJAwGqhOuCY4/1JNPuMQqWrIN/61Lrx4kxngIyV/UZ7XFTjzehxjt6pIiBgVWE0SCaBAf70GXwKYb8TerZMgxccvN3PVG/fH2AKt9PxmsAeAQFrj9LUxwy5M6b+M2jpSOopTH1HfTj50ujUt+GQazV1Rz5cgw4/KCBgHYSb6rQh98fUHQzVkTi/UKvY01CTCtXuish5h9KRvL3rWbmA1VPbta4XWP7cmXpzjF9/8F+3PVuCwcteFm3qr0yy1/9s2XifwAsBAesFjo8IxBJI/YiNRZmzGgsgZ99UPamAgDVp43dO24a+E6rbYdG+fgv1q7S6XYg2tWitr6udcTTbY8au9axZwOqpnfJaI23ry4aYdzopdvPgv2h7fQemKD7FMth0Xm69vMU/zijvTvI4F+80EhCwGsEalkB9AXt6fdNUI1oAqdql2NkFBKzZV4D5EyBAgAABAtUFBKzqpAYkQIAAAQIEZhcQsGZfAeafQiD13x5LIZylyMH+JlMWdnUSOCAgYB1AcwoBAgQIECBA4JWAgPVKx2cECBAgQIAAgQMCAtYBNKcQIECAAAECBF4JCFivdHxGgAABAhUFRvqnsCqyGGpIAQFryLaaFAECBCIK+Ke8InZFTW0EBKw2rkYlQIAAAQIEJhYQsCZuvqkTIECAAAECbQQErDauRiVQVcC/flSVM/Fg/kW0xM1T+mQCAtZkDTddAgQIECBAoL2AgNXe2BUIECBAgACByQQErMkabrqZBfyfuGfuXoXaLYAKiIYg0EtAwOolnfY6I+3pqf8mU4r/+/Z/+pc/pF3p36QoPsUy2FwDg/3tsZE2xs1+efO8gIB13nDkEfLu5qN2Jdq2/stf/WZU6mhTi9b6Ufu+f162x/1Wcx4pYM3Zd7NOKWBDT9m2ekVbAPUsjUSguYCA1ZzYBUIJLI+o1N8ExK8/xS/aHtdk8LKXRZs6XWWv/3HBeIfAWwEB6y2RA75JnUiG7F+ojkT7VVqVjoeaVKh2V+HNPoiOZO9gn/oFrD7Oia+S+s/Nz9xT74+lI6mn8Kwv3n8UKI1OfRsOuVZTd+RxmXmnhYCA1ULVmKEFBtgZg08h+K/bHldn8IKDt/vR8/GdAabwOCnvEHgtIGC99vHpDwLj/Rk0+4yWJ1acKYT6hdr5mzbOdJYWZ48mcVbp+YVRRhhvRrVkjHMnIGDdgfhxQyD7Fv84pTFmFCpj3SEH/07ottqwpQ6QrorzGLfb7ZoZb0a3s/O6loCAVUvSOPkEBviTaJyM9fitT9jgcrtSH4t8nMjt8d1ej5GuBrjFunXchcYTELDG62mTGcV5kNea3jB/Bi2t8SSrtTAuH2dp5RjpqkgOc6OV6YzUmsuX+vAFCFjDt9gEnwoMkxrLM+zyjPX43c/j90NPm3HFB4/lPU6hc12liWOEElmk8+JxuWgCAla0joSu5/JHeAudMSYlY326NqSrT8U+On6M2+puykNO6m6OfqwoIGBVxBx8qDH+VH3XpCC55K6qYz8uc1n+W54B0R4Dj1Hm2AQrnhWtpNK10sGK07xqqLICy811VQ2NrjvkpBpZGVbAsgY+E4j28P6s+q2jB9sxy3QubNPmb9lCBZrNYjbL3lov9d8bMo4MdlstXb/wnqq/5ozYReBnf/z977pcyEUGEVh2mfG2zqU3483r2sf2d7/99eOK/6s//8Xjm53fCZWuru1RI/nxbqUCNeq8Gi0Dwy4CvsGyDD4WKE+Fj08Lf8Jg81py8PLfMqlL5rX5hdBmuOm5LjYL2Cy1dVWlL6VHra/Vc/xLFluHCY46rw50M19CwJq5+0fmPuTXVwtEmdd42+g6r/5T2wwumxHnyEL8/JzNS28W+fnYH5yxNKL0YrxbadR5le6O168PVq1DDwkIWIfY5j5p2Wj6P607kK9ZpMO1el5imdc6tQiN2ww6rUEuuejdpBb8NYKUjtwdkPrHdWqpZ7FZ/DK18fq1OVNv1hXwd7Dqes4y2tib6dLFUffT0rjOE9z8+1hLDX3+StazaNXzu6tL2HtuRjaEntqulUVAwMrSqXB1Llvq2Clk1NktK6n/8/6qjHV5uupP3X+nGDhdlZtl4K2g/2qZ6ooC1lTtrjxZGasyaPfhej7+n2WsZdItvsp6Fq2Wy3X47qonbPdV8+WC0tUXDj8QuBEQsG4wvPxQYPi9dfGY4Q+v3dLAi4xVlt75pPUiV5VLtE5X3TA/vFmbHG4HaMJq0FEEBKxROnnRPMbeYRfUZYIzZKyyfPqEg7cxaynm06T1NlctYzaNVn3oSpuC/M+xb43S0Hnu/SCLarAyBKzBGnrBdMbeZxfQ4Sf4uGjK02V5v9EDZk/GeqzqzDuN0lVrqDNTbnru8DfF8BNsujwMXgQELCuhgsDwm1F5jjZKGxUa0GyIMvEyfPXp94lZ1aNVU5Nmnaw28Az3wjLH6qu9WgMMlEdAwMrTq8CVTrLnLh2YedttFCzaxayK0arR3APf09uludO3XbxLYEtAwNpS8d7nAjPsvIvKMs2ZM1ZZF7dpo7xTxaRW0qqSqxrN8fMbK9AZMyz+0vcq6zlQ55RykYCAdRH8iJedZG+aZJr7V2gBuT3+5PPpWNI6mauqz+IWJPvrSdb8JNPMvhoT1S9gJWpWglIn2aEmmebhBVd87k4/mbruRjvzY/DyzkytxbmTrPZJptlihRjzmYCA9UzG+wcF5tmn5pnpwaXw9bTC9fW9Lz/VSmDdLvSl+hF/mGeFzzPTEddp3DkJWHF7k7eyZbeq9bAMjrA+yyeZb9N2rJgnr6IXJwGX09deTII5z5Z1fm0YYb+AgLXfypEfCEy1YZWn0SSPog8WgUNzCsy2nqfarHIuyaxVC1hZOxe/7qm2rfJMWpoiZsVfmSp8JjDhMp5qm3rWd+83EhCwGsEa9nuB2Tav8nySsaz+jAITrt7ZNqiMyzJ1zQJW6vYlKH7OXXtpTP+Y9Ys/+8/Ldf/wr/81wbJQYiQBN2mkbqhlHAEBa5xehp3JhNv30osy6+VF06RVQtWz1gtbz2S8vwj0WaIBqefckQI2YviSBKzhWxxigtPuaI2eYa9z1WPLJa1Hk5nfabQsU5BOuxel6M5gRQpYgzU07nRm3tfqPs8+TVdlTchYce+NjpXVXYodC69zqZl3oTqCRvlEQMD6RMux5wQm392qPNuOpavSNxnr3PrNfXaV5ZeaYPL9J3XvkhYvYCVtXOKybXOHBc6kq7JiZKzEd87R0g+vt6MXDHcegXAtmaMgAWuOPgebpf1uaUhBWF7s/Fvw59NVWQUyVrC7oVU5ny6wVnVcPa7d5uoOzHt9AWve3l87c7te8d/5FKyVrspFZaxrF3/rq+9cVK3LiDC+fSZCF6atQcCatvUhJm77K214+0QUsEKs1/BFvF1I4WdQrUB7SzVKAx0VELCOyjmvkoB98BZy8wFZN12Vy/kS65Y9++vNZZN9Umfqt6uc0XNuLQEBq5akcY4L2A0f7W4fmQLWo493FoHbRQJkFbCfrBReXCvw7bWXd3UCi0D5W962xdvFsP7N9/Uhevup1zMLrEtiXSQza9zO3R5yq+H15QK+wbq8BQr4ScD++JPFj69afH1VxvZbwh+Nc/xvuep1n+wer3182l/AN1j9zV3xqYCvsp7S+GBKgTVULbP3fdWzJSBaPZPx/rUCAta1/q6+ISBmbaB4ayaBNVcJVa/bLlq99vHptQIC1rX+rv5UYHm0LLvn8p9nzFMjH4wisCaqMiFrfk9jpas9So65UEDAuhDfpd8IlMeMbfQNk49zCghVh/tmTzhM58SeAgJWT23XOiKwfpW1nOxP9kcEnRNGQKg62YoV0FZwUtLpHQQErA7ILnFWYP0qa9lebaxnNX88H+aPEg3/9xoIyjWs3jPWBZPhGUPn9hTwzzT01HatCgITbrIt/qWG8m80ePxXWJFfh0D61aPOTxPe9XXgjHKpgG+wLuV38c8F1m+zllP9WfZzvy9n3AHehYNy6N0xX86f+wdcHfovWnVAdolGAr7BagRr2B4Ck2y+7b7BetskGWIlQrFS9Hkxyd3dB9NVLhEQsC5hd9FqAutjb+wvWupmrJP/hvtqvtnFvI0YdV6bbYr85tqIvGspMq/augkIWN2oXaihwPA7cqiA9aKRayNeHFM+6vnsjFnVW6IJD1g71XN5TOhsyn0EBKw+zq7SSaBs0EPuzrUy1smvr6o0cn2OVhltzyBDLok9E89yzMB3bpYWqLO6gIBVndSA1wuMulmfz1gR0tX160MFkQRGvVsjGavlGgEB6xp3V+0gsH5NMtK3F2cylnTVYdW5xE6BIW/PnXN32CQCAtYkjZ53muPt48cylnQ17z0QbObj3ZLBgJUTRUDAitIJdTQVGG9P3x+zRKumS8vg+wXGuw33z92REwoIWBM2feoply1+mF8avo5ZotXUaz3S5Ae77yLRqiWugIAVtzcqayfgT9LtbI1MYBVwo60UXkwoIGBN2HRT/kFg3f2Xn4f5Tkt3CVwu4M66vAUKiCAgYEXoghouFlifB2LWxZ1w+eQCbqXkDVR+TQEBq6amsbILeDxk76D6LxFw41zC7qLBBQSs4A1S3jUCHhjXuLtqKgG3Sap2Kba3gIDVW9z1Egmsz4+lZr89TNQ4pTYVcF805TX4MAIC1jCtNJGGAp4oDXENXU/gu9/+ugz2y1/9pt6oP4zkLqhOasCxBQSssftrdvUF1seM77Tq4xrxkMCaqx7PPp+0LPhHVe8Q2CMgYO1RcgyBDQEPng0Ub3UXeJGuSi3HMpbl3b2TLjiagIA1WkfNp7/A+ihaLu1rrf7+M1/xbboqODszlpU881oy9+oCAlZ1UgPOK+D5NG/vr5j5znRVSnuRsazbK7rnmuMLfDv+FM2QQC+B26+vPLR6qbvOEQHr84iacwh8IuAbrE+0HEvgkMD6MLtNYIdGchKBHwQ++vqqnLN8iWUpWkAEugn4BqsbtQvNK7DmqvXxVizW9+elMfOOAsvys+Q6ervU7AIC1uwrwPx7Ctw+3pan3W3euv2oZ0muNY+ANTZPr800goCAFaELaphR4O5pdxu2Fo67T2cEMmcCBAhkFhCwMndP7QMJ3Caquy+3llnefjrQpE3loMBdHD84itMIEGgpIGC11DU2gUMCd3FK3jqkONRJEtVQ7TSZOQQErDn6bJaZBd7mrWVyd8dknq7av9mMU3ct/u6/fUeKAIHIAv6ZhsjdURuBXQKPz+O7h/GuURx0ncCxDn70LzW8+IdGr5u3KxMYWUDAGrm75jatwOMDe6GQuiKsh7qt2ZmxpKsIrVfDbAIC1mwdN995BTYf7QuH4NViTXTTfpuxpKsW/TUmgbcCAtZbIgcQGFngWQ4oc5a9Xvc+iN6LjCVdve6gTwm0ExCw2tkamUB6gdcBYpne2Aks1/TvYpZolf72M4HkAgJW8gYqn8B1Am/zx2ZpV2WyXNVu0nmTAIFEAgJWomYplcAIAseCzvmZXxXszlduBAIEMgoIWBm7pmYCBAgQIEAgtMDPQ1enOAIECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBYQsGL3R3UECBAgQIBAQgEBK2HTlEyAAAECBAjEFhCwYvdHdQQIECBAgEBCAQErYdOUTIAAAQIECMQWELBi90d1BAgQIECAQEIBASth05RMgAABAgQIxBb4f25AOMZJssukAAAAAElFTkSuQmCC"><figcaption>Fig. 2. <code>orbit --frame</code>: drawn with no window, written as a PPM. The same code draws the window.</figcaption></figure><p><strong>Step 4. The runtime declarations</strong> (top of <code>src/mac.rs</code>):</p><ul><li>the <code>#[link(name = &quot;AppKit&quot;, kind = &quot;framework&quot;)]</code> block (and Foundation, CoreGraphics);</li><li><code>objc_getClass</code>, <code>sel_registerName</code>, <code>objc_msgSend</code> with no arguments;</li><li><code>objc_autoreleasePoolPush</code> and <code>objc_autoreleasePoolPop</code>;</li><li>the five Core Graphics functions;</li><li>the <code>send</code> helpers, <code>class</code>, <code>sel</code>, <code>nsstring</code>;</li><li><code>#[repr(C)]</code> <code>Point</code>, <code>Size</code> and <code>Rect</code>, matching <code>CGPoint</code>, <code>CGSize</code> and <code>CGRect</code>.</li></ul><p><strong>Step 5. The window</strong> (<code>Window::open</code>):</p><ol><li><code>sharedApplication</code>.</li><li><code>setActivationPolicy:</code> regular: a Dock icon, and the keyboard.</li><li><code>finishLaunching</code>.</li><li><code>NSWindow</code> <code>alloc</code> and <code>initWithContentRect:styleMask:backing:defer:</code>.</li><li><code>setTitle:</code>, <code>setAcceptsMouseMovedEvents:</code>, <code>setReleasedWhenClosed:NO</code>.</li><li>An <code>NSImageView</code> as the content view.</li><li><code>center</code>, <code>makeKeyAndOrderFront:</code>, and <code>activateIgnoringOtherApps:</code>, without which a binary started from a terminal opens behind it.</li><li><code>backingScaleFactor</code>, for the canvas in device pixels.</li></ol><p><strong>Step 6. Events</strong> (<code>poll</code>, <code>translate</code>), inside a pool: as §III-F.</p><p><strong>Step 7. Showing a frame</strong> (<code>present</code>), inside a pool: as §III-D and §III-E.</p><p><strong>Step 8. The loop</strong> (<code>src/main.rs</code>, <code>run</code>), written against <code>Surface</code>, and <code>main</code> choosing <code>mac::Window</code> on macOS. Run it:</p><div class="code"><span class="lang">sh</span><pre><code>cargo run --release      # Escape, Command-Q or the close button quits</code></pre></div><p><strong>Step 9. Watch its memory once.</strong> A leak in this kind of program is megabytes a frame, not bytes, and it shows within seconds:</p><div class="code"><span class="lang">sh</span><pre><code>./target/release/orbit &amp; P=$!
+for i in 1 2 3 4 5 6; do ps -o rss= -p $P; sleep 5; done; kill $P</code></pre></div><p>Flat is right. If it climbs every sample, a pool is missing.</p><p><strong>Step 10. The application</strong> (<code>mac-app.sh</code>): <code>cargo build --release</code>, the bundle's folders, the binary, <code>Info.plist</code>, the icon if <code>icon.png</code> is there, <code>codesign</code> the binary and then the bundle, and the swap into <code>~/Applications</code>.</p><div class="code"><span class="lang">sh</span><pre><code>sh mac-app.sh            # ~/Applications/Orbit.app
+codesign -v --deep ~/Applications/Orbit.app &amp;&amp; open ~/Applications/Orbit.app</code></pre></div><p><strong>Step 11. Growing it into orrery's shape:</strong></p><ul><li><code>zoom</code>, for bitmap fonts at their size;</li><li>more <code>Input</code>s: buttons, drags, scroll, modifiers;</li><li>a second <code>Surface</code> for another platform;</li><li>a launcher script when the app needs arguments;</li><li>build under <code>tools/mem-guard.sh</code> on a busy machine.</li></ul></section><section id="svi"><h2>VI. Results</h2><h3 id="a-the-example">A. The example</h3><div class="table"><table><thead><tr><th>Measure</th><th>Value</th></tr></thead><tbody><tr><td>Source</td><td>602 lines: <code>mac.rs</code> 319, <code>main.rs</code> 67, <code>surface.rs</code> 68, <code>draw.rs</code> 73, <code>Cargo.toml</code> 17, <code>mac-app.sh</code> 58</td></tr><tr><td>Dependencies</td><td>none</td></tr><tr><td>Release build (lto, one unit)</td><td>4.2 s; peak 197 MB (<code>mem-guard.sh</code>)</td></tr><tr><td>Binary / bundle</td><td>320,304 bytes / 816 KB with its icon</td></tr><tr><td>Warnings</td><td>none</td></tr><tr><td><code>--frame</code></td><td>Fig. 2</td></tr><tr><td>The window, 800 × 500 points (1,600 × 1,000 pixels), 30 frames a second</td><td>resident memory 284 MB, flat for 30 s (six samples, all 284 MB)</td></tr><tr><td>The same with the pools in <code>poll</code> and <code>present</code> removed</td><td>510, 1,261, 2,013 MB at 5 s intervals: about 150 MB a second, closed by the watch at 1.5 GB</td></tr><tr><td><code>Orbit.app</code></td><td><code>codesign -v --deep</code> passes; opened by <code>open</code>, ran as <code>Orbit.app/Contents/MacOS/orbit</code></td></tr></tbody></table></div><p>The 284 MB is mostly AppKit's and the window server's shared pages, which <code>ps</code> counts as resident. The test is that it does not change.</p><p>150 MB a second is 30 frames of a 6.4 MB frame (1,600 × 1,000 × 4 bytes), plus the image <code>NSImageView</code> builds to draw it: about one leaked frame-copy a frame.</p><h3 id="b-orrery-the-full-size-case">B. orrery, the full-size case</h3><div class="table"><table><thead><tr><th>Measure</th><th>Value</th></tr></thead><tbody><tr><td>Release build</td><td>21.3 s; peak 559 MB. Tests: peak 792 MB, 338 pass</td></tr><tr><td><code>Orrery.app</code> before the pools</td><td>504, 997, 1,401, 1,840, 2,292 MB at 5 s intervals: about 90 MB a second (12 frames a second of a 2,560 × 1,520 canvas), closed by the watch</td></tr><tr><td>After</td><td>301 MB at start, then 362 to 380 MB, flat over two minutes</td></tr></tbody></table></div><h3 id="c-faults-found">C. Faults found</h3><ol><li><strong>The missing autorelease pool</strong> (§III-E). Left open beside the fleet's census, Orrery.app took the Mac's memory and had to be force-quit.<ul><li>The first suspect was the compiler, and the build was rebuilt under a</li></ul><p>guard (<code>tools/mem-guard.sh</code>, which stops a process group past a memory limit). It peaked at 559 MB.</p><ul><li>The app itself, watched, was the cause.</li></ul></li><li><strong>The launcher and the binary were one file</strong> (§III-G), on the case-insensitive disk. Both launchers are now named <code>launch</code>.</li><li><strong>A misread error.</strong> <code>codesign</code>'s "code object is not signed at all" seemed to say the release profile strips the signature. The binary was in fact signed by the linker; the "unsigned" file was the launcher written over it.</li></ol><p><strong>Errors and limits.</strong></p><ul><li>All measurements are from one M1 and are single runs; resident memory moves by a few MB from sample to sample.</li><li>Nothing was built or run on Intel.</li><li>The no-pool build was a scratch copy, not kept.</li></ul></section><section id="svii"><h2>VII. Discussion</h2><p>The approach trades one kind of difficulty for another. There is no framework and no callback, and the program reads top to bottom: a loop that asks for events and hands over pixels. Every AppKit object in it was made by a line you can point to. But the conventions a framework would keep are kept by hand:</p><ul><li>an exact signature for every message;</li><li>a pool around every turn;</li><li>a release for every <code>alloc</code> and every <code>Create</code>;</li><li>the y axis flipped once;</li><li>points and pixels kept apart.</li></ul><p>The pool is the one that fails silently and expensively. Section V's step 9 is there because of it.</p><p><strong>What this leaves out</strong>, each a step further:</p><ul><li>a menu bar (<code>NSMenu</code>, so Command-Q and the Edit menu come from AppKit);</li><li>text input methods (<code>NSTextInputClient</code>, which needs a subclass);</li><li>accessibility;</li><li>drawing on the GPU (a <code>CAMetalLayer</code>, worth it past a few megapixels at 60 frames a second);</li><li>resize delivered rather than polled.</li></ul><p>Every one of those needs AppKit to call the program back, and so needs either <code>objc_allocateClassPair</code> or a crate. orrery has needed none of them. A software canvas at 12 frames a second is light work for an M1.</p><p><strong>When to choose otherwise.</strong> Use <code>winit</code> or <code>objc2</code> if:</p><ul><li>the project may take dependencies;</li><li>it must run on Windows and Linux from one event loop;</li><li>it needs real text input or accessibility.</li></ul><p>This method suits a tool with its own loop and its own pixels, where nothing may be fetched.</p></section><section id="sviii"><h2>VIII. Checklist</h2><div class="table"><table><tbody><tr><td><code>objc_msgSend</code></td><td>declared with no arguments; cast at every call to that message's exact signature</td></tr><tr><td>Struct returns</td><td>arm64: plain <code>objc_msgSend</code>; Intel: <code>objc_msgSend_stret</code> for &gt;16 bytes</td></tr><tr><td>Activation</td><td><code>setActivationPolicy:</code> regular, <code>finishLaunching</code>, <code>activateIgnoringOtherApps:</code></td></tr><tr><td>Mouse moved</td><td><code>setAcceptsMouseMovedEvents:YES</code></td></tr><tr><td>Close</td><td><code>setReleasedWhenClosed:NO</code>, then poll <code>isVisible</code></td></tr><tr><td>Pixels</td><td><code>0x00RRGGBB</code> words, <code>BITMAP_INFO = 6 \| 2&lt;&lt;12</code>, no copy</td></tr><tr><td>Retina</td><td>canvas in device pixels; <code>NSImage</code> sized in points</td></tr><tr><td>Y axis</td><td>flipped once, in event translation</td></tr><tr><td>Pools</td><td>push and pop around every <code>poll</code> and every <code>present</code></td></tr><tr><td>Ownership</td><td>release what you <code>alloc</code>; <code>…Release</code> what you <code>Create</code>; the previous <code>CGImage</code> when replaced</td></tr><tr><td>Unused events</td><td><code>[NSApp sendEvent:]</code>, so the window still drags and closes</td></tr><tr><td>Bundle</td><td><code>Info.plist</code> with <code>CFBundleExecutable</code>, <code>CFBundleIdentifier</code>, <code>NSHighResolutionCapable</code></td></tr><tr><td>Launcher</td><td>a script that <code>exec</code>s; never named like the binary</td></tr><tr><td>Signature</td><td><code>codesign --sign -</code> on the binary, then the bundle; <code>codesign -v --deep</code></td></tr><tr><td>Before shipping</td><td>watch resident memory for 30 s: flat</td></tr></tbody></table></div></section><section id="references"><h2>References</h2><ol><li>Apple, <em>Objective-C Runtime</em>: <code>objc_msgSend</code>, <code>objc_getClass</code>, <code>sel_registerName</code>, and the autorelease pool functions.</li><li>Apple, <em>AppKit</em>: <code>NSApplication</code>, <code>NSWindow</code>, <code>NSImageView</code>, <code>NSImage</code>, <code>NSEvent</code>.</li><li>Apple, <em>Core Graphics</em>: <code>CGImageCreate</code>, <code>CGDataProviderCreateWithData</code>, <code>CGBitmapInfo</code>.</li><li>Apple, <em>Bundle Programming Guide</em> and <em>Information Property List Key Reference</em>.</li><li>Apple, <em>Code Signing Guide</em>; <code>codesign(1)</code>, <code>spctl(8)</code>, <code>iconutil(1)</code>, <code>sips(1)</code>.</li><li>orrery <code>src/mac.rs</code>, <code>src/surface.rs</code>, <code>src/main.rs</code>; <code>tools/mac-app.sh</code>; <code>docs/mac-app-lab-report.md</code>.</li></ol></section><section id="appendix-a"><h2>Appendix A. orbit, every file</h2><p>Built and run as listed (§VI-A). Copy the folder, or these, and <code>cargo run --release</code>.</p><h3 id="cargo-toml"><code>Cargo.toml</code></h3><div class="code"><span class="lang">toml</span><pre><code># orbit -- the smallest program with orrery&#x27;s shape: a Rust loop that draws
+# into its own pixels and shows them in an AppKit window, with no crates.
+# docs/appkit-gui-lab-report.md teaches it a part at a time.
+[package]
+name = &quot;orbit&quot;
+version = &quot;0.1.0&quot;
+edition = &quot;2021&quot;
+license = &quot;MIT&quot;
+
+# Empty, and that is the point: AppKit, Foundation, CoreGraphics and the
+# Objective-C runtime are on every Mac, and src/mac.rs declares what it uses.
+[dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true</code></pre></div><h3 id="src-main-rs"><code>src/main.rs</code></h3><div class="code"><span class="lang">rust</span><pre><code>//! orbit: a Rust program with a Mac window and no crates.
+//!
+//!     orbit                 the window (Escape, Command-Q or the close button quits;
+//!                           a click stops and starts the turning)
+//!     orbit --frame F.ppm   one frame to a file, no window
+//!
+//! The loop is the program&#x27;s: poll, change the state, draw, present, sleep.
+//! AppKit is only asked for a window, events and a place to put pixels.
+
+mod draw;
+#[cfg(target_os = &quot;macos&quot;)]
+mod mac;
+mod surface;
+
+use surface::{Input, Offscreen, Surface};
+use std::time::{Duration, Instant};
+
+const FPS: u64 = 30;
+
+/// The window&#x27;s loop, written once against `Surface`.
+fn run&lt;S: Surface&gt;(mut s: S) {
+    let mut st = draw::State::default();
+    let mut last = Instant::now();
+    loop {
+        for input in s.poll() {
+            match input {
+                Input::Closed | Input::Escape | Input::Key { ch: &#x27;q&#x27;, cmd: true } =&gt; return,
+                Input::Moved { x, y } =&gt; st.pointer = Some((x, y)),
+                Input::Clicked { x, y } =&gt; {
+                    st.pointer = Some((x, y));
+                    st.paused = !st.paused;
+                }
+                Input::Resized =&gt; s.apply_resize(),
+                Input::Key { .. } =&gt; {}
+            }
+        }
+        let now = Instant::now();
+        if !st.paused {
+            st.turned += (now - last).as_secs_f64();
+        }
+        last = now;
+        let (w, h) = s.size();
+        draw::frame(s.pixels(), w, h, &amp;st);
+        s.present();
+        std::thread::sleep(Duration::from_millis(1000 / FPS));
+    }
+}
+
+fn main() {
+    let args: Vec&lt;String&gt; = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == &quot;--frame&quot;) {
+        let path = args.get(i + 1).expect(&quot;--frame needs a file&quot;);
+        let mut s = Offscreen::new(800, 500);
+        let st = draw::State { pointer: Some((560, 140)), paused: false, turned: 3.0 };
+        let (w, h) = s.size();
+        draw::frame(s.pixels(), w, h, &amp;st);
+        s.write_ppm(path).expect(&quot;write the frame&quot;);
+        return;
+    }
+    #[cfg(target_os = &quot;macos&quot;)]
+    run(mac::Window::open(&quot;orbit&quot;, 800, 500));
+    #[cfg(not(target_os = &quot;macos&quot;))]
+    {
+        let _ = run::&lt;Offscreen&gt;;
+        eprintln!(&quot;orbit: the window is macOS&#x27;s; --frame works anywhere&quot;);
+    }
+}</code></pre></div><h3 id="src-surface-rs"><code>src/surface.rs</code></h3><div class="code"><span class="lang">rust</span><pre><code>//! The seam between the drawing and whatever shows it.
+//!
+//! The drawing (`draw.rs`) knows nothing about windows: it writes pixels into
+//! a buffer. A platform is anything that can hand over a buffer, take it back
+//! to show, and say what the person did. The Mac window is one (`mac.rs`); a
+//! file is another (`Offscreen`), which is how a frame is looked at with no
+//! window at all.
+
+/// What the person did, in the program&#x27;s own words, not AppKit&#x27;s.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Input {
+    /// The pointer, in canvas pixels, top left at (0, 0).
+    Moved { x: i32, y: i32 },
+    Clicked { x: i32, y: i32 },
+    /// A typed character; `cmd` when Command was held.
+    Key { ch: char, cmd: bool },
+    Escape,
+    Resized,
+    Closed,
+}
+
+pub trait Surface {
+    /// `width * height` words of `0x00RRGGBB`, native-endian.
+    fn pixels(&amp;mut self) -&gt; &amp;mut [u32];
+    fn size(&amp;self) -&gt; (usize, usize);
+    /// Everything that happened since the last call. Never blocks.
+    fn poll(&amp;mut self) -&gt; Vec&lt;Input&gt;;
+    /// Adopt the size the platform asked for.
+    fn apply_resize(&amp;mut self);
+    /// Hand the pixels over to be shown.
+    fn present(&amp;mut self);
+}
+
+/// A surface that is only a buffer: `--frame PATH` draws into it and writes
+/// a PPM, so every picture can be made without a screen.
+pub struct Offscreen {
+    pub w: usize,
+    pub h: usize,
+    pub px: Vec&lt;u32&gt;,
+}
+
+impl Offscreen {
+    pub fn new(w: usize, h: usize) -&gt; Offscreen {
+        Offscreen { w, h, px: vec![0; w * h] }
+    }
+
+    pub fn write_ppm(&amp;self, path: &amp;str) -&gt; std::io::Result&lt;()&gt; {
+        let mut out = format!(&quot;P6\n{} {}\n255\n&quot;, self.w, self.h).into_bytes();
+        for &amp;p in &amp;self.px {
+            out.extend_from_slice(&amp;[(p &gt;&gt; 16) as u8, (p &gt;&gt; 8) as u8, p as u8]);
+        }
+        std::fs::write(path, out)
+    }
+}
+
+impl Surface for Offscreen {
+    fn pixels(&amp;mut self) -&gt; &amp;mut [u32] {
+        &amp;mut self.px
+    }
+    fn size(&amp;self) -&gt; (usize, usize) {
+        (self.w, self.h)
+    }
+    fn poll(&amp;mut self) -&gt; Vec&lt;Input&gt; {
+        Vec::new()
+    }
+    fn apply_resize(&amp;mut self) {}
+    fn present(&amp;mut self) {}
+}</code></pre></div><h3 id="src-draw-rs"><code>src/draw.rs</code></h3><div class="code"><span class="lang">rust</span><pre><code>//! The drawing: a software canvas, no platform in sight.
+//!
+//! An orrery: a sun and three bodies on their orbits, turning with time, and
+//! a ring where the pointer is. A click stops and starts it.
+
+pub const PAPER: u32 = 0xFCE2AB;
+pub const INK: u32 = 0x121212;
+pub const LINE: u32 = 0xC4A870;
+pub const ACCENT: u32 = 0x87704F;
+pub const SUN: u32 = 0xF0A03A;
+pub const BRASS: u32 = 0xB06A24;
+
+/// What the drawing remembers between frames.
+pub struct State {
+    pub pointer: Option&lt;(i32, i32)&gt;,
+    pub paused: bool,
+    /// Seconds of turning, which stops while paused.
+    pub turned: f64,
+}
+
+impl Default for State {
+    fn default() -&gt; Self {
+        State { pointer: None, paused: false, turned: 0.0 }
+    }
+}
+
+/// Fill a disc, clipped to the canvas.
+fn disc(px: &amp;mut [u32], w: usize, h: usize, cx: f64, cy: f64, r: f64, c: u32) {
+    let (x0, x1) = ((cx - r).floor().max(0.0) as usize, ((cx + r).ceil() as usize).min(w));
+    let (y0, y1) = ((cy - r).floor().max(0.0) as usize, ((cy + r).ceil() as usize).min(h));
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
+            if dx * dx + dy * dy &lt;= r * r {
+                px[y * w + x] = c;
+            }
+        }
+    }
+}
+
+/// An ellipse&#x27;s outline, as dots close enough to read as a line.
+fn ring(px: &amp;mut [u32], w: usize, h: usize, cx: f64, cy: f64, a: f64, b: f64, c: u32) {
+    let steps = (a.max(b) * 8.0) as usize;
+    for i in 0..steps {
+        let t = i as f64 / steps as f64 * std::f64::consts::TAU;
+        let (x, y) = (cx + a * t.cos(), cy + b * t.sin());
+        if x &gt;= 0.0 &amp;&amp; y &gt;= 0.0 &amp;&amp; (x as usize) &lt; w &amp;&amp; (y as usize) &lt; h {
+            px[y as usize * w + x as usize] = c;
+        }
+    }
+}
+
+/// One frame, from the state alone. Called by the window and by `--frame`.
+pub fn frame(px: &amp;mut [u32], w: usize, h: usize, st: &amp;State) {
+    px.fill(PAPER);
+    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+    let unit = w.min(h) as f64 / 400.0;
+    // (orbit radius, period in seconds, body radius, colour)
+    let bodies = [(70.0, 4.0, 8.0, ACCENT), (120.0, 9.0, 12.0, INK), (175.0, 17.0, 7.0, BRASS)];
+    for &amp;(r, _, _, _) in &amp;bodies {
+        ring(px, w, h, cx, cy, r * unit, r * unit * 0.45, LINE);
+    }
+    disc(px, w, h, cx, cy, 30.0 * unit, BRASS);
+    disc(px, w, h, cx, cy, 26.0 * unit, SUN);
+    for &amp;(r, period, size, c) in &amp;bodies {
+        let t = st.turned / period * std::f64::consts::TAU;
+        let (x, y) = (cx + r * unit * t.cos(), cy + r * unit * 0.45 * t.sin());
+        disc(px, w, h, x, y, size * unit, c);
+    }
+    if let Some((x, y)) = st.pointer {
+        ring(px, w, h, x as f64, y as f64, 14.0 * unit, 14.0 * unit, if st.paused { BRASS } else { ACCENT });
+    }
+}</code></pre></div><h3 id="src-mac-rs"><code>src/mac.rs</code></h3><div class="code"><span class="lang">rust</span><pre><code>//! An AppKit window, by message sends alone.
+//!
+//! No Objective-C class is defined: AppKit never calls into Rust. The program
+//! owns the loop, and everything it needs is a message it sends or a thing
+//! it polls:
+//!
+//!     a window          NSWindow initWithContentRect:styleMask:backing:defer:
+//!     pixels on it      an NSImageView, given a new NSImage each frame
+//!     the pixels        CGDataProviderCreateWithData -&gt; CGImageCreate
+//!     events            nextEventMatchingMask: with a date in the past
+//!     closed            [window isVisible] went false
+//!     resized           the view&#x27;s frame no longer matches the canvas
+//!
+//! Every poll and present runs inside an autorelease pool, because AppKit&#x27;s
+//! own run loop, which would drain one each turn, is not running.
+//!
+//! arm64: an NSRect comes back in registers through plain objc_msgSend. On
+//! Intel a struct that large needs objc_msgSend_stret, which this does not
+//! declare.
+#![cfg(target_os = &quot;macos&quot;)]
+
+use crate::surface::{Input, Surface};
+use std::ffi::{c_char, c_void, CStr, CString};
+
+type Id = *mut c_void;
+type Sel = *const c_void;
+
+#[link(name = &quot;AppKit&quot;, kind = &quot;framework&quot;)]
+#[link(name = &quot;Foundation&quot;, kind = &quot;framework&quot;)]
+#[link(name = &quot;CoreGraphics&quot;, kind = &quot;framework&quot;)]
+extern &quot;C&quot; {
+    fn objc_getClass(name: *const c_char) -&gt; Id;
+    fn sel_registerName(name: *const c_char) -&gt; Sel;
+    /// Never called with this prototype: each send below casts it to the
+    /// exact signature of that message. (Its header calls it variadic, and
+    /// calling it as variadic corrupts arguments.)
+    fn objc_msgSend();
+    fn objc_autoreleasePoolPush() -&gt; *mut c_void;
+    fn objc_autoreleasePoolPop(pool: *mut c_void);
+
+    fn CGColorSpaceCreateDeviceRGB() -&gt; Id;
+    fn CGDataProviderCreateWithData(info: *mut c_void, data: *const c_void, size: usize, release: *const c_void) -&gt; Id;
+    fn CGDataProviderRelease(p: Id);
+    #[allow(clippy::too_many_arguments)]
+    fn CGImageCreate(
+        width: usize,
+        height: usize,
+        bits_per_component: usize,
+        bits_per_pixel: usize,
+        bytes_per_row: usize,
+        space: Id,
+        bitmap_info: u32,
+        provider: Id,
+        decode: *const f64,
+        should_interpolate: bool,
+        intent: i32,
+    ) -&gt; Id;
+    fn CGImageRelease(img: Id);
+}
+
+// One function per argument count, each a cast of objc_msgSend.
+unsafe fn send&lt;R&gt;(o: Id, s: Sel) -&gt; R {
+    let f: unsafe extern &quot;C&quot; fn(Id, Sel) -&gt; R = std::mem::transmute(objc_msgSend as unsafe extern &quot;C&quot; fn());
+    f(o, s)
+}
+unsafe fn send1&lt;A, R&gt;(o: Id, s: Sel, a: A) -&gt; R {
+    let f: unsafe extern &quot;C&quot; fn(Id, Sel, A) -&gt; R = std::mem::transmute(objc_msgSend as unsafe extern &quot;C&quot; fn());
+    f(o, s, a)
+}
+unsafe fn send2&lt;A, B, R&gt;(o: Id, s: Sel, a: A, b: B) -&gt; R {
+    let f: unsafe extern &quot;C&quot; fn(Id, Sel, A, B) -&gt; R = std::mem::transmute(objc_msgSend as unsafe extern &quot;C&quot; fn());
+    f(o, s, a, b)
+}
+unsafe fn send4&lt;A, B, C, D, R&gt;(o: Id, s: Sel, a: A, b: B, c: C, d: D) -&gt; R {
+    let f: unsafe extern &quot;C&quot; fn(Id, Sel, A, B, C, D) -&gt; R = std::mem::transmute(objc_msgSend as unsafe extern &quot;C&quot; fn());
+    f(o, s, a, b, c, d)
+}
+
+fn class(name: &amp;str) -&gt; Id {
+    let c = CString::new(name).unwrap();
+    unsafe { objc_getClass(c.as_ptr()) }
+}
+fn sel(name: &amp;str) -&gt; Sel {
+    let c = CString::new(name).unwrap();
+    unsafe { sel_registerName(c.as_ptr()) }
+}
+/// An autoreleased NSString: used at once, inside a pool.
+unsafe fn nsstring(s: &amp;str) -&gt; Id {
+    let c = CString::new(s).unwrap();
+    send1(class(&quot;NSString&quot;), sel(&quot;stringWithUTF8String:&quot;), c.as_ptr())
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Point {
+    x: f64,
+    y: f64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Size {
+    w: f64,
+    h: f64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Rect {
+    origin: Point,
+    size: Size,
+}
+
+const STYLE: u64 = 1 | 2 | 4 | 8; // titled, closable, miniaturizable, resizable
+const BACKING_BUFFERED: u64 = 2;
+const ACTIVATION_REGULAR: i64 = 0;
+/// The canvas word 0x00RRGGBB, little-endian, is B G R 0 in memory: read as
+/// &quot;alpha first, skipped&quot; in 32-bit little-endian order it needs no
+/// conversion (kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little).
+const BITMAP_INFO: u32 = 6 | (2 &lt;&lt; 12);
+const EV_LEFT_DOWN: u64 = 1;
+const EV_MOUSE_MOVED: u64 = 5;
+const EV_KEY_DOWN: u64 = 10;
+const MOD_CMD: u64 = 1 &lt;&lt; 20;
+const KEY_ESCAPE: u16 = 53;
+
+pub struct Window {
+    app: Id,
+    window: Id,
+    view: Id,
+    space: Id,
+    px: Vec&lt;u32&gt;,
+    w: usize,
+    h: usize,
+    scale: f64,
+    resized: bool,
+    closed: bool,
+    last_image: Id,
+    mode: Id,
+    past: Id,
+}
+
+impl Window {
+    /// A window `w` x `h` points; its canvas is in device pixels.
+    pub fn open(title: &amp;str, w: usize, h: usize) -&gt; Window {
+        unsafe {
+            let app: Id = send(class(&quot;NSApplication&quot;), sel(&quot;sharedApplication&quot;));
+            // Regular: a Dock icon and keyboard focus, even run from a terminal.
+            let _: bool = send1(app, sel(&quot;setActivationPolicy:&quot;), ACTIVATION_REGULAR);
+            let _: () = send(app, sel(&quot;finishLaunching&quot;));
+
+            let frame = Rect { origin: Point::default(), size: Size { w: w as f64, h: h as f64 } };
+            let window: Id = send(class(&quot;NSWindow&quot;), sel(&quot;alloc&quot;));
+            let window: Id = send4(window, sel(&quot;initWithContentRect:styleMask:backing:defer:&quot;), frame, STYLE, BACKING_BUFFERED, false);
+            let pool = objc_autoreleasePoolPush();
+            let _: () = send1(window, sel(&quot;setTitle:&quot;), nsstring(title));
+            let mode = nsstring(&quot;kCFRunLoopDefaultMode&quot;);
+            let _: Id = send(mode, sel(&quot;retain&quot;));
+            objc_autoreleasePoolPop(pool);
+            let _: () = send1(window, sel(&quot;setAcceptsMouseMovedEvents:&quot;), true);
+            let _: () = send1(window, sel(&quot;setReleasedWhenClosed:&quot;), false);
+
+            let view: Id = send(class(&quot;NSImageView&quot;), sel(&quot;alloc&quot;));
+            let view: Id = send1(view, sel(&quot;initWithFrame:&quot;), frame);
+            let _: () = send1(view, sel(&quot;setImageScaling:&quot;), 3u64); // axes independently
+            let _: () = send1(window, sel(&quot;setContentView:&quot;), view);
+            let _: () = send(window, sel(&quot;center&quot;));
+            let _: () = send1(window, sel(&quot;makeKeyAndOrderFront:&quot;), std::ptr::null_mut::&lt;c_void&gt;());
+            let _: () = send1(app, sel(&quot;activateIgnoringOtherApps:&quot;), true);
+
+            let scale: f64 = send(window, sel(&quot;backingScaleFactor&quot;));
+            let scale = scale.max(1.0);
+            let (dw, dh) = ((w as f64 * scale) as usize, (h as f64 * scale) as usize);
+            Window {
+                app,
+                window,
+                view,
+                space: CGColorSpaceCreateDeviceRGB(),
+                px: vec![0; dw * dh],
+                w: dw,
+                h: dh,
+                scale,
+                resized: false,
+                closed: false,
+                last_image: std::ptr::null_mut(),
+                mode,
+                past: send(class(&quot;NSDate&quot;), sel(&quot;distantPast&quot;)),
+            }
+        }
+    }
+
+    /// The view&#x27;s size in device pixels.
+    unsafe fn view_size(&amp;self) -&gt; (usize, usize) {
+        let r: Rect = send(self.view, sel(&quot;frame&quot;));
+        ((r.size.w * self.scale) as usize, (r.size.h * self.scale) as usize)
+    }
+
+    /// One NSEvent, in the program&#x27;s words. AppKit&#x27;s origin is bottom left;
+    /// the canvas&#x27;s is top left, so y is flipped here and only here.
+    unsafe fn translate(&amp;self, e: Id, out: &amp;mut Vec&lt;Input&gt;) {
+        let kind: u64 = send(e, sel(&quot;type&quot;));
+        let at = || {
+            let p: Point = send(e, sel(&quot;locationInWindow&quot;));
+            let r: Rect = send(self.view, sel(&quot;frame&quot;));
+            ((p.x * self.scale) as i32, ((r.size.h - p.y) * self.scale) as i32)
+        };
+        match kind {
+            EV_MOUSE_MOVED =&gt; {
+                let (x, y) = at();
+                out.push(Input::Moved { x, y });
+            }
+            EV_LEFT_DOWN =&gt; {
+                let (x, y) = at();
+                out.push(Input::Clicked { x, y });
+            }
+            EV_KEY_DOWN =&gt; {
+                let code: u16 = send(e, sel(&quot;keyCode&quot;));
+                let flags: u64 = send(e, sel(&quot;modifierFlags&quot;));
+                if code == KEY_ESCAPE {
+                    out.push(Input::Escape);
+                } else {
+                    let s: Id = send(e, sel(&quot;charactersIgnoringModifiers&quot;));
+                    let p: *const c_char = send(s, sel(&quot;UTF8String&quot;));
+                    if !p.is_null() {
+                        if let Some(ch) = CStr::from_ptr(p).to_str().unwrap_or(&quot;&quot;).chars().next() {
+                            out.push(Input::Key { ch, cmd: flags &amp; MOD_CMD != 0 });
+                        }
+                    }
+                }
+                // A key the program took is not handed on: with no menu,
+                // AppKit would only beep at it.
+                return;
+            }
+            _ =&gt; {}
+        }
+        // Everything else goes on to AppKit, so the title bar still drags and
+        // the close button still closes.
+        let _: () = send1(self.app, sel(&quot;sendEvent:&quot;), e);
+    }
+}
+
+impl Surface for Window {
+    fn pixels(&amp;mut self) -&gt; &amp;mut [u32] {
+        &amp;mut self.px
+    }
+    fn size(&amp;self) -&gt; (usize, usize) {
+        (self.w, self.h)
+    }
+
+    fn poll(&amp;mut self) -&gt; Vec&lt;Input&gt; {
+        let mut out = Vec::new();
+        unsafe {
+            let pool = objc_autoreleasePoolPush();
+            loop {
+                let e: Id = send4(
+                    self.app,
+                    sel(&quot;nextEventMatchingMask:untilDate:inMode:dequeue:&quot;),
+                    u64::MAX,
+                    self.past,
+                    self.mode,
+                    true,
+                );
+                if e.is_null() {
+                    break;
+                }
+                self.translate(e, &amp;mut out);
+            }
+            let _: () = send(self.app, sel(&quot;updateWindows&quot;));
+            let visible: bool = send(self.window, sel(&quot;isVisible&quot;));
+            if !visible &amp;&amp; !self.closed {
+                self.closed = true;
+                out.push(Input::Closed);
+            }
+            let (vw, vh) = self.view_size();
+            if vw &gt; 0 &amp;&amp; vh &gt; 0 &amp;&amp; (vw, vh) != (self.w, self.h) {
+                self.resized = true;
+                out.push(Input::Resized);
+            }
+            objc_autoreleasePoolPop(pool);
+        }
+        out
+    }
+
+    fn apply_resize(&amp;mut self) {
+        if self.resized {
+            let (w, h) = unsafe { self.view_size() };
+            self.w = w;
+            self.h = h;
+            self.px = vec![0; w * h];
+            self.resized = false;
+        }
+    }
+
+    fn present(&amp;mut self) {
+        unsafe {
+            let pool = objc_autoreleasePoolPush();
+            // The image reads the canvas in place: no copy, no conversion.
+            let provider = CGDataProviderCreateWithData(
+                std::ptr::null_mut(),
+                self.px.as_ptr() as *const c_void,
+                self.w * self.h * 4,
+                std::ptr::null(),
+            );
+            let image = CGImageCreate(self.w, self.h, 8, 32, self.w * 4, self.space, BITMAP_INFO, provider, std::ptr::null(), false, 0);
+            CGDataProviderRelease(provider);
+            // The size is in points, the image in device pixels: that is the
+            // whole of Retina support.
+            let size = Size { w: self.w as f64 / self.scale, h: self.h as f64 / self.scale };
+            let ns: Id = send(class(&quot;NSImage&quot;), sel(&quot;alloc&quot;));
+            let ns: Id = send2(ns, sel(&quot;initWithCGImage:size:&quot;), image, size);
+            let _: () = send1(self.view, sel(&quot;setImage:&quot;), ns);
+            let _: () = send(ns, sel(&quot;release&quot;));
+            // The view holds the new image; the one before can go.
+            if !self.last_image.is_null() {
+                CGImageRelease(self.last_image);
+            }
+            self.last_image = image;
+            objc_autoreleasePoolPop(pool);
+        }
+    }
+}</code></pre></div><h3 id="mac-app-sh"><code>mac-app.sh</code></h3><div class="code"><span class="lang">sh</span><pre><code>#!/bin/sh
+# mac-app.sh -- build orbit and make Orbit.app in APPDIR (default
+# ~/Applications): opened from Finder, Launchpad, Spotlight and the Dock.
+#
+# A bundle is a folder with a fixed shape:
+#   Orbit.app/Contents/Info.plist      what it is, and which file to run
+#   Orbit.app/Contents/MacOS/orbit     that file
+#   Orbit.app/Contents/Resources/      its icon, if it has one
+# orbit needs no arguments, so the binary itself is the bundle&#x27;s executable.
+# A program that does (orrery) puts a small launcher script there instead,
+# named differently from the binary: a Mac&#x27;s disk ignores case.
+set -eu
+cd &quot;$(dirname &quot;$0&quot;)&quot;
+APPDIR=${APPDIR:-$HOME/Applications}
+APP=&quot;$APPDIR/Orbit.app&quot;
+
+cargo build --release
+
+NEW=&quot;$APP.new&quot;
+rm -rf &quot;$NEW&quot;
+mkdir -p &quot;$NEW/Contents/MacOS&quot; &quot;$NEW/Contents/Resources&quot;
+install -m 755 target/release/orbit &quot;$NEW/Contents/MacOS/orbit&quot;
+cat &gt; &quot;$NEW/Contents/Info.plist&quot; &lt;&lt;&#x27;EOF&#x27;
+&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
+&lt;!DOCTYPE plist PUBLIC &quot;-//Apple//DTD PLIST 1.0//EN&quot; &quot;http://www.apple.com/DTDs/PropertyList-1.0.dtd&quot;&gt;
+&lt;plist version=&quot;1.0&quot;&gt;
+&lt;dict&gt;
+    &lt;key&gt;CFBundleName&lt;/key&gt;&lt;string&gt;Orbit&lt;/string&gt;
+    &lt;key&gt;CFBundleIdentifier&lt;/key&gt;&lt;string&gt;org.example.orbit&lt;/string&gt;
+    &lt;key&gt;CFBundleExecutable&lt;/key&gt;&lt;string&gt;orbit&lt;/string&gt;
+    &lt;key&gt;CFBundlePackageType&lt;/key&gt;&lt;string&gt;APPL&lt;/string&gt;
+    &lt;key&gt;CFBundleVersion&lt;/key&gt;&lt;string&gt;0.1.0&lt;/string&gt;
+    &lt;key&gt;CFBundleShortVersionString&lt;/key&gt;&lt;string&gt;0.1.0&lt;/string&gt;
+    &lt;key&gt;LSMinimumSystemVersion&lt;/key&gt;&lt;string&gt;11.0&lt;/string&gt;
+    &lt;key&gt;NSHighResolutionCapable&lt;/key&gt;&lt;true/&gt;
+&lt;/dict&gt;
+&lt;/plist&gt;
+EOF
+# An icon, if there is a 1024-pixel PNG beside this script: sips makes the
+# iconset&#x27;s sizes, iconutil the .icns, and Info.plist names it.
+if [ -f icon.png ]; then
+    SET=$(mktemp -d)/orbit.iconset
+    mkdir -p &quot;$SET&quot;
+    for s in 16 32 128 256 512; do
+        sips -z $s $s icon.png --out &quot;$SET/icon_${s}x${s}.png&quot; &gt;/dev/null
+        sips -z $((s * 2)) $((s * 2)) icon.png --out &quot;$SET/icon_${s}x${s}@2x.png&quot; &gt;/dev/null
+    done
+    iconutil -c icns &quot;$SET&quot; -o &quot;$NEW/Contents/Resources/orbit.icns&quot;
+    /usr/libexec/PlistBuddy -c &quot;Add :CFBundleIconFile string orbit&quot; &quot;$NEW/Contents/Info.plist&quot;
+fi
+# Ad hoc: no certificate. The binary, then the bundle that seals it.
+codesign --force --sign - &quot;$NEW/Contents/MacOS/orbit&quot;
+codesign --force --sign - &quot;$NEW&quot;
+
+mkdir -p &quot;$APPDIR&quot;
+rm -rf &quot;$APP&quot;
+mv &quot;$NEW&quot; &quot;$APP&quot;
+echo &quot;made $APP&quot;</code></pre></div></section>
+  </main>
+  <footer>
+    <p>Paul Richeson, 28 October 2026. MIT licensed, as orrery. The Markdown original and the example's source are in orrery: <code>docs/appkit-gui-lab-report.md</code> and <code>docs/appkit-example/</code>.</p>
+  </footer>
+</div>

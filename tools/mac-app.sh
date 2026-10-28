@@ -12,7 +12,8 @@
 #       --fleet-cmd "$HOME/.local/bin/copal fleet" \
 #       --queue "$HOME/code/treadcore/build/queue/grove"
 #
-# Run it again to change them, or after pulling, to put the new build in.
+# Run it again with options to change them; with none (or `make install`)
+# it keeps the last ones, from ~/.config/orrery/app-options.
 # An app opened from Finder gets a bare PATH and no terminal, so the launcher
 # puts ~/.local/bin and Homebrew back on the PATH and writes what orrery says
 # to ~/Library/Logs/orrery.log. APPDIR=/Applications puts it there instead.
@@ -32,13 +33,22 @@ fi
 
 # One argument, quoted for sh.
 q() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
-ARGS=""
-gui=0
-for a in "$@"; do
-    [ "$a" = --gui ] && gui=1
-    ARGS="$ARGS $(q "$a")"
-done
-[ $gui = 1 ] || ARGS=" --gui$ARGS"
+# The options are remembered: given none (a plain `make install`), the app
+# keeps the last ones it was made with.
+OPTS="${XDG_CONFIG_HOME:-$HOME/.config}/orrery/app-options"
+if [ $# -eq 0 ] && [ -s "$OPTS" ]; then
+    ARGS=$(cat "$OPTS")
+else
+    ARGS=""
+    gui=0
+    for a in "$@"; do
+        [ "$a" = --gui ] && gui=1
+        ARGS="$ARGS $(q "$a")"
+    done
+    [ $gui = 1 ] || ARGS=" --gui$ARGS"
+    mkdir -p "$(dirname "$OPTS")"
+    printf '%s' "$ARGS" > "$OPTS"
+fi
 
 cd "$ROOT"
 # Under the memory guard: a release build beside a full census once ran

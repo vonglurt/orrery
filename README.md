@@ -220,18 +220,22 @@ docker run --rm --platform linux/arm64 -v "$PWD":/w -w /w \
 ### On a Mac, as an application
 
 ```sh
-tools/mac-app.sh --operator paul --fleet grove \
-    --fleet-cmd "$HOME/.local/bin/copal fleet" \
-    --queue "$HOME/code/treadcore/build/queue/grove"
+make install OPTIONS="--operator paul --fleet grove \
+    --fleet-cmd '$HOME/.local/bin/copal fleet' \
+    --queue '$HOME/code/treadcore/build/queue/grove'"
+make install        # after pulling: the same options, the new build
+make uninstall
 ```
 
-builds orrery, installs `~/.local/bin/orrery`, and makes **Orrery.app** in
-`~/Applications`, signed ad hoc, which opens the window with those options
-from Finder, Launchpad, Spotlight or the Dock. It writes what orrery says to
-`~/Library/Logs/orrery.log`. Run it again after pulling, or to change the
-options. `docs/mac-app-lab-report.md` records how it is made and what an
-ad-hoc signature allows; `docs/appkit-gui-lab-report.md` teaches the window
-itself, from `cargo new` to the app, with a 602-line example to start from
+builds orrery (under `tools/mem-guard.sh`), installs `~/.local/bin/orrery`,
+and makes **Orrery.app** in `~/Applications`, signed ad hoc, which opens the
+window with those options from Finder, Launchpad, Spotlight or the Dock. The
+options are kept in `~/.config/orrery/app-options`, so a plain `make install`
+keeps them. orrery's output goes to `~/Library/Logs/orrery.log`. On Linux,
+`make install` puts the binary in `~/.local/bin`.
+`docs/mac-app-lab-report.md` records how the app is made and what an ad-hoc
+signature allows; `docs/appkit-gui-lab-report.md` teaches the window itself,
+from `cargo new` to the app, with a 602-line example to start from
 (`docs/appkit-example/`).
 
 ## Layout
