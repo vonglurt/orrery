@@ -124,6 +124,8 @@ fn main() {
     // The Training view's read model: a command that prints what the fleet
     // is training (training.rs). Empty: the view says how to give it one.
     let mut jobs_cmd = String::new();
+    // The queue's controls (training.rs): `CMD stop-adding` and the rest.
+    let mut queue_ctl = String::new();
 
     let mut i = 0;
     while i < args.len() {
@@ -138,6 +140,7 @@ fn main() {
             "--fleet" => { fleet_name = need(i, "--fleet"); i += 2 }
             "--fleet-cmd" => { fleet_cmd = need(i, "--fleet-cmd"); i += 2 }
             "--training-cmd" | "--jobs-cmd" => { jobs_cmd = need(i, "--training-cmd"); i += 2 }
+            "--queue-ctl" => { queue_ctl = need(i, "--queue-ctl"); i += 2 }
             "--operator" => { operator = need(i, "--operator"); i += 2 }
             "--seat" => { seat = need(i, "--seat"); i += 2 }
             "--vnc-port" => {
@@ -352,7 +355,7 @@ fn main() {
                 if operator.is_empty() { "gallery (read-only)" } else { "operator" },
                 if demo { "  [demo fixture]" } else { "" }
             );
-            if let Err(e) = gui_loop(win, theme, fleet, posture, &copal, &ssh_user, demo, &jobs_cmd) {
+            if let Err(e) = gui_loop(win, theme, fleet, posture, &copal, &ssh_user, demo, &jobs_cmd, &queue_ctl) {
                 eprintln!("orrery: {}", e);
                 std::process::exit(1);
             }
@@ -374,7 +377,7 @@ fn main() {
                 if operator.is_empty() { "gallery (read-only)" } else { "operator" },
                 if demo { "  [demo fixture]" } else { "" }
             );
-            if let Err(e) = gui_loop(win, theme, fleet, posture, &copal, &ssh_user, demo, &jobs_cmd) {
+            if let Err(e) = gui_loop(win, theme, fleet, posture, &copal, &ssh_user, demo, &jobs_cmd, &queue_ctl) {
                 eprintln!("orrery: {}", e);
                 std::process::exit(1);
             }
@@ -637,8 +640,11 @@ fn write_frame(
                 let m = training::Model::parse(doc, "");
                 // ORRERY_FRAME_ZOOM=N draws matrix N enlarged, the only way to
                 // review a picture that exists after a click.
+                // ORRERY_FRAME_OPERATOR=1 draws the queue's buttons, for review.
                 let mut st = training::State {
                     zoom: std::env::var("ORRERY_FRAME_ZOOM").ok().and_then(|v| v.parse().ok()),
+                    operator: std::env::var("ORRERY_FRAME_OPERATOR").is_ok(),
+                    ..training::State::default()
                 };
                 let mut ui_state = ui::UiState::default();
                 ui_state.pointer = (-1, -1);
@@ -733,6 +739,8 @@ fn gui_loop<S: surface::Surface>(
     demo_fixture: bool,
     // `--training-cmd`: what the Training view reads (training.rs).
     jobs_cmd: &str,
+    // `--queue-ctl`: what the Training view's buttons run.
+    queue_ctl: &str,
 ) -> Result<(), String> {
     use std::time::Duration;
 
@@ -752,7 +760,12 @@ fn gui_loop<S: surface::Surface>(
         });
     }
     let jobs_source = jobs_cmd.to_string();
-    let mut training_state = training::State::default();
+    // The buttons exist only for an operator, and only with a command to run.
+    let mut training_state = training::State {
+        operator: posture == lab::Posture::Operator && !queue_ctl.is_empty(),
+        ..training::State::default()
+    };
+    let queue_said: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
     // THE READ MODEL IS REFRESHED ON A SECOND THREAD, and it has to be.
     // `copal fleet state` may take forty-five seconds, and a console that
@@ -928,7 +941,24 @@ fn gui_loop<S: surface::Surface>(
                 (None, nav::View::Lab) => action = lab::draw(&mut u, &model, &mut lab_state),
                 (None, nav::View::Training) => {
                     let text = jobs_doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                    if let Some(v) = training::draw(&mut u, &training::Model::parse(&text, &jobs_source), &mut training_state) {
+                    training_state.said = queue_said.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let go = training::draw(&mut u, &training::Model::parse(&text, &jobs_source), &mut training_state);
+                    // A control runs on a thread: the queue's commands return at
+                    // once, but a window that waits on a process stops drawing.
+                    if let Some(verb) = training_state.ctl.take() {
+                        let cmd = format!("{} {}", queue_ctl, verb);
+                        let said = Arc::clone(&queue_said);
+                        *said.lock().unwrap_or_else(|e| e.into_inner()) = format!("{}...", verb);
+                        thread::spawn(move || {
+                            let out = std::process::Command::new("sh").arg("-c").arg(&cmd).output();
+                            let line = match out {
+                                Ok(o) => String::from_utf8_lossy(if o.stdout.is_empty() { &o.stderr } else { &o.stdout }).lines().last().unwrap_or("").to_string(),
+                                Err(e) => e.to_string(),
+                            };
+                            *said.lock().unwrap_or_else(|e| e.into_inner()) = line;
+                        });
+                    }
+                    if let Some(v) = go {
                         action = Some(lab::Action::Go(v));
                     }
                 }
@@ -1318,6 +1348,9 @@ fn usage() {
     --demo               serve the lab report's museum from a fixture
     --thin               one-pixel strokes; text is drawn a pixel bolder
                          by default
+    --queue-ctl CMD      with --operator, the Training view's queue buttons
+                         run CMD stop-adding | resume-adding | stop-now |
+                         ensure, e.g. \"tools/fleet-queue.py QDIR\"
     --training-cmd CMD   what the Training view shows: a command that prints
                          what the fleet is training, run with sh every 5 s,
                          e.g. treadcore's \"python3 -I scripts/fleet-view.py\"

@@ -94,10 +94,42 @@ pub struct Net {
     pub output_groups: Vec<(String, i64, i64)>,
 }
 
-/// What the view remembers between frames: which matrix is enlarged.
+/// What the view remembers between frames: which matrix is enlarged, whether
+/// it may steer the queue (operator posture only: a button that must not be
+/// pressable is not drawn), and the control a button asked for, which the
+/// loop runs and clears.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct State {
     pub zoom: Option<usize>,
+    pub operator: bool,
+    pub ctl: Option<&'static str>,
+    /// What the last control said, shown until the next.
+    pub said: String,
+}
+
+/// One machine's lane in the queue.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct QLane {
+    pub host: String,
+    pub state: String,
+    pub kind: String,
+    pub title: String,
+    pub age_s: Option<i64>,
+}
+
+/// The fleet-queue (orrery's tools/fleet-queue.py) as its status said.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Queue {
+    pub name: String,
+    pub state: String,
+    pub adding: bool,
+    /// kind -> (queued, running, done, failed, stopped)
+    pub counts: Vec<(String, [i64; 5])>,
+    pub lanes: Vec<QLane>,
+    /// (kind, title) of the next few.
+    pub upcoming: Vec<(String, String)>,
+    /// (kind, title, ok) of the last few.
+    pub recent: Vec<(String, String, bool)>,
 }
 
 /// (head, the net's agreement, bc1's, always-the-commonest's), percent.
@@ -121,6 +153,7 @@ pub struct Model {
     pub best: String,
     pub net: Option<Net>,
     pub quality: Option<Quality>,
+    pub queue: Option<Queue>,
 }
 
 fn s(v: &json::Value, k: &str) -> String {
@@ -205,6 +238,36 @@ impl Model {
             m.best = s(l, "best");
             m.stages = arr(l, "stages").iter().map(|x| (s(x, "stage"), s(x, "state"))).collect();
         }
+        if let Some(q) = v.get("queue").filter(|q| q.get("state").is_some()) {
+            let mut counts = Vec::new();
+            if let Some(json::Value::Obj(map)) = q.get("counts") {
+                for (k, c) in map {
+                    let g = |s: &str| c.get(s).and_then(|x| x.as_num()).unwrap_or(0.0) as i64;
+                    counts.push((k.clone(), [g("queue"), g("running"), g("done"), g("failed"), g("stopped")]));
+                }
+            }
+            m.queue = Some(Queue {
+                name: s(q, "name"),
+                state: s(q, "state"),
+                adding: q.get("adding").and_then(|b| b.as_bool()).unwrap_or(false),
+                counts,
+                lanes: arr(q, "lanes")
+                    .iter()
+                    .map(|l| QLane {
+                        host: s(l, "host"),
+                        state: s(l, "state"),
+                        kind: s(l, "kind"),
+                        title: s(l, "title"),
+                        age_s: l.get("age_s").and_then(|a| a.as_num()).map(|a| a as i64),
+                    })
+                    .collect(),
+                upcoming: arr(q, "upcoming").iter().map(|j| (s(j, "kind"), s(j, "title"))).collect(),
+                recent: arr(q, "recent")
+                    .iter()
+                    .map(|j| (s(j, "kind"), s(j, "title"), j.get("ok").and_then(|b| b.as_bool()).unwrap_or(false)))
+                    .collect(),
+            });
+        }
         if let Some(x) = v.get("net").filter(|x| x.get("sizes").is_some()) {
             m.net = Some(Net {
                 name: s(x, "name"),
@@ -268,6 +331,14 @@ fn doing(l: &Lane, on_store: bool) -> String {
     }
 }
 
+fn capital(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
 /// A horizontal bar: `frac` of it filled.
 fn bar(ui: &mut Ui, r: Rect, frac: f64, c: Rgb) {
     let t = ui.t;
@@ -321,8 +392,12 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
     let (sentence, step) = headline(m);
     ui.label_in(body.x, y, body.w, &sentence, &F10X20, t.ink);
     y += F10X20.height as i32 + 8;
-    draw_steps(ui, rect(body.x, y, body.w, 34), m, step);
-    y += 34 + 10;
+    if let Some(q) = &m.queue {
+        y = draw_queue(ui, rect(body.x, y, body.w, 64), q, st) + 10;
+    } else {
+        draw_steps(ui, rect(body.x, y, body.w, 34), m, step);
+        y += 34 + 10;
+    }
 
     // ---- two columns: the machines, and the net ----------------------------
     let left_w = (body.w * 2 / 5).clamp(300, 460);
@@ -338,6 +413,19 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
 /// The sentence on top, and which step (0 record, 1 train, 2 judge) is lit.
 fn headline(m: &Model) -> (String, Option<usize>) {
     let project = if m.project.is_empty() { "the net".to_string() } else { format!("{}'s learned tank", m.project) };
+    if let Some(q) = &m.queue {
+        let sum = |i: usize| q.counts.iter().map(|(_, c)| c[i]).sum::<i64>();
+        let what = match q.state.as_str() {
+            "running, adding" => "keeping the fleet busy",
+            "draining: adding nothing" => "draining: finishing what is queued, adding nothing",
+            "stopping now" => "stopping now",
+            _ => "stopped",
+        };
+        return (
+            format!("Queue {}: {}. {} queued, {} running, {} done.", q.name, what, sum(0), sum(1), sum(2)),
+            None,
+        );
+    }
     if m.looping && m.round > 0 {
         let at = m.stages.iter().position(|(_, st)| st == "started");
         let what = match at {
@@ -384,6 +472,64 @@ fn draw_steps(ui: &mut Ui, at: Rect, m: &Model, lit: Option<usize>) {
     }
 }
 
+/// The queue band: one bar of done, running and queued; the counts of each
+/// kind; what comes next; and, for an operator, the three controls.
+fn draw_queue(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) -> i32 {
+    let t = ui.t;
+    let sum = |i: usize| q.counts.iter().map(|(_, c)| c[i]).sum::<i64>();
+    let (queued, running, done, failed) = (sum(0), sum(1), sum(2), sum(3) + sum(4));
+    let total = (queued + running + done + failed).max(1);
+    let bw = if st.operator { at.w - 430 } else { at.w };
+    let bar = rect(at.x, at.y, bw, 12);
+    ui.panel(bar, t.tile);
+    ui.outline(bar, t.line);
+    let mut x = bar.x + 1;
+    for (n, c) in [(done, t.up), (running, t.accent), (failed, t.alarm)] {
+        let w = ((bar.w - 2) as i64 * n / total) as i32;
+        ui.c.rect(x, bar.y + 1, w, bar.h - 2, c);
+        x += w;
+    }
+    let mut ly = at.y + 16;
+    let mut line = String::new();
+    for (k, c) in &q.counts {
+        line.push_str(&format!("{}: {} queued, {} running, {} done{}    ", k, c[0], c[1], c[2], if c[3] + c[4] > 0 { format!(", {} failed or stopped", c[3] + c[4]) } else { String::new() }));
+    }
+    ui.label_in(at.x, ly, bw, line.trim_end(), &F8X13, t.dim);
+    ly += F8X13.height as i32 + 3;
+    if let Some((k, title)) = q.upcoming.first() {
+        ui.label_in(at.x, ly, bw, &format!("next: {} - {}", k, title), &F8X13, t.dim);
+        ly += F8X13.height as i32 + 3;
+    }
+    if let Some((k, title, ok)) = q.recent.last() {
+        ui.label_in(at.x, ly, bw, &format!("last finished: {} - {}{}", k, title, if *ok { "" } else { "  (failed or stopped)" }), &F8X13, if *ok { t.dim } else { t.alarm });
+        ly += F8X13.height as i32 + 3;
+    }
+    if st.operator {
+        // Absent rather than greyed when they cannot apply: a running queue
+        // offers stop adding; a draining one, resume; both offer stop now.
+        let bx = at.right() - 420;
+        let running_keeper = q.state != "stopped";
+        let mut x = bx;
+        if running_keeper && q.adding && ui.button(rect(x, at.y, 130, 26), "Stop adding", true) {
+            st.ctl = Some("stop-adding");
+        }
+        if running_keeper && !q.adding && ui.button(rect(x, at.y, 130, 26), "Resume adding", true) {
+            st.ctl = Some("resume-adding");
+        }
+        if !running_keeper && ui.button(rect(x, at.y, 130, 26), "Start the queue", true) {
+            st.ctl = Some("ensure");
+        }
+        x += 140;
+        if running_keeper && ui.button(rect(x, at.y, 280, 26), "Collect results and stop now", true) {
+            st.ctl = Some("stop-now");
+        }
+        if !st.said.is_empty() {
+            ui.label_in(bx, at.y + 32, 420, &st.said, &F8X13, t.dim);
+        }
+    }
+    ly.max(at.y + 48)
+}
+
 fn draw_machines(ui: &mut Ui, at: Rect, m: &Model) {
     let t = ui.t;
     ui.label(at.x, at.y, "The fleet", &F8X13, t.ink);
@@ -400,7 +546,9 @@ fn draw_machines(ui: &mut Ui, at: Rect, m: &Model) {
         ui.panel(c, t.tile);
         ui.outline(c, t.line);
         let lane = lanes.0.iter().find(|l| l.host == mc.name || (mc.name == "this Mac" && l.host == "mac"));
-        let busy = lane.map(|l| l.state == "recording" || l.state == "sending").unwrap_or(false);
+        let qlane = m.queue.as_ref().and_then(|q| q.lanes.iter().find(|l| l.host == mc.name || (mc.name == "this Mac" && l.host == "mac")));
+        let busy = lane.map(|l| l.state == "recording" || l.state == "sending").unwrap_or(false)
+            || qlane.map(|l| l.state == "running" || l.state == "delivering" || l.state == "fetching").unwrap_or(false);
         let (lc, light) = if !mc.up {
             (t.alarm, Light::Hollow)
         } else if busy {
@@ -435,13 +583,20 @@ fn draw_machines(ui: &mut Ui, at: Rect, m: &Model) {
             bar(ui, rect(gbx, ly + 2, c.right() - gbx - 12, 9), g.busy_pct as f64 / 100.0, t.accent);
         }
         ly += F8X13.height as i32 + 4;
-        let now = match lane {
+        let now = match (qlane, lane) {
+            (Some(ql), _) if ql.state != "idle" && ql.state != "stopped" && ql.state != "not started" => {
+                let when = ql.age_s.map(|a| format!(", for {}", ago(a))).unwrap_or_default();
+                format!("{} {}: {}{}", capital(&ql.state), ql.kind, ql.title, when)
+            }
+            (Some(ql), _) => format!("Queue lane {}", ql.state),
+            (None, lane) => match lane {
             Some(l) if !lanes.1 || l.state != "finished" => {
                 doing(l, m.run.as_ref().map(|r| !r.store.is_empty() && r.store == mc.address).unwrap_or(false))
             }
             Some(l) => format!("Done: {} jobs in the last run", l.jobs),
             None if mc.name == "saskatchewan" && frac > 0.9 => "Busy with its own work (make converge)".into(),
             None => "Not recording in this run".into(),
+            },
         };
         ui.label_in(c.x + 20, ly, c.w - 28, &now, &F8X13, if busy { t.up } else { t.dim });
         ly += F8X13.height as i32 + 2;

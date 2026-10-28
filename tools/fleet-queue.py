@@ -17,9 +17,9 @@ a keeper that keeps it all running, and two ways to stop.
 DIR/config.json says who works and who plans:
 
     {"hosts": [{"name": "calber", "target": "user@192.168.8.181", "caps": ["cpu", "gpu"]},
-               {"name": "mac", "target": "-", "caps": ["cpu"]}],
+               {"name": "mac", "target": "-", "caps": ["cpu"], "nice": 19}],
      "planner": "python3 -I /path/to/project/scripts/fleet-plan.py DIR",
-     "low_water": 6, "poll_s": 10}
+     "low_water": 6, "poll_s": 10, "max_failures_in_a_row": 5}
 
 The planner is the project's: `PLANNER plan N` prints a JSON list of up to N
 new jobs, and `PLANNER collect` gathers what the finished jobs found. The
@@ -28,7 +28,10 @@ queue knows nothing about what a job is for. A job:
     {"id": "w0042", "kind": "weights", "title": "census of w_near at 1.4",
      "needs": "cpu" | "gpu" | "host:NAME",
      "after": ["r0007", ...],          jobs that must be done first
+     "after_host": "prep-{host}",      a job that must be done on the host that
+                                       takes this one (its build, say)
      "cmd": "bash, run on the host from $HOME",
+     "send": [{"src": "a file here", "dst": "a path on the host"}], before the cmd
      "fetch": "a path under $HOME, copied back into DIR/results/ID/",
      "deliver": {"src": "path on the host", "to": "user@store", "dst": "path on the store"},
      "on_done": "a command run here, after, with JOB_ID and RESULT_DIR set",
@@ -133,7 +136,9 @@ def run_job(q, host, job, log):
     in ~/.fleet-queue/ID.pid so stop-now can stop the whole group."""
     jid = job["id"]
     body = job["cmd"]
-    wrapper = (
+    # A host's "nice" (config.json) lowers the whole job, its children too.
+    nice = "renice -n %d -p $$ >/dev/null 2>&1\n" % host["nice"] if host.get("nice") else ""
+    wrapper = nice + (
         "mkdir -p ~/.fleet-queue; cd ~; set -m\n"
         "( %s ) &\n"
         "echo $! > ~/.fleet-queue/%s.pid\n"
@@ -163,6 +168,20 @@ def stop_remote(host, jid):
         remote(host["target"], script, timeout=30)
     except (subprocess.TimeoutExpired, OSError):
         pass
+
+
+def send(q, host, job, log):
+    """Files from here to the host, before the job runs."""
+    for f in job.get("send", []):
+        src, dst = os.path.expanduser(f["src"]), f["dst"]
+        with open(src, "rb") as data:
+            body = data.read()
+        r = remote(host["target"], "mkdir -p $(dirname %s) && cat > %s" % (dst, dst), timeout=600, stdin=body)
+        with open(log, "a") as out:
+            out.write("sent %s -> %s (%d bytes, %s)\n" % (src, dst, len(body), "ok" if r.returncode == 0 else "FAILED"))
+        if r.returncode != 0:
+            return False
+    return True
 
 
 def fetch(q, host, job, log):
@@ -251,6 +270,9 @@ def lane(q, host, alive):
                 except OSError:
                     pass
                 continue
+            ah = j.get("after_host")
+            if ah and ah.format(host=name) not in done:
+                continue
             if all(a in done for a in after):
                 try:
                     claimed = q.p("running", name, os.path.basename(j["_file"]))
@@ -282,7 +304,7 @@ def work(q, host, j, say):
         say("running", j)
         q.event("started", job=j["id"], host=name, kind=j.get("kind"))
         t0 = now()
-        rc = run_job(q, host, j, log)
+        rc = run_job(q, host, j, log) if send(q, host, j, log) else 1
         ok = rc == 0
         if ok and j.get("deliver"):
             say("delivering", j)
@@ -300,6 +322,9 @@ def work(q, host, j, say):
             json.dump(j2, f, indent=1)
         os.rename(j["_file"], q.p(dest, os.path.basename(j["_file"])))
         q.event(dest, job=j["id"], host=name, kind=j.get("kind"), seconds=j2["seconds"])
+        # The breaker: failures in a row, any host, any kind.
+        with q.lock:
+            q.streak = q.streak + 1 if dest == "failed" else 0
         if dest == "done" and j.get("on_done"):
             env = dict(os.environ, JOB_ID=j["id"], RESULT_DIR=q.p("results", j["id"]))
             with open(log, "a") as out:
@@ -313,6 +338,7 @@ def keeper(q):
     with open(q.p("keeper.pid"), "w") as f:
         f.write(str(os.getpid()))
     q.procs = {}
+    q.streak = 0
     # Jobs a keeper that died left running go back on the queue: their lanes
     # died with it.
     for j in q.jobs_in("running"):
@@ -370,6 +396,13 @@ def keeper(q):
                 collect()
                 q.event("stopped")
                 break
+            # THE BREAKER. A job that fails at once empties the queue as fast
+            # as the planner fills it; after this many failures in a row the
+            # keeper stops adding and says so (converge stops after three).
+            limit = cfg.get("max_failures_in_a_row", 5)
+            if q.streak >= limit and not q.flag("STOP_ADDING"):
+                open(q.p("STOP_ADDING"), "w").close()
+                q.event("stop adding", why="%d jobs failed in a row: read logs/, fix, then resume-adding" % q.streak)
             queued = len(q.jobs_in("queue"))
             running = len(q.jobs_in("running"))
             if q.flag("STOP_ADDING"):
