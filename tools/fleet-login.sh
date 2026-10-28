@@ -3,7 +3,7 @@
 # Copal fleet branding, what this node is for, hints, and none of Ubuntu's
 # advertising. Run ON THE NODE, as root:
 #
-#   scp tools/fleet-login.sh user@NODE:  &&  ssh -t user@NODE sudo bash fleet-login.sh --role cuda
+#   scp tools/fleet-login.sh tools/fleet-status.sh user@NODE:  &&  ssh -t user@NODE sudo bash fleet-login.sh --role cuda
 #   ssh -t user@NODE sudo bash fleet-login.sh --undo        # put Ubuntu's back
 #
 # Ubuntu builds its login message from the scripts in /etc/update-motd.d/.
@@ -38,14 +38,16 @@ done
 
 D=/etc/copal-fleet
 M=/etc/update-motd.d
-SILENCE='10-help-text 50-motd-news 91-contract-ua-esm-status 91-release-upgrade'
+# 50-landscape-sysinfo too: fleet-status shows load, memory, disk and address,
+# as bars, so Ubuntu's lines would say it twice.
+SILENCE='10-help-text 50-landscape-sysinfo 50-motd-news 91-contract-ua-esm-status 91-release-upgrade'
 
 if [ "$UNDO" = 1 ]; then
     if [ -f "$D/motd-silenced" ]; then
         while read -r f; do [ -f "$M/$f" ] && chmod +x "$M/$f" && echo "on again: $f"; done < "$D/motd-silenced"
         rm -f "$D/motd-silenced"
     fi
-    rm -f "$M/01-copal-fleet"
+    rm -f "$M/01-copal-fleet" /usr/local/bin/fleet-status
     [ -f /etc/default/motd-news ] && sed -i 's/^ENABLED=0/ENABLED=1/' /etc/default/motd-news
     command -v pro >/dev/null 2>&1 && pro config set apt_news=true >/dev/null 2>&1 || true
     echo "Ubuntu's login message is back. (Prompt= in /etc/update-manager/release-upgrades is left as it is.)"
@@ -100,47 +102,20 @@ CONF
     echo "wrote $D/node.conf"
 fi
 
-# ---- the banner ---------------------------------------------------------------
+# ---- the banner: fleet-status, at each login ----------------------------------
+# fleet-status (tools/fleet-status.sh, copied beside this script) is the
+# panel: the node, CPU/memory/disk bars, the GPU and what runs on it, who is
+# in over SSH and what each connection started, the busiest processes, the
+# hints. Installed as a command too: run it any time, or watch -c fleet-status.
+_here=$(cd "$(dirname "$0")" && pwd)
+[ -f "$_here/fleet-status.sh" ] || { echo "fleet-status.sh is not beside $0: copy both (see the header)" >&2; exit 1; }
+install -m 0755 "$_here/fleet-status.sh" /usr/local/bin/fleet-status
+echo "installed /usr/local/bin/fleet-status"
 cat > "$M/01-copal-fleet" <<'MOTD'
-#!/bin/bash
-# Copal fleet login banner (orrery's tools/fleet-login.sh). Settings:
-# /etc/copal-fleet/node.conf. Remove with: sudo bash fleet-login.sh --undo
-ROLE=''; HOLD=''; WARN=''; HINTS=()
-if [ -r /etc/copal-fleet/node.conf ]; then
-    while IFS= read -r line; do
-        case "$line" in
-            ROLE=*) ROLE=${line#ROLE=}; ROLE=${ROLE//\"/} ;;
-            HOLD=*) HOLD=${line#HOLD=}; HOLD=${HOLD//\"/} ;;
-            WARN=*) WARN=${line#WARN=}; WARN=${WARN//\"/} ;;
-            HINT=*) h=${line#HINT=}; HINTS+=("${h//\"/}") ;;
-        esac
-    done < /etc/copal-fleet/node.conf
-fi
-. /etc/os-release
-printf '\n'
-printf '  \033[1mCopal fleet\033[0m \033[2m· orrery\033[0m\n'
-printf '  \033[1m%s\033[0m -- %s \033[2m(%s, not Copal)\033[0m\n' "$(hostname)" "${ROLE:-a fleet node}" "$PRETTY_NAME"
-if command -v nvidia-smi >/dev/null 2>&1; then
-    g=$(nvidia-smi --query-gpu=name,driver_version,temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1)
-    if [ -n "$g" ]; then
-        IFS=',' read -r name drv temp util mu mt <<<"$g"
-        printf '  GPU   %s · driver%s · %s°C · %s%% busy · %s of%s MiB\n' "$name" "$drv" "${temp# }" "${util# }" "${mu# }" "$mt"
-    else
-        printf '  GPU   \033[33mnvidia-smi gives no answer: is the driver loaded?\033[0m\n'
-    fi
-fi
-for c in /usr/local/cuda/bin/nvcc /usr/local/cuda-*/bin/nvcc; do
-    [ -x "$c" ] || continue
-    v=$("$c" --version 2>/dev/null | sed -n 's/.*release \([0-9.]*\).*/\1/p')
-    printf '  CUDA  %s\n' "${v:-?}"; break
-done
-[ -n "$HOLD" ] && printf '  \033[2mheld: %s\033[0m\n' "$HOLD"
-if [ "${#HINTS[@]}" -gt 0 ]; then
-    printf '\n  Hints\n'
-    for h in "${HINTS[@]}"; do printf '    %s\n' "$h"; done
-fi
-[ -n "$WARN" ] && printf '\n  \033[33m%s\033[0m\n' "$WARN"
-printf '\n'
+#!/bin/sh
+# Copal fleet login banner (orrery's tools/fleet-login.sh): the fleet-status
+# panel. Settings: /etc/copal-fleet/node.conf. Remove: sudo bash fleet-login.sh --undo
+[ -x /usr/local/bin/fleet-status ] && exec /usr/local/bin/fleet-status
 MOTD
 chmod +x "$M/01-copal-fleet"
 echo "wrote $M/01-copal-fleet"

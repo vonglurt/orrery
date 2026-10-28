@@ -193,6 +193,44 @@ Previewed on calber as `user` before installing:
   Do not run do-release-upgrade: Ubuntu 26.04 has no CUDA 12 for this card.
 ```
 
+### The node at a glance: `fleet-status`
+
+Paul asked for the login to show the node's address, the GPU, and what is
+running, `htop`-like, especially scripts started remotely. That is
+`tools/fleet-status.sh`, installed by `fleet-login.sh` as
+`/usr/local/bin/fleet-status` and run by the login banner; also a command
+(`watch -c -n 2 fleet-status` keeps it live). Ubuntu's own
+`50-landscape-sysinfo` is now silenced too, since the panel says it.
+
+| Panel | From |
+| --- | --- |
+| node, role, system, uptime, address and interface | `/etc/copal-fleet/node.conf`, `uptime`, `ip -4 addr` |
+| CPU, memory, disk as coloured bars (green, yellow at 60%, red at 85%) | `/proc/stat` sampled over 0.2 s, `/proc/meminfo`, `df` |
+| GPU: name, driver, temperature, power, load and memory bars, processes on it | `nvidia-smi` |
+| remote sessions: who, from where, since when | `who` |
+| **started over SSH**: every process under an SSH connection that is not sshd or a bare shell, with user, source address, age, CPU, command | the process tree; the address from the process's own `SSH_CONNECTION`, or the connection's `sshd` as `ss` names it (root) |
+| busiest five by CPU | `ps` |
+
+**Tested on calber** from the Mac: two SSH sessions each ran a CPU-bound
+job (`yes`, and `bash -c "while :; do :; done"`), and a third ran the panel:
+
+```
+  CPU   ██████░░░░░░░░░░░░░░░░░░  24%   load 0.93 1.24 1.44 · 8 cores
+  Started over SSH (scripts, builds, runs; not the shells themselves)
+    PID     USER     FROM                 AGE    CPU  COMMAND
+    15049   user     192.168.8.143      0m04s    99%  bash -c while :; do :; done
+    15050   user     192.168.8.143      0m04s    99%  yes
+    15046   user     192.168.8.143      0m04s     0%  timeout 25 bash -c while :; do :; done
+    15047   user     192.168.8.143      0m04s     0%  bash -c timeout 25 yes > /dev/null
+    15048   user     192.168.8.143      0m04s     0%  timeout 25 yes
+```
+
+(192.168.8.143 is the Mac.) The first version showed the source as `?`
+(as a user, `ss` cannot name root's `sshd`), hid the busy `bash -c` (a
+filter that dropped every `bash` without a `.sh`), and listed its own `sed`;
+the environment's `SSH_CONNECTION`, a filter for bare shells only, and
+skipping its own session fixed all three. The whole panel takes about 1.3 s.
+
 ## VI. Discussion
 
 **Ubuntu's installer did half the work.** "Third-party" put in the right
