@@ -230,7 +230,9 @@ builds orrery, installs `~/.local/bin/orrery`, and makes **Orrery.app** in
 from Finder, Launchpad, Spotlight or the Dock. It writes what orrery says to
 `~/Library/Logs/orrery.log`. Run it again after pulling, or to change the
 options. `docs/mac-app-lab-report.md` records how it is made and what an
-ad-hoc signature allows.
+ad-hoc signature allows; `docs/appkit-gui-lab-report.md` teaches the window
+itself, from `cargo new` to the app, with a 602-line example to start from
+(`docs/appkit-example/`).
 
 ## Layout
 

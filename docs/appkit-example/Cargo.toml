@@ -1,0 +1,17 @@
+# orbit -- the smallest program with orrery's shape: a Rust loop that draws
+# into its own pixels and shows them in an AppKit window, with no crates.
+# docs/appkit-gui-lab-report.md teaches it a part at a time.
+[package]
+name = "orbit"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# Empty, and that is the point: AppKit, Foundation, CoreGraphics and the
+# Objective-C runtime are on every Mac, and src/mac.rs declares what it uses.
+[dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
