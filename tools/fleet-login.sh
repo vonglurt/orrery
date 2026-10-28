@@ -15,8 +15,10 @@
 # of life. It adds 01-copal-fleet, which runs at each login: the fleet's name,
 # this node and its role, the GPU as it is now, and hints.
 #
-# Turned off is chmod -x, listed in /etc/copal-fleet/motd-silenced, so
-# --undo turns back on exactly what this turned off. Settings live in
+# Turned off is chmod -x (run-parts skips a script that is not executable);
+# --undo turns every script in SILENCE back on. No list of what was done is
+# kept: a list written at the end is lost when a run stops partway, which is
+# how the first run on calber left five scripts off and nothing to undo them. Settings live in
 # /etc/copal-fleet/node.conf, which 01-copal-fleet reads, so a node's role
 # and hints can be edited without running this again.
 #
@@ -43,10 +45,8 @@ M=/etc/update-motd.d
 SILENCE='10-help-text 50-landscape-sysinfo 50-motd-news 91-contract-ua-esm-status 91-release-upgrade'
 
 if [ "$UNDO" = 1 ]; then
-    if [ -f "$D/motd-silenced" ]; then
-        while read -r f; do [ -f "$M/$f" ] && chmod +x "$M/$f" && echo "on again: $f"; done < "$D/motd-silenced"
-        rm -f "$D/motd-silenced"
-    fi
+    for f in $SILENCE; do [ -e "$M/$f" ] && chmod +x "$M/$f" && echo "on again: $f"; done
+    rm -f "$D"/motd-silenced*
     rm -f "$M/01-copal-fleet" /usr/local/bin/fleet-status
     [ -f /etc/default/motd-news ] && sed -i 's/^ENABLED=0/ENABLED=1/' /etc/default/motd-news
     command -v pro >/dev/null 2>&1 && pro config set apt_news=true >/dev/null 2>&1 || true
@@ -57,15 +57,10 @@ fi
 mkdir -p "$D"
 
 # ---- silence -----------------------------------------------------------------
-: > "$D/motd-silenced.new"
 for f in $SILENCE; do
-    if [ -x "$M/$f" ]; then
-        chmod -x "$M/$f"; echo "$f" >> "$D/motd-silenced.new"; echo "silenced: $f"
-    fi
+    if [ -x "$M/$f" ]; then chmod -x "$M/$f"; echo "silenced: $f"; fi
 done
-# Keep what an earlier run silenced, so --undo still knows it.
-cat "$D/motd-silenced" "$D/motd-silenced.new" 2>/dev/null | sort -u > "$D/motd-silenced.all"
-mv "$D/motd-silenced.all" "$D/motd-silenced"; rm -f "$D/motd-silenced.new"
+rm -f "$D"/motd-silenced*   # left by the first version
 # The news is also fetched by a timer; off at the source.
 [ -f /etc/default/motd-news ] && sed -i 's/^ENABLED=1/ENABLED=0/' /etc/default/motd-news
 # Ubuntu Pro's messages in apt's own output ("Enable ESM Apps ...").

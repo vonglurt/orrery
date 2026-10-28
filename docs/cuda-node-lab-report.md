@@ -193,6 +193,18 @@ Previewed on calber as `user` before installing:
   Do not run do-release-upgrade: Ubuntu 26.04 has no CUDA 12 for this card.
 ```
 
+**The first run stopped partway.** On calber it silenced the five scripts
+and then exited without a word: the list it kept for `--undo` was built with
+`cat old-list new-list | sort`, and on a first run there is no old list, so
+`cat` failed, `pipefail` made the line fail, and `set -e` ended the script
+before it wrote `node.conf`, held the release or installed the banner. The
+list is gone (`--undo` turns every script in the silence list back on), and
+the script was then **rehearsed whole on calber as `user`**: a copy with
+every system path pointed into a scratch tree holding copies of calber's
+files, run to the end (five silenced, news off, `Prompt=never`, `node.conf`,
+`fleet-status`, the banner; exit 0), the banner run, and `--undo` run (all
+five back, news on). Only then was it handed back to be run as root.
+
 ### The node at a glance: `fleet-status`
 
 Paul asked for the login to show the node's address, the GPU, and what is
