@@ -22,6 +22,9 @@ pub enum View {
     Lab,
     /// The cards, images and machines that room was made from.
     Media,
+    /// A fresh install to a fleet node: probe, the setup recipes, join
+    /// (machines.rs).
+    Machines,
     /// What the fleet is training, and which machines are doing it
     /// (training.rs).
     Training,
@@ -41,13 +44,14 @@ impl View {
         match self {
             View::Lab => "Lab",
             View::Media => "Media",
+            View::Machines => "Machines",
             View::Training => "Training",
             View::Sessions => "Sessions",
         }
     }
 
     /// Every view, in the order the strip draws them.
-    pub const ALL: &'static [View] = &[View::Lab, View::Media, View::Training, View::Sessions];
+    pub const ALL: &'static [View] = &[View::Lab, View::Media, View::Machines, View::Training, View::Sessions];
 }
 
 /// Draw the strip and report a click on a view that is not the current one.
@@ -142,7 +146,9 @@ mod tests {
             .map(|v| F8X13.measure(v.title()) as i32 + 22)
             .sum();
         assert_eq!(width(), sum);
-        assert!(width() > 0 && width() < 300, "the strip is not a strip");
+        // Five views since Machines (28 October): about 370 pixels, still a
+        // strip beside the fleet's name at 960 wide.
+        assert!(width() > 0 && width() < 400, "the strip is not a strip");
     }
 
     #[test]

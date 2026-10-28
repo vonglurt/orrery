@@ -46,6 +46,7 @@ mod training;
 mod json;
 mod keymap;
 mod lab;
+mod machines;
 mod media;
 mod nav;
 #[cfg(target_os = "macos")]
@@ -291,6 +292,13 @@ fn main() {
             Frame::Media { copal: copal.clone(), demo }
         } else if frame_view == "sessions" {
             Frame::Sessions { fleet: fleet_name.clone() }
+        } else if frame_view == "machines" {
+            let doc = if !frame_state.is_empty() {
+                std::fs::read_to_string(&frame_state).unwrap_or_default()
+            } else {
+                jobs_answer(&format!("{} status", machines_cmd(&queue_ctl)))
+            };
+            Frame::Machines { doc, select: frame_select.clone() }
         } else if frame_view == "training" || frame_view == "jobs" {
             // A saved document, or the training command's answer.
             let doc = if !frame_state.is_empty() {
@@ -470,6 +478,16 @@ fn main() {
 }
 
 /// What `--frame` should render.
+/// The machines tool beside the queue's: `--queue DIR` gives
+/// `python3 TOOLS/fleet-queue.py 'DIR'`, and machines.py takes the same DIR.
+fn machines_cmd(queue_ctl: &str) -> String {
+    if queue_ctl.contains("/fleet-queue.py ") {
+        queue_ctl.replacen("/fleet-queue.py ", "/machines.py ", 1)
+    } else {
+        String::new()
+    }
+}
+
 enum Frame {
     /// Phase 2's palette sheet: every primitive in `draw.rs`, once.
     Specimen,
@@ -489,6 +507,8 @@ enum Frame {
     Files { nodes: Vec<String> },
     /// What the fleet is training, against a document (training.rs).
     Training { doc: String },
+    /// The machines, from a fresh install to a node (machines.rs).
+    Machines { doc: String, select: Vec<String> },
     /// The machines' sessions, live: joined, then drawn after a wait
     /// (ORRERY_FRAME_WAIT seconds, 8 by default) for their screens to arrive.
     Sessions { fleet: String },
@@ -674,6 +694,23 @@ fn write_frame(
                 let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
                 training::draw(&mut u, &m, &mut st);
             }
+            Frame::Machines { ref doc, ref select } => {
+                let m = machines::Model::parse(doc);
+                let mut st = machines::State::new(std::env::var("ORRERY_FRAME_OPERATOR").is_ok());
+                if let Some(n) = select.first() {
+                    st.sel = n.clone();
+                    // ORRERY_FRAME_CONFIRM=RECIPE draws the confirmation for it.
+                    if let Ok(r) = std::env::var("ORRERY_FRAME_CONFIRM") {
+                        if !r.is_empty() {
+                            st.confirm_apply(&r, n);
+                        }
+                    }
+                }
+                let mut ui_state = ui::UiState::default();
+                ui_state.pointer = (-1, -1);
+                let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
+                machines::draw(&mut u, &m, &mut st);
+            }
             Frame::Sessions { ref fleet } => {
                 let mut sv = sessions::Sessions::open(fleet);
                 let wait = std::env::var("ORRERY_FRAME_WAIT").ok().and_then(|v| v.parse().ok()).unwrap_or(8u64);
@@ -806,6 +843,25 @@ fn gui_loop<S: surface::Surface>(
     };
     let queue_said: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let mut sessions_view: Option<sessions::Sessions> = None;
+
+    // THE MACHINES VIEW reads machines.py's document on its own thread, as
+    // the training view does; each of its asks runs on a thread; a recipe's
+    // command comes back here to be typed into the machine's Sessions tile.
+    let mcmd = machines_cmd(queue_ctl);
+    let machines_doc: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let machines_said: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let handoff: Arc<Mutex<Option<(String, String, String)>>> = Arc::new(Mutex::new(None));
+    let mut machines_state = machines::State::new(posture == lab::Posture::Operator && !mcmd.is_empty());
+    if !mcmd.is_empty() {
+        let doc = Arc::clone(&machines_doc);
+        let cmd = format!("{} status", mcmd);
+        thread::spawn(move || loop {
+            *doc.lock().unwrap_or_else(|e| e.into_inner()) = jobs_answer(&cmd);
+            thread::sleep(Duration::from_secs(4));
+        });
+    } else {
+        *machines_doc.lock().unwrap_or_else(|e| e.into_inner()) = "no machines tool: start orrery with --queue DIR".into();
+    }
 
     // THE READ MODEL IS REFRESHED ON A SECOND THREAD, and it has to be.
     // `copal fleet state` may take forty-five seconds, and a console that
@@ -1002,6 +1058,47 @@ fn gui_loop<S: surface::Surface>(
                         action = Some(lab::Action::Go(v));
                     }
                 }
+                (None, nav::View::Machines) => {
+                    let text = machines_doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    machines_state.said = machines_said.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let go = machines::draw(&mut u, &machines::Model::parse(&text), &mut machines_state);
+                    if let Some(ask) = machines_state.ask.take() {
+                        let q = |x: &str| format!("'{}'", x.replace('\'', "'\\''"));
+                        let (cmd, doing) = match &ask {
+                            machines::Ask::Probe(n) => (format!("{} probe {}", mcmd, q(n)), format!("probing {}", n)),
+                            machines::Ask::Add(n, t) => (format!("{} add {} {}", mcmd, q(n), q(t)), format!("adding {}", n)),
+                            machines::Ask::Join(n) => (format!("{} join {}", mcmd, q(n)), format!("joining {}", n)),
+                            machines::Ask::Apply { recipe, machine, .. } => {
+                                (format!("{} stage {} {}", mcmd, q(recipe), q(machine)), format!("copying {} to {}", recipe, machine))
+                            }
+                        };
+                        let said = Arc::clone(&machines_said);
+                        let hand = Arc::clone(&handoff);
+                        *said.lock().unwrap_or_else(|e| e.into_inner()) = format!("{}...", doing);
+                        thread::spawn(move || {
+                            let out = std::process::Command::new("sh").arg("-c").arg(&cmd).output();
+                            let (ok, line) = match out {
+                                Ok(o) => (
+                                    o.status.success(),
+                                    String::from_utf8_lossy(if o.status.success() { &o.stdout } else { &o.stderr }).lines().last().unwrap_or("").to_string(),
+                                ),
+                                Err(e) => (false, e.to_string()),
+                            };
+                            let msg = match (&ask, ok) {
+                                (machines::Ask::Apply { recipe, machine, target, command }, true) => {
+                                    *hand.lock().unwrap_or_else(|e| e.into_inner()) = Some((machine.clone(), target.clone(), command.clone()));
+                                    format!("{}: files copied and checked; its command is typed in {}'s Sessions tile", recipe, machine)
+                                }
+                                (_, true) => format!("{}: done", doing),
+                                (_, false) => format!("{}: {}", doing, line),
+                            };
+                            *said.lock().unwrap_or_else(|e| e.into_inner()) = msg;
+                        });
+                    }
+                    if let Some(v) = go {
+                        action = Some(lab::Action::Go(v));
+                    }
+                }
                 (None, nav::View::Media) => {
                     if let Some(v) = media::draw(&mut u, &mut media) {
                         action = Some(lab::Action::Go(v));
@@ -1016,6 +1113,11 @@ fn gui_loop<S: surface::Surface>(
                     }
                 }
             }
+        }
+        // A recipe staged: its command typed into the machine's tile, in front.
+        if let Some((name, target, command)) = handoff.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            sessions_view.get_or_insert_with(|| sessions::Sessions::open(&fleet.fleet)).run(&name, &target, &command);
+            view = nav::View::Sessions;
         }
         if let Some(lab::Action::Go(v)) = action {
             view = v;

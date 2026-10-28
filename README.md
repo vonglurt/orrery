@@ -107,6 +107,20 @@ that runs `copal-prep.sh` on a real terminal so that its two typed `ERASE`
 confirmations happen where they always did. Nothing is answered on the
 operator's behalf and there is no `--yes`.
 
+`Cmd-3` is **Machines**: a fresh install to a fleet node. After the stick,
+Ubuntu 24.04 with OpenSSH and `ssh-copy-id`, a machine is added by its
+address; orrery reads it (system, CPU, GPU, driver, CUDA, Rust, the fleet's
+tools) and shows each of its setup recipes (`tools/fleet-node.sh`,
+`cuda-node.sh`, `fleet-login.sh`, `fleet-poweroff-setup.sh`) as applied or
+not, read from what each leaves behind. **Apply** is hard to press: a
+screen with the machine, what the recipe does, its files and their sha256
+and the exact command, and its button lit only when the machine's name is
+typed. The files are copied and checked on the machine; the command is
+typed into the machine's Sessions tile, in a window of its own, where the
+operator types the sudo password; orrery never holds one. **Join** adds it
+to the queue and the Sessions grid, with the same kind of confirmation.
+`tools/machines.py` does the work. `Cmd-4` is Training, `Cmd-5` Sessions.
+
 `--frame PATH` renders any of it to a PPM and exits — no compositor, no window,
 no node. Every screenshot in `docs/` is a file this produced.
 

@@ -30,7 +30,7 @@ the list is written down). `copal fleet` on the Mac comes from
 machines as the fleet CLI sees them; they run no fleet agent yet, so their
 tiles say "off bus" until they are enrolled.
 
-**Training** (Command-3) is laid out to be read:
+**Training** (Command-4) is laid out to be read:
 
 - **the top line** says what is happening, in a sentence, and the round's
   three steps light in turn: record, train, judge;
@@ -126,7 +126,7 @@ cd ~/code/orrery && cargo run --release -- --gui --operator paul --fleet grove \
 ```
 
 `--queue DIR` sets both what the Training view reads and what its buttons
-run. Training is Command-3.
+run. Training is Command-4.
 
 **The view shows:**
 - the queue's state, in its top sentence;
@@ -337,6 +337,11 @@ Opening it again shows where the queue is.
   and the breaker does not count it.
 - **To take a host out,** delete it from `config.json`. Its lane ends after
   the job in hand.
+- **From the window:** the Machines view (Command-3) adds a machine by its
+  address, probes it, applies each recipe with a typed confirmation (the
+  command typed into its Sessions tile, the password typed by you), and
+  joins it. `tools/machines.py QUEUE status|probe|add|details|stage|join`
+  is the same from a shell.
 - **To make a new Ubuntu 24.04 machine a node,** `tools/fleet-node.sh` does
   it in one run on the machine (copy it with `cuda-node.sh`,
   `fleet-login.sh`, `topnotch.sh` and `fleet-poweroff-setup.sh`, then

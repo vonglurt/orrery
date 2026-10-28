@@ -41,6 +41,11 @@ enum Ask {
     Key(&'static str, Option<char>),
     /// The size the tile can show, in characters.
     Size(u16, u16),
+    /// A command in a new window of the session, named "recipe", which the
+    /// tile then shows (machines.rs: a recipe's command, its password typed
+    /// by the person here). Its own window, so copal-tm in the first one is
+    /// not typed into; closing it brings copal-tm back.
+    Window(String),
 }
 
 pub struct Tile {
@@ -120,14 +125,32 @@ impl Sessions {
     pub fn open(fleet: &str) -> Sessions {
         let mut s = Sessions::default();
         for (name, target) in machines(fleet) {
-            let lines = Arc::new(Mutex::new(Vec::new()));
-            let status = Arc::new(Mutex::new("connecting".to_string()));
-            let (tx, rx) = channel();
-            let (l2, s2, t2) = (Arc::clone(&lines), Arc::clone(&status), target.clone());
-            thread::spawn(move || worker(&t2, rx, l2, s2));
-            s.tiles.push(Tile { name, target, lines, status, tx, size: (0, 0) });
+            s.add(name, target);
         }
         s
+    }
+
+    fn add(&mut self, name: String, target: String) -> usize {
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let status = Arc::new(Mutex::new("connecting".to_string()));
+        let (tx, rx) = channel();
+        let (l2, s2, t2) = (Arc::clone(&lines), Arc::clone(&status), target.clone());
+        thread::spawn(move || worker(&t2, rx, l2, s2));
+        self.tiles.push(Tile { name, target, lines, status, tx, size: (0, 0) });
+        self.tiles.len() - 1
+    }
+
+    /// Run a command in a machine's session, in its own window, and put that
+    /// tile in front, enlarged and taking the keyboard: a machine not in the
+    /// grid yet (a new one, from the Machines view) gets a tile.
+    pub fn run(&mut self, name: &str, target: &str, command: &str) {
+        let i = match self.tiles.iter().position(|t| t.name == name) {
+            Some(i) => i,
+            None => self.add(name.to_string(), target.to_string()),
+        };
+        let _ = self.tiles[i].tx.send(Ask::Window(command.to_string()));
+        self.big = Some(i);
+        self.focus = Some(i);
     }
 }
 
@@ -182,6 +205,16 @@ fn worker(target: &str, rx: Receiver<Ask>, lines: Arc<Mutex<Vec<String>>>, statu
                         }
                     }
                 }
+                ("tmux", Ask::Window(c)) => script.push_str(&format!(
+                    "tmux new-window -t {s}: -n recipe; tmux send-keys -t {s}:recipe -l -- {}; tmux send-keys -t {s}:recipe Enter; ",
+                    q(&c),
+                    s = SESSION
+                )),
+                (_, Ask::Window(c)) => script.push_str(&format!(
+                    "screen -S {s} -X screen -t recipe; screen -S {s} -p recipe -X stuff {}; ",
+                    q(&format!("{}\n", c)),
+                    s = SESSION
+                )),
                 ("tmux", Ask::Text(t)) => script.push_str(&format!("tmux send-keys -t {} -l -- {}; ", SESSION, q(&t))),
                 ("tmux", Ask::Key(k, _)) => script.push_str(&format!("tmux send-keys -t {} {}; ", SESSION, k)),
                 (_, Ask::Text(t)) => script.push_str(&format!("screen -S {} -X stuff {}; ", SESSION, q(&t))),
