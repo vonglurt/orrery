@@ -945,27 +945,37 @@ class Plan:
             if st.get("status") != "approved" or st.get("confirmed"):
                 continue
             want = {k: v["value"] for k, v in changed_vars(st.get("changed", [])).items()}
-            shorts = [self.short(), st.get("commit", "")[:7]]
+            # Every commit main has been at since the promotion (each carries
+            # its values, unless a later promotion moved them): a machine is
+            # confirmed by any finished build of one of them whose defaults
+            # have the values, not only by its newest, which may still be
+            # queued behind its work (28 October: two of seven read
+            # "confirmed" while all seven had built them).
+            since = st.get("approved", "")
+            shorts = [st.get("commit", "")[:7]] + [c[:7] for c, v in self.state.get("commits", {}).items()
+                                                   if v.get("first_seen", "") >= since and c[:7] != st.get("commit", "")[:7]]
+            done, live, gone = self.ids("done"), self.ids("queue", "running"), self.ids("failed", "stopped")
             hosts = {}
             for h in self.hosts:
-                name, state = h["name"], "waiting for its build"
+                name, ok, differs, building, failed = h["name"], None, None, None, None
                 for short in shorts:
                     jid = "prep-%s-%s" % (name, short)
-                    if jid in self.ids("done"):
+                    if jid in done:
                         f = glob.glob(os.path.join(self.q, "results", jid, self.home, "c", short, "defaults.toml"))
                         if not f:
-                            state = "built %s, no defaults brought back" % short
                             continue
                         got = parse_weights(open(f[0]).read())
                         off = [k for k, v in want.items() if k not in got or abs(got[k] - v) > 1e-6 * max(1.0, abs(v))]
-                        state = "confirmed at %s" % short if not off else "differs at %s: %s" % (short, ", ".join(off))
-                        break
-                    if jid in self.ids("queue", "running"):
-                        state = "building %s" % short
-                        break
-                    if jid in self.ids("failed", "stopped"):
-                        state = "build of %s failed" % short
-                hosts[name] = state
+                        if off:
+                            differs = differs or "differs at %s: %s" % (short, ", ".join(off))
+                        else:
+                            ok = ok or short
+                    elif jid in live:
+                        building = building or short
+                    elif jid in gone:
+                        failed = failed or short
+                hosts[name] = ("confirmed at %s" % ok if ok else differs if differs else "building %s" % building if building
+                               else "build of %s failed" % failed if failed else "waiting for its build")
             st["hosts"] = hosts
             ok = [n for n, v in hosts.items() if v.startswith("confirmed")]
             st["detail"] = "on main at %s; values confirmed on %d of %d machines%s" % (
