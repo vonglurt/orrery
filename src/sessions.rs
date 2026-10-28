@@ -186,6 +186,13 @@ fn worker(target: &str, rx: Receiver<Ask>, lines: Arc<Mutex<Vec<String>>>, statu
         return;
     }
     say(format!("{} session '{}'", kind, SESSION));
+    // A recipe's window still open from before (orrery restarted while its
+    // sudo waited): screen shows it, as tmux shows its current window.
+    let open = if kind == "screen" {
+        on(target, &format!("screen -S {} -Q windows 2>/dev/null | grep -o 'recipe-[0-9]*' | tail -n1", SESSION)).unwrap_or_default()
+    } else {
+        String::new()
+    };
     let mut pending: VecDeque<Ask> = VecDeque::new();
     let mut size = (0u16, 0u16);
     // screen's window in front of the tile. A detached screen session has no
@@ -193,7 +200,7 @@ fn worker(target: &str, rx: Receiver<Ask>, lines: Arc<Mutex<Vec<String>>>, statu
     // (28 October: typing into boburner's tile went nowhere), so every stuff
     // and every hardcopy names its window: the first ("0"), or the recipe's
     // (recipe-TIME) after Ask::Window until that window is gone.
-    let mut win = String::from("0");
+    let mut win = if open.trim().is_empty() { String::from("0") } else { open.trim().to_string() };
     loop {
         // Everything typed since the last pass, in order, in one call.
         // Wait for something typed, or 900 ms for the next look at the
@@ -251,11 +258,16 @@ fn worker(target: &str, rx: Receiver<Ask>, lines: Arc<Mutex<Vec<String>>>, statu
         script.push_str(&if kind == "tmux" {
             format!("tmux capture-pane -p -t {}", SESSION)
         } else {
-            // The named window; gone (the recipe's shell exited), the first,
-            // and a line to say so, which the worker reads.
+            // The named window. Gone only when screen's list no longer has
+            // it (its shell exited): then the first, and a line to say so,
+            // which the worker reads. A hardcopy of a window made a moment
+            // ago may not be written yet, so it is tried again: taking that
+            // for "gone" put the tile back on copal-tm (28 October).
             format!(
-                "f=/tmp/orrery-hardcopy-$$; if screen -S {s} -p {w} -X hardcopy $f 2>/dev/null && [ -f $f ]; then cat $f; \
-                 else echo '@orrery-window-gone'; screen -S {s} -p 0 -X hardcopy $f && cat $f; fi; rm -f $f",
+                "f=/tmp/orrery-hardcopy-$$; W={w}; \
+                 if [ \"$W\" != 0 ] && ! screen -S {s} -Q windows 2>/dev/null | grep -q -- \"$W\"; then echo '@orrery-window-gone'; W=0; fi; \
+                 for i in 1 2 3 4 5; do screen -S {s} -p \"$W\" -X hardcopy $f 2>/dev/null; [ -f $f ] && break; sleep 0.2; done; \
+                 cat $f 2>/dev/null; rm -f $f",
                 s = SESSION,
                 w = q(&win)
             )
