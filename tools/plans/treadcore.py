@@ -113,6 +113,18 @@ def parse_weights(text):
     return out
 
 
+def changed_vars(lines):
+    """set-defaults.py's "name old -> new" lines as ticker vars; the
+    Tactics::default() echo lines (and any old value that is an expression,
+    DIRECT_RANGE - 1.0) are left out rather than read."""
+    out = {}
+    for l in lines:
+        m = re.match(r"^([a-z_][a-z0-9_]*) ([-+0-9.eE]+) -> ([-+0-9.eE]+)$", l.strip())
+        if m and not l.startswith(" "):
+            out[m.group(1)] = {"value": float(m.group(3)), "offset": round(float(m.group(3)) - float(m.group(2)), 4)}
+    return out
+
+
 def short_moved(text, room=60):
     """A trial's weights for a job's title: whole names, "+N more" past the room."""
     parts = [l.split("#")[0].strip().replace(" = ", " ") for l in text.splitlines() if "=" in l.split("#")[0]]
@@ -152,6 +164,7 @@ class Plan:
         self.home = "fleet/q-%s" % self.name  # under each host's $HOME
         self._sha = None
         self._rsaves = {}
+        self._newruns = []
 
     def flag(self, kind, text, key=None, progress=False):
         """A flag for a person (fleet-queue's flags/, the same form): raised once a key.
@@ -172,6 +185,9 @@ class Plan:
                                               "ack": None, "progress": bool(progress)})
 
     def keep(self):
+        for rid, r in self._newruns:
+            save(os.path.join(self.q, "runs", rid + ".json"), r)
+        self._newruns = []
         save(os.path.join(self.pd, "state.json"), self.state)
         for rid, st in self._rsaves.items():
             save(os.path.join(self.rdir(rid), "state.json"), st)
@@ -766,9 +782,12 @@ class Plan:
         """A run file, as fleet-queue.py new writes one."""
         d = os.path.join(self.q, "runs")
         os.makedirs(d, exist_ok=True)
-        n = 1 + max([int(f[1:5]) for f in os.listdir(d) if f[:1] == "r" and f[1:5].isdigit()] or [0])
+        n = 1 + max([int(f[1:5]) for f in os.listdir(d) if f[:1] == "r" and f[1:5].isdigit()] +
+                    [int(r[1:]) for r, _ in self._newruns] or [0])
         rid = "r%04d" % n
-        save(os.path.join(d, rid + ".json"), dict({"kind": kind, "params": params, "asked": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": by}, **extra))
+        # Written by keep(), with the state: a pass that fails leaves no run
+        # behind it (28 October: one did, and its state was not saved).
+        self._newruns.append((rid, dict({"kind": kind, "params": params, "asked": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": by}, **extra)))
         return rid
 
     def adopt(self, text, what):
@@ -925,13 +944,7 @@ class Plan:
             st = self.rstate(rid)
             if st.get("status") != "approved" or st.get("confirmed"):
                 continue
-            want = {}
-            for l in st.get("changed", []):
-                parts = l.split()
-                try:
-                    want[parts[0]] = float(parts[-1])
-                except (IndexError, ValueError):
-                    pass
+            want = {k: v["value"] for k, v in changed_vars(st.get("changed", [])).items()}
             shorts = [self.short(), st.get("commit", "")[:7]]
             hosts = {}
             for h in self.hosts:
@@ -1471,7 +1484,7 @@ class Plan:
                     st["status"] = "failed"
                     st["why"] = "auto approval: %s" % str(e).splitlines()[0]
             self.tick({"kind": "promote", "run": rid, "host": "mac", "improved": True, "d": None, "se": None,
-                       "vars": {l.split()[0]: {"value": float(l.split()[-1]), "offset": round(float(l.split()[-1]) - float(l.split()[1]), 4)} for l in st["changed"]}})
+                       "vars": changed_vars(st["changed"])})
         elif st["job"] in self.ids("failed", "stopped"):
             st["status"] = "failed"
             st["why"] = "the tests or a family failed: see logs/%s.log" % st["job"]
