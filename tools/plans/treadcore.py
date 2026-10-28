@@ -1430,7 +1430,28 @@ class Plan:
         remote, branch = self.push_target()
         r = run(["git", "-C", self.tc, "push", remote, "%s:refs/heads/%s" % (st["commit"], branch)])
         if r.returncode != 0:
-            raise SystemExit("main has moved since it was prepared (a fast-forward only): ask for the promotion again\n" + r.stderr[-300:])
+            # main moved while it was tested. If nothing under source/ moved
+            # (records, reports, docs), what was tested is what main would
+            # build: the promotion commit is replayed on main and pushed.
+            # Otherwise it must be tested again.
+            run(["git", "-C", self.tc, "fetch", "-q", remote])
+            tip = "%s/%s" % (remote, branch)
+            base = run(["git", "-C", self.tc, "merge-base", st["commit"], tip]).stdout.strip()
+            moved = run(["git", "-C", self.tc, "diff", "--quiet", base, tip, "--", "source/"]).returncode != 0
+            if not base or moved:
+                raise SystemExit("main's brain source has moved since it was prepared: ask for the promotion again\n" + r.stderr[-300:])
+            w = os.path.join(self.rdir(rid), "replay")
+            run(["git", "-C", self.tc, "worktree", "remove", "--force", w])
+            run(["git", "-C", self.tc, "worktree", "prune"])
+            r = run(["git", "-C", self.tc, "worktree", "add", "-q", "--detach", w, tip])
+            r = r if r.returncode else run(["git", "-C", w, "cherry-pick", "--allow-empty", st["commit"]])
+            new = run(["git", "-C", w, "rev-parse", "HEAD"]).stdout.strip() if r.returncode == 0 else ""
+            r = r if r.returncode else run(["git", "-C", self.tc, "push", remote, "%s:refs/heads/%s" % (new, branch)])
+            run(["git", "-C", self.tc, "worktree", "remove", "--force", w])
+            if r.returncode != 0:
+                raise SystemExit("main moved, and replaying the promotion on it failed\n" + r.stderr[-300:])
+            st["tested"] = st["commit"]
+            st["commit"] = new
         run(["git", "-C", self.tc, "fetch", "-q", remote])
         self.push_check()
         st["status"] = "approved"
