@@ -242,7 +242,7 @@ make uninstall
 ```
 
 builds orrery (under `tools/mem-guard.sh`), installs `~/.local/bin/orrery`,
-and makes **Orrery.app** in `~/Applications`, signed ad hoc, which opens the
+and makes **Orrery.app** in `/Applications` (or `~/Applications` where that is not writable), signed ad hoc, which opens the
 window with those options from Finder, Launchpad, Spotlight or the Dock. The
 options are kept in `~/.config/orrery/app-options`, so a plain `make install`
 keeps them. orrery's output goes to `~/Library/Logs/orrery.log`. On Linux,

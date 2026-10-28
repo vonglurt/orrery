@@ -3,7 +3,7 @@
 # machine's memory.
 #
 #   make install                 ~/.local/bin/orrery; on a Mac also
-#                                ~/Applications/Orrery.app, with the options
+#                                /Applications/Orrery.app, with the options
 #                                it was last made with
 #   make install OPTIONS='--operator paul --fleet grove --queue DIR ...'
 #                                the same, with these options from now on

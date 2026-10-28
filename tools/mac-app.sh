@@ -1,7 +1,7 @@
 #!/bin/sh
 # mac-app.sh [ORRERY ARGS...] -- install orrery on a Mac: the binary into
 # PREFIX/bin (default ~/.local) and Orrery.app into APPDIR (default
-# ~/Applications), so the window opens from Finder, Launchpad, Spotlight and
+# /Applications where it may be written, else ~/Applications), so the window opens from Finder, Launchpad, Spotlight and
 # the Dock like any other application.
 #
 # The arguments are the ones the app starts orrery with; --gui is added if
@@ -16,12 +16,16 @@
 # it keeps the last ones, from ~/.config/orrery/app-options.
 # An app opened from Finder gets a bare PATH and no terminal, so the launcher
 # puts ~/.local/bin and Homebrew back on the PATH and writes what orrery says
-# to ~/Library/Logs/orrery.log. APPDIR=/Applications puts it there instead.
+# to ~/Library/Logs/orrery.log. APPDIR=DIR puts it elsewhere.
 # --uninstall removes both.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PREFIX=${PREFIX:-$HOME/.local}
-APPDIR=${APPDIR:-$HOME/Applications}
+# The Applications folder Finder shows, where it may be written (an admin
+# account); otherwise the user's own. APPDIR= chooses.
+if [ -z "${APPDIR:-}" ]; then
+    if [ -w /Applications ]; then APPDIR=/Applications; else APPDIR=$HOME/Applications; fi
+fi
 APP="$APPDIR/Orrery.app"
 [ "$(uname -s)" = Darwin ] || { echo "mac-app.sh: this is for macOS" >&2; exit 2; }
 
