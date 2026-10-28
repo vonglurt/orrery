@@ -665,6 +665,8 @@ fn write_frame(
                 let mut st = training::State {
                     zoom: std::env::var("ORRERY_FRAME_ZOOM").ok().and_then(|v| v.parse().ok()),
                     operator: std::env::var("ORRERY_FRAME_OPERATOR").is_ok(),
+                    // ORRERY_FRAME_PAGE=N draws the queue's page N (0 Fleet, 1 Runs, 2 Found, 3 Net).
+                    page: std::env::var("ORRERY_FRAME_PAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
                     ..training::State::default()
                 };
                 let mut ui_state = ui::UiState::default();

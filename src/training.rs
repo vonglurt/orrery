@@ -107,8 +107,8 @@ pub struct State {
     pub said: String,
     /// Shut the fleet down was pressed once: the next press does it.
     pub arm_shutdown: bool,
-    /// Frames drawn: the ticker's clock.
-    pub frames: u64,
+    /// Which page of the queue's view: 0 Fleet, 1 Runs, 2 Found, 3 Net.
+    pub page: usize,
 }
 
 /// One machine's lane in the queue.
@@ -474,13 +474,23 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
     ui.label_in(body.x, y, body.w, &sentence, &F10X20, t.ink);
     y += F10X20.height as i32 + 8;
     if let Some(q) = &m.queue {
+        // The queue's view: its band, the newest change in one line, then
+        // one page at a time, so nothing runs past its box.
         y = draw_queue(ui, rect(body.x, y, body.w, 64), q, st) + 6;
-        st.frames += 1;
-        draw_ticker(ui, rect(body.x, y, body.w, 18), q, st.frames);
-        y += 18 + 8;
-        let ph = 128;
-        draw_panels(ui, rect(body.x, y, body.w, ph), q, st);
-        y += ph + 10;
+        y = draw_latest(ui, rect(body.x, y, body.w, 18), q) + 8;
+        y = draw_pages(ui, rect(body.x, y, body.w, 24), st) + 8;
+        let page = rect(body.x, y, body.w, body.bottom() - y);
+        match st.page {
+            1 => draw_runs_page(ui, page, q, st),
+            2 => draw_found_page(ui, page, q),
+            3 => {
+                if let Some(i) = draw_net(ui, page, m) {
+                    st.zoom = Some(i);
+                }
+            }
+            _ => draw_fleet_rows(ui, page, m),
+        }
+        return go;
     } else {
         draw_steps(ui, rect(body.x, y, body.w, 34), m, step);
         y += 34 + 10;
@@ -497,172 +507,273 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
     go
 }
 
-/// The slim ticker: the newest coefficients the fleet changed, scrolling
-/// right to left, each with its new value, its offset from the default, the
-/// census's difference and the machine that read it. A Found Improvement
-/// (past two errors, no map below) is lit.
-fn draw_ticker(ui: &mut Ui, at: Rect, q: &Queue, frames: u64) {
+/// The newest change, in one line: the coefficient, its new value and its
+/// offset from the default, what the census read, and which machine read
+/// it. FOUND when it was an improvement (past two errors, no map below).
+/// The rest are on the Found page.
+fn draw_latest(ui: &mut Ui, at: Rect, q: &Queue) -> i32 {
     let t = ui.t;
     ui.panel(at, t.tile);
     ui.outline(at, t.line);
-    let head = "newest coefficients ";
+    let head = "newest change ";
     let hw = F8X13.measure(head) as i32 + 8;
-    ui.panel(rect(at.x, at.y, hw, at.h), t.panel);
     ui.label(at.x + 4, at.y + 3, head, &F8X13, t.dim);
-    if q.ticker.is_empty() {
-        ui.label_in(at.x + hw + 6, at.y + 3, at.w - hw - 8, "none yet: each finished census adds the coefficients it moved", &F8X13, t.dim);
-        return;
-    }
-    // Newest first, then round again.
-    let items: Vec<(String, bool)> = q
-        .ticker
-        .iter()
-        .rev()
-        .map(|k| {
-            let v = k.value.map(|v| format!("{:.4}", v)).unwrap_or_default();
-            let off = k.offset.map(|o| format!(" ({:+.3})", o)).unwrap_or_default();
-            let d = match (k.d, k.se) {
-                (Some(d), Some(e)) => format!(" {:+.2}+/-{:.2}", d, e),
+    let text = match q.ticker.last() {
+        None => "none yet: each finished census reports the coefficients it moved".to_string(),
+        Some(k) => format!(
+            "{}{} = {}{}{}   read by {} at {}",
+            if k.improved { "FOUND IMPROVEMENT  " } else { "" },
+            k.var,
+            k.value.map(|v| format!("{:.4}", v)).unwrap_or_default(),
+            k.offset.map(|o| format!(" ({:+.3} from the default)", o)).unwrap_or_default(),
+            match (k.d, k.se) {
+                (Some(d), Some(e)) => format!("   census {:+.2} +/- {:.2}", d, e),
                 _ => String::new(),
-            };
-            (format!("{}{} = {}{}{} {}{}", if k.improved { "FOUND " } else { "" }, k.var, v, off, d, k.host, if k.improved { " *" } else { "" }), k.improved)
-        })
-        .collect();
-    let gap = 28;
-    let total: i32 = items.iter().map(|(s, _)| F8X13.measure(s) as i32 + gap).sum::<i32>().max(1);
-    let lane = rect(at.x + hw, at.y, at.w - hw, at.h);
-    let shift = ((frames * 3) % total as u64) as i32;
-    let mut x = lane.x + 6 - shift;
-    // Two passes so the loop is seamless.
-    for _ in 0..2 {
-        for (text, found) in &items {
-            let tw = F8X13.measure(text) as i32;
-            if x + tw > lane.x && x < lane.right() {
-                let vis_x = x.max(lane.x + 2);
-                let skip = ((vis_x - x) / F8X13.width as i32).max(0) as usize;
-                let shown: String = text.chars().skip(skip).collect();
-                ui.label_in(vis_x, at.y + 3, lane.right() - vis_x - 2, &shown, &F8X13, if *found { t.up } else { t.ink });
-            }
-            x += tw + gap;
-            if x > lane.right() {
-                break;
-            }
+            },
+            k.host,
+            k.t
+        ),
+    };
+    let found = q.ticker.last().map(|k| k.improved).unwrap_or(false);
+    ui.label_in(at.x + hw, at.y + 3, at.w - hw - 6, &text, &F8X13, if found { t.up } else { t.ink });
+    at.bottom()
+}
+
+/// The page tabs under the band.
+fn draw_pages(ui: &mut Ui, at: Rect, st: &mut State) -> i32 {
+    let t = ui.t;
+    const PAGES: [(&str, &str); 4] = [
+        ("Fleet", "each machine and its job"),
+        ("Runs", "ask for a run, cancel, approve"),
+        ("Found", "improvements, by variable and machine"),
+        ("Net", "the learned tank's weights"),
+    ];
+    let mut x = at.x;
+    for (i, (name, what)) in PAGES.iter().enumerate() {
+        let w = F8X13.measure(name) as i32 + 24;
+        let tab = rect(x, at.y, w, at.h);
+        let on = st.page == i;
+        ui.panel(tab, if on { t.tile } else { t.panel });
+        ui.outline(tab, t.line);
+        if on {
+            ui.c.rect(tab.x, tab.bottom() - 2, tab.w, 2, t.accent);
         }
-        if x > lane.right() {
+        ui.label(tab.x + 12, tab.y + (at.h - F8X13.height as i32) / 2, name, &F8X13, if on { t.ink } else { t.dim });
+        if ui.button_hit(tab) {
+            st.page = i;
+        }
+        let _ = what;
+        x += w + 4;
+    }
+    let what = PAGES.get(st.page).map(|p| p.1).unwrap_or("");
+    ui.label_in(x + 10, at.y + (at.h - F8X13.height as i32) / 2, at.right() - x - 10, what, &F8X13, t.dim);
+    at.bottom()
+}
+
+/// The Fleet page: a row a machine, two lines each. CPU is the machine's
+/// load against its cores (amber past 90%), GPU the card's use; then what
+/// it is running for the queue.
+fn draw_fleet_rows(ui: &mut Ui, at: Rect, m: &Model) {
+    let t = ui.t;
+    let lh = F8X13.height as i32;
+    let row_h = lh * 2 + 10;
+    let mut y = at.y;
+    let qlanes = m.queue.as_ref().map(|q| &q.lanes[..]).unwrap_or(&[]);
+    let name_w = F8X13.measure("saskatchewan  ") as i32;
+    let cpu_label_w = F8X13.measure("CPU ") as i32;
+    let cpu_bar_w = 160;
+    let cpu_text_w = F8X13.measure("16.3 of 16 cores busy   ") as i32;
+    for mc in &m.machines {
+        if y + row_h > at.bottom() {
             break;
         }
+        let r = rect(at.x, y, at.w, row_h);
+        ui.panel(r, t.tile);
+        ui.outline(r, t.line);
+        let ql = qlanes.iter().find(|l| l.host == mc.name || (mc.name == "this Mac" && l.host == "mac"));
+        let busy = ql.map(|l| l.state == "running" || l.state == "delivering" || l.state == "fetching").unwrap_or(false);
+        let (lc, light) = if !mc.up { (t.alarm, Light::Hollow) } else if busy { (t.up, Light::Full) } else { (t.dim, Light::Hollow) };
+        let y1 = r.y + 4;
+        ui.light(r.x + 10, y1 + lh / 2, 4, light, lc);
+        ui.label(r.x + 20, y1, &mc.name, &F8X13, t.ink);
+        let mut x = r.x + 20 + name_w;
+        if !mc.up {
+            ui.label_in(x, y1, r.right() - x - 6, "not answering", &F8X13, t.alarm);
+        } else {
+            ui.label(x, y1, "CPU", &F8X13, t.dim);
+            x += cpu_label_w;
+            let frac = if mc.cores > 0 { mc.load / mc.cores as f64 } else { 0.0 };
+            bar(ui, rect(x, y1 + 2, cpu_bar_w, 9), frac, if frac > 0.9 { t.warn } else { t.up });
+            x += cpu_bar_w + 6;
+            ui.label(x, y1, &format!("{:.1} of {} cores busy", mc.load, mc.cores), &F8X13, t.dim);
+            x += cpu_text_w;
+            if let Some(g) = &mc.gpu {
+                ui.label(x, y1, "GPU", &F8X13, t.dim);
+                x += cpu_label_w;
+                bar(ui, rect(x, y1 + 2, 80, 9), g.busy_pct as f64 / 100.0, t.accent);
+                x += 86;
+                ui.label(x, y1, &format!("{}% busy", g.busy_pct), &F8X13, t.dim);
+                x += F8X13.measure("100% busy   ") as i32;
+            }
+            if !mc.address.is_empty() && x + F8X13.measure(&mc.address) as i32 + 8 < r.right() {
+                ui.label_right(r.right() - 8, y1, &mc.address, &F8X13, t.dim);
+            }
+        }
+        let now = match ql {
+            Some(l) if l.state != "idle" && l.state != "stopped" && l.state != "not started" => {
+                let when = l.age_s.map(|a| format!(", for {}", ago(a))).unwrap_or_default();
+                format!("{} {}: {}{}", capital(&l.state), l.kind, l.title, when)
+            }
+            Some(l) => format!("Queue lane {}", l.state),
+            None => "Not in the queue".to_string(),
+        };
+        ui.label_in(r.x + 20, y1 + lh + 2, r.w - 28, &now, &F8X13, if busy { t.up } else { t.dim });
+        y += row_h + 4;
+    }
+    if y + lh < at.bottom() {
+        ui.label_in(at.x, y + 4, at.w, "CPU: the load average against the machine's cores (amber past 90%).  GPU: the card's use.  Green light: running a job.", &F8X13, t.dim);
     }
 }
 
-/// Three small panels: the runs a person asked for (and, for an operator,
-/// a button for each kind of run and to cancel one), and the two Found
-/// Improvement leaderboards.
-fn draw_panels(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
+/// The Runs page: a button a kind of run (operator only), what each does,
+/// and every run asked for, with Cancel and Approve.
+fn draw_runs_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     let t = ui.t;
-    let gap = 10;
-    let rw = at.w * 46 / 100;
-    let lw = (at.w - rw - gap * 2) / 2;
-    let runs = rect(at.x, at.y, rw, at.h);
-    let lv = rect(runs.right() + gap, at.y, lw, at.h);
-    let lh = rect(lv.right() + gap, at.y, lw, at.h);
-    for r in [runs, lv, lh] {
-        ui.panel(r, t.tile);
-        ui.outline(r, t.line);
-    }
-    let lh13 = F8X13.height as i32 + 2;
-
-    // Runs.
-    ui.label(runs.x + 6, runs.y + 4, "Runs asked for", &F8X13, t.ink);
-    let mut y = runs.y + 4 + lh13;
-    if st.operator {
-        // A button a kind of run, with the defaults its make target had.
-        const KINDS: [(&str, &str); 13] = [
-            ("census", "new census trial=@best name=best"),
-            ("parts", "new parts"),
-            ("switches", "new switches"),
-            ("roundrobin", "new roundrobin"),
-            ("spsa", "new spsa"),
-            ("tune", "new tune"),
-            ("train", "new train"),
-            ("gauntlet", "new gauntlet"),
-            ("clips", "new clips host=mac"),
-            ("school", "new school"),
-            ("record", "new record"),
-            ("families", "new families"),
-            ("promote", "new promote candidate=@strongest"),
-        ];
-        let mut x = runs.x + 6;
-        for (label, verb) in KINDS.iter() {
-            let bw = F8X13.measure(label) as i32 + 12;
-            if x + bw > runs.right() - 4 {
-                x = runs.x + 6;
-                y += 22;
-            }
-            if ui.button(rect(x, y, bw, 20), label, true) {
+    let lh = F8X13.height as i32 + 3;
+    const KINDS: [(&str, &str, &str); 13] = [
+        ("census", "new census trial=@best name=best", "the search's newest best against the defaults, 55 seeds"),
+        ("parts", "new parts", "each part of the brain off, against all on"),
+        ("switches", "new switches", "each switch that is off, alone"),
+        ("roundrobin", "new roundrobin", "every pair of profiles/*.weights"),
+        ("spsa", "new spsa", "SPSA on named weights, a step a census"),
+        ("tune", "new tune", "the (1 + lambda) evolution strategy"),
+        ("train", "new train", "the learned tank, evolution strategies, phase 1"),
+        ("gauntlet", "new gauntlet", "single-decision tests of every net"),
+        ("clips", "new clips host=mac", "a short GIF of each milestone net (this Mac)"),
+        ("school", "new school", "the learned tank's curriculum"),
+        ("record", "new record", "recordings for cloning, to calber"),
+        ("families", "new families", "every candidate against the families again"),
+        ("promote", "new promote candidate=@strongest", "the strongest candidate onto a branch, for approval"),
+    ];
+    let half = at.w / 2 - 6;
+    let mut y = at.y;
+    ui.label(at.x, y, if st.operator { "Ask for a run" } else { "Kinds of run (an operator can ask for one)" }, &F8X13, t.ink);
+    y += lh;
+    let bw = F8X13.measure("roundrobin") as i32 + 16;
+    for (label, verb, what) in KINDS.iter() {
+        if y + lh > at.bottom() {
+            break;
+        }
+        if st.operator {
+            if ui.button(rect(at.x, y - 2, bw, lh), label, true) {
                 st.ctl = Some(verb.to_string());
             }
-            x += bw + 4;
+        } else {
+            ui.label(at.x + 4, y, label, &F8X13, t.ink);
         }
-        y += 24;
+        ui.label_in(at.x + bw + 8, y, half - bw - 8, what, &F8X13, t.dim);
+        y += lh + 2;
     }
-    let shown = ((runs.bottom() - y - 2) / lh13).max(0) as usize;
+    // Every run asked for, newest at the bottom.
+    let rx = at.x + half + 12;
+    let rw = at.right() - rx;
+    let mut y = at.y;
+    ui.label(rx, y, "Runs asked for", &F8X13, t.ink);
+    y += lh;
+    if q.runs.is_empty() {
+        ui.label_in(rx, y, rw, "none yet", &F8X13, t.dim);
+    }
+    let shown = ((at.bottom() - y) / (lh + 2)).max(0) as usize;
     let start = q.runs.len().saturating_sub(shown);
     for r in &q.runs[start..] {
-        let line = format!("{} {} {} {}", r.id, r.kind, r.status, r.detail);
         let live = r.status == "running" || r.status == "new";
-        // A prepared promotion waits on Paul: Approve moves main to it.
         let ready = r.kind == "promote" && r.status == "prepared";
-        let cw = if st.operator && (live || ready) { 64 } else { 0 };
+        let cw = if st.operator && (live || ready) { 70 } else { 0 };
         let colour = if r.status == "failed" { t.alarm } else if ready { t.up } else if live { t.ink } else { t.dim };
-        ui.label_in(runs.x + 6, y, runs.w - 12 - cw, &line, &F8X13, colour);
-        if cw > 0 && live && ui.button(rect(runs.right() - cw - 4, y - 1, cw, lh13), "Cancel", true) {
+        let line = if r.detail.is_empty() { format!("{} {} {}", r.id, r.kind, r.status) } else { format!("{} {} {}: {}", r.id, r.kind, r.status, r.detail) };
+        ui.label_in(rx, y, rw - cw - 6, &line, &F8X13, colour);
+        if cw > 0 && live && ui.button(rect(at.right() - cw, y - 2, cw, lh), "Cancel", true) {
             st.ctl = Some(format!("cancel {}", r.id));
         }
-        if cw > 0 && ready && ui.button(rect(runs.right() - cw - 4, y - 1, cw, lh13), "Approve", true) {
+        if cw > 0 && ready && ui.button(rect(at.right() - cw, y - 2, cw, lh), "Approve", true) {
             st.ctl = Some(format!("approve {}", r.id));
         }
-        y += lh13;
+        y += lh + 2;
     }
-    if q.runs.is_empty() {
-        ui.label_in(runs.x + 6, y, runs.w - 12, if st.operator { "none: a button above asks for one" } else { "none" }, &F8X13, t.dim);
-    }
+}
 
-    // Found Improvement: by variable.
-    ui.label(lv.x + 6, lv.y + 4, "Found Improvement: variables", &F8X13, t.ink);
-    let mut y = lv.y + 4 + lh13;
-    if q.lead_vars.is_empty() {
-        ui.label_in(lv.x + 6, y, lv.w - 12, "none yet", &F8X13, t.dim);
-    }
+/// The Found page: Found Improvement by variable and by machine, and the
+/// newest changes, one a line.
+fn draw_found_page(ui: &mut Ui, at: Rect, q: &Queue) {
+    let t = ui.t;
+    let lh = F8X13.height as i32 + 3;
+    let colw = (at.w - 20) * 28 / 100;
+    // By variable.
+    let mut y = at.y;
+    ui.label(at.x, y, "Found Improvement: variables", &F8X13, t.ink);
+    y += lh;
     let top = q.lead_vars.first().map(|v| v.1).unwrap_or(1).max(1);
-    for (name, n) in q.lead_vars.iter() {
-        if y + lh13 > lv.bottom() {
+    let nw = F8X13.measure("longshot_every  ") as i32;
+    for (name, n) in &q.lead_vars {
+        if y + lh > at.bottom() {
             break;
         }
-        let bar = ((lv.w - 150) as i64 * n / top) as i32;
-        ui.c.rect(lv.x + 140, y + 2, bar.max(2), lh13 - 4, t.up);
-        ui.label_in(lv.x + 6, y, 130, name, &F8X13, t.ink);
-        ui.label(lv.x + 144 + bar, y, &n.to_string(), &F8X13, t.dim);
-        y += lh13;
+        ui.label_in(at.x, y, nw, name, &F8X13, t.ink);
+        let bw = ((colw - nw - 40) as i64 * n / top) as i32;
+        ui.c.rect(at.x + nw, y + 2, bw.max(2), lh - 6, t.up);
+        ui.label(at.x + nw + bw + 4, y, &n.to_string(), &F8X13, t.dim);
+        y += lh;
     }
-
-    // By machine: censuses read, and improvements found.
-    ui.label(lh.x + 6, lh.y + 4, "Found Improvement: machines", &F8X13, t.ink);
-    let mut y = lh.y + 4 + lh13;
-    if q.lead_hosts.is_empty() {
-        ui.label_in(lh.x + 6, y, lh.w - 12, "none yet", &F8X13, t.dim);
+    if q.lead_vars.is_empty() {
+        ui.label(at.x, y, "none yet", &F8X13, t.dim);
     }
+    // By machine.
+    let mx = at.x + colw + 10;
+    let mut y = at.y;
+    ui.label(mx, y, "Found Improvement: machines", &F8X13, t.ink);
+    y += lh;
     let top = q.lead_hosts.iter().map(|h| h.1).max().unwrap_or(1).max(1);
-    for (name, read, found) in q.lead_hosts.iter() {
-        if y + lh13 > lh.bottom() {
+    let hw = F8X13.measure("saskatchewan ") as i32;
+    let barw = colw - hw - F8X13.measure(" 99 found of 999") as i32 - 6;
+    for (name, read, found) in &q.lead_hosts {
+        if y + lh > at.bottom() {
             break;
         }
-        let bar = ((lh.w - 200) as i64 * read / top) as i32;
-        let fbar = ((lh.w - 200) as i64 * found / top) as i32;
-        ui.c.rect(lh.x + 110, y + 2, bar.max(2), lh13 - 4, t.line);
-        ui.c.rect(lh.x + 110, y + 2, fbar, lh13 - 4, t.up);
-        ui.label_in(lh.x + 6, y, 100, name, &F8X13, t.ink);
-        ui.label(lh.x + 114 + bar, y, &format!("{} found, {} read", found, read), &F8X13, t.dim);
-        y += lh13;
+        ui.label_in(mx, y, hw, name, &F8X13, t.ink);
+        let b = (barw as i64 * read / top) as i32;
+        let f = (barw as i64 * found / top) as i32;
+        ui.c.rect(mx + hw, y + 2, b.max(2), lh - 6, t.line);
+        ui.c.rect(mx + hw, y + 2, f, lh - 6, t.up);
+        ui.label(mx + hw + barw + 6, y, &format!("{} found of {}", found, read), &F8X13, t.dim);
+        y += lh;
+    }
+    if q.lead_hosts.is_empty() {
+        ui.label(mx, y, "none yet", &F8X13, t.dim);
+    }
+    // The newest changes.
+    let cx = mx + colw + 10;
+    let cw = at.right() - cx;
+    let mut y = at.y;
+    ui.label(cx, y, "Newest changes (FOUND: an improvement)", &F8X13, t.ink);
+    y += lh;
+    // Columns: when, found, the variable = value (offset), the machine.
+    let host_w = F8X13.measure("saskatchewan") as i32;
+    let when_w = F8X13.measure("00:00:00 FOUND ") as i32;
+    for k in q.ticker.iter().rev() {
+        if y + lh > at.bottom() {
+            break;
+        }
+        let c = if k.improved { t.up } else { t.dim };
+        ui.label(cx, y, &format!("{}{}", k.t, if k.improved { " FOUND" } else { "" }), &F8X13, c);
+        let what = format!(
+            "{} = {}{}",
+            k.var,
+            k.value.map(|v| format!("{:.3}", v)).unwrap_or_default(),
+            k.offset.map(|o| format!(" ({:+.2})", o)).unwrap_or_default()
+        );
+        ui.label_in(cx + when_w, y, cw - when_w - host_w - 8, &what, &F8X13, c);
+        ui.label_right(at.right(), y, &k.host, &F8X13, c);
+        y += lh;
     }
 }
 
@@ -748,16 +859,17 @@ fn draw_queue(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) -> i32 {
         x += w;
     }
     let mut ly = at.y + 16;
-    let mut line = String::new();
-    for (k, c) in &q.counts {
-        line.push_str(&format!("{}: {} queued, {} running, {} done{}    ", k, c[0], c[1], c[2], if c[3] + c[4] > 0 { format!(", {} failed or stopped", c[3] + c[4]) } else { String::new() }));
+    // The bar's key: it counts the queue's jobs, not a machine's load.
+    // (label returns the x where its text ends.)
+    let mut kx = ui.label(at.x, ly, "jobs: ", &F8X13, t.dim) + 2;
+    for (label, n, c) in [("done", done, t.up), ("running", running, t.accent), ("queued", queued, t.line), ("failed or stopped", failed, t.alarm)] {
+        if n == 0 && label.starts_with("failed") {
+            continue;
+        }
+        ui.c.rect(kx, ly + 3, 9, 9, c);
+        kx = ui.label(kx + 13, ly, &format!("{} {}", n, label), &F8X13, t.dim) + 18;
     }
-    ui.label_in(at.x, ly, bw, line.trim_end(), &F8X13, t.dim);
     ly += F8X13.height as i32 + 3;
-    if let Some((k, title)) = q.upcoming.first() {
-        ui.label_in(at.x, ly, bw, &format!("next: {} - {}", k, title), &F8X13, t.dim);
-        ly += F8X13.height as i32 + 3;
-    }
     if let Some((k, title, ok)) = q.recent.last() {
         ui.label_in(at.x, ly, bw, &format!("last finished: {} - {}{}", k, title, if *ok { "" } else { "  (failed or stopped)" }), &F8X13, if *ok { t.dim } else { t.alarm });
         ly += F8X13.height as i32 + 3;

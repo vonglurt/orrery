@@ -107,6 +107,17 @@ def parse_weights(text):
     return out
 
 
+def short_moved(text, room=60):
+    """A trial's weights for a job's title: whole names, "+N more" past the room."""
+    parts = [l.split("#")[0].strip().replace(" = ", " ") for l in text.splitlines() if "=" in l.split("#")[0]]
+    out = []
+    for i, p in enumerate(parts):
+        if len(", ".join(out + [p])) > room:
+            return ", ".join(out) + ", +%d more" % (len(parts) - i)
+        out.append(p)
+    return ", ".join(out)
+
+
 def write_tsv(path, rows):
     if not rows:
         return False
@@ -356,7 +367,7 @@ class Plan:
                 seed0 = w["seed0"] + 10000 * self.state["weights_n"]
                 self.state["weights_n"] += 1
                 what = os.path.basename(f)[:-8]
-                moved = "; ".join(l.split("#")[0].strip() for l in text.splitlines() if "=" in l.split("#")[0])[:80]
+                moved = short_moved(text)
                 jobs.append({"id": jid, "kind": "weights", "title": "%s: %s" % (what, moved or "the defaults"),
                              "needs": "cpu", "after_host": self.after_host(), "cmd": self.census_cmd(text, w["seeds"], seed0, jid),
                              "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 6 * 3600})
@@ -1139,7 +1150,7 @@ class Plan:
             st["commit"] = open(c[0]).read().strip() if c else ""
             st["status"] = "prepared"
             st["detail"] = "%s: ready for Paul's approval (%s)" % (st["branch"], st["commit"][:7])
-            self.tick({"kind": "promote", "run": rid, "host": "mac", "improved": True, "d": (st["evidence"].get("held") or [[None]])[0][0], "se": None,
+            self.tick({"kind": "promote", "run": rid, "host": "mac", "improved": True, "d": None, "se": None,
                        "vars": {l.split()[0]: {"value": float(l.split()[-1]), "offset": round(float(l.split()[-1]) - float(l.split()[1]), 4)} for l in st["changed"]}})
         elif st["job"] in self.ids("failed", "stopped"):
             st["status"] = "failed"
