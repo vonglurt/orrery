@@ -337,6 +337,15 @@ Opening it again shows where the queue is.
   and the breaker does not count it.
 - **To take a host out,** delete it from `config.json`. Its lane ends after
   the job in hand.
+- **To make a new Ubuntu 24.04 machine a node,** `tools/fleet-node.sh` does
+  it in one run on the machine (copy it with `cuda-node.sh`,
+  `fleet-login.sh`, `topnotch.sh` and `fleet-poweroff-setup.sh`, then
+  `sudo bash fleet-node.sh`): the build tools, Rust, the treadcore
+  checkout over HTTPS, CUDA if it has an NVIDIA card (tmux and copal-tm
+  either way), the topnotch login banner, and the power-off rule. It ends
+  with the two lines for the coordinator: the host's entry for
+  `config.json`, and its line for `~/.copal/fleets/FLEET/nodes` (orrery's
+  Sessions).
 - **To add one,** add it. Its lane starts, and builds the commit first. A
   host with `"caps": []` takes no work, but its record is still gathered.
 - **To power off at a shutdown,** a host needs `poweroff`, a command it may

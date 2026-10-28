@@ -127,6 +127,18 @@ note "PATH and library path set for every login (/etc/profile.d/cuda.sh)"
 
 # ---- 6. the check ------------------------------------------------------------
 say "Check: nvidia-smi"
+# A driver installed by this run is not loaded yet: load it, and if the card
+# is held (nouveau) say so and go on to the fleet's tools; the check runs on
+# the next run, after a reboot. calber and boburner came with the driver;
+# a machine without one comes here.
+_loaded=1
+if ! nvidia-smi >/dev/null 2>&1; then
+    modprobe nvidia 2>/dev/null || true
+    nvidia-smi >/dev/null 2>&1 || _loaded=0
+fi
+if [ "$_loaded" = 0 ]; then
+    note "the driver is installed but not running (a new install, or nouveau holds the card): REBOOT, then run this again for the check"
+else
 nvidia-smi --query-gpu=name,driver_version,memory.total,temperature.gpu --format=csv
 
 say "Check: a CUDA program, compiled for this card and run"
@@ -160,6 +172,7 @@ CU
 "/usr/local/cuda-$CUDA_DOT/bin/nvcc" -arch=native -o "$_d/check" "$_d/check.cu"
 "$_d/check"
 rm -rf "$_d"
+fi
 
 # ---- 7. the fleet's tools: tmux and copal-tm ---------------------------------
 say "The fleet's tools: tmux, and copal-tm for ${SUDO_USER:-root}"
