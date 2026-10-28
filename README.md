@@ -217,6 +217,21 @@ docker run --rm --platform linux/arm64 -v "$PWD":/w -w /w \
 #                                             ... /w/tools/rdp-check.sh  # xrdp
 ```
 
+### On a Mac, as an application
+
+```sh
+tools/mac-app.sh --operator paul --fleet grove \
+    --fleet-cmd "$HOME/.local/bin/copal fleet" \
+    --queue "$HOME/code/treadcore/build/queue/grove"
+```
+
+builds orrery, installs `~/.local/bin/orrery`, and makes **Orrery.app** in
+`~/Applications`, signed ad hoc, which opens the window with those options
+from Finder, Launchpad, Spotlight or the Dock. It writes what orrery says to
+`~/Library/Logs/orrery.log`. Run it again after pulling, or to change the
+options. `docs/mac-app-lab-report.md` records how it is made and what an
+ad-hoc signature allows.
+
 ## Layout
 
 | | |
