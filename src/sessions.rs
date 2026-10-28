@@ -289,6 +289,24 @@ fn worker(target: &str, rx: Receiver<Ask>, lines: Arc<Mutex<Vec<String>>>, statu
     }
 }
 
+/// Where the keyboard goes after a frame's presses: a left press on a tile's
+/// screen focuses it; one in the body outside every tile clears it; one on a
+/// title bar leaves it.
+fn focus_after(events: &[((i32, i32), crate::surface::Button, bool)], screens: &[(usize, Rect, Rect)], body: Rect, now: Option<usize>) -> Option<usize> {
+    let mut focus = now;
+    for ((x, y), b, down) in events {
+        if !*down || *b != crate::surface::Button::Left || !body.contains((*x, *y)) {
+            continue;
+        }
+        if let Some((i, _, _)) = screens.iter().find(|(_, sc, _)| sc.contains((*x, *y))) {
+            focus = Some(*i);
+        } else if !screens.iter().any(|(_, _, whole)| whole.contains((*x, *y))) {
+            focus = None;
+        }
+    }
+    focus
+}
+
 /// Box-drawing and block characters as their ASCII look-alikes: the
 /// bitmap faces carry Latin-1 only, and a program in a UTF-8 locale
 /// (copal-tm on Ubuntu) draws its panels with these.
@@ -378,6 +396,8 @@ pub fn draw(ui: &mut Ui, s: &mut Sessions) -> Option<nav::View> {
 
     let mut clicked_any = false;
     let mut toggle_big = None;
+    // (tile, its screen, the whole tile), for where a press lands.
+    let mut screens: Vec<(usize, Rect, Rect)> = Vec::new();
     for (i, r) in &rects {
         let (i, r) = (*i, *r);
         let tile = &mut s.tiles[i];
@@ -417,19 +437,20 @@ pub fn draw(ui: &mut Ui, s: &mut Sessions) -> Option<nav::View> {
         for (k, l) in lines[start..].iter().enumerate() {
             ui.label_in(inner.x, inner.y + k as i32 * F6X10.height as i32, inner.w, &ascii_art(l), &F6X10, t.ink);
         }
-        if ui.button_hit(screen) {
-            s.focus = Some(i);
-            clicked_any = true;
-        }
+        screens.push((i, screen, r));
     }
     if let Some(i) = toggle_big {
         s.big = if s.big == Some(i) { None } else { Some(i) };
         s.focus = Some(i);
         clicked_any = true;
     }
-    // A click on the body outside every tile stops typing.
-    if !clicked_any && ui.button_hit(body) {
-        s.focus = None;
+    // Focus follows the press: on a tile's screen, that tile; in the body
+    // outside every tile, none; on a title bar, as it was (its button has
+    // its say above). Two press-and-release areas, one inside the other,
+    // made the outer one win, so a click on a tile stopped typing into it
+    // (28 October: "I can't get it to receive enter key or any thing").
+    if !clicked_any {
+        s.focus = focus_after(&ui.f.button_events(), &screens, body, s.focus);
     }
 
     // The keyboard goes to the focused tile, except the view chords.
@@ -466,6 +487,21 @@ pub fn draw(ui: &mut Ui, s: &mut Sessions) -> Option<nav::View> {
 
 #[cfg(test)]
 mod tests {
+    use crate::surface::Button;
+
+    #[test]
+    fn a_press_on_a_tile_focuses_it_and_one_between_tiles_does_not() {
+        let body = rect(0, 40, 600, 400);
+        // Two tiles: title bar 18 high, then the screen.
+        let screens = vec![(0, rect(0, 58, 290, 382), rect(0, 40, 290, 400)), (1, rect(310, 58, 290, 382), rect(310, 40, 290, 400))];
+        let press = |x, y| vec![((x, y), Button::Left, true), ((x, y), Button::Left, false)];
+        assert_eq!(focus_after(&press(100, 200), &screens, body, None), Some(0), "on tile 0's screen");
+        assert_eq!(focus_after(&press(400, 200), &screens, body, Some(0)), Some(1), "on tile 1's screen");
+        assert_eq!(focus_after(&press(300, 200), &screens, body, Some(1)), None, "between the tiles");
+        assert_eq!(focus_after(&press(100, 45), &screens, body, Some(1)), Some(1), "a title bar leaves it");
+        assert_eq!(focus_after(&press(100, 200)[1..], &screens, body, None), None, "a release alone is no press");
+    }
+
     use super::*;
 
     #[test]
