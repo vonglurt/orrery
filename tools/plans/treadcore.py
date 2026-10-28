@@ -165,6 +165,21 @@ class Plan:
         r = run(["git", "-C", self.tc, "rev-parse", "%s:source/treadcore-brain/src/weights.rs" % commit])
         return r.stdout.strip() if r.returncode == 0 else ""
 
+    def defaults_at(self, commit):
+        """The weights! table's defaults at a commit: {name: number}, read
+        from git, cached by weights.rs's blob."""
+        blob = self.weights_rs(commit)
+        if not blob:
+            return {}
+        cache = self.state.setdefault("tables", {})
+        if blob not in cache:
+            text = run(["git", "-C", self.tc, "cat-file", "-p", blob]).stdout
+            table = {}
+            for m in re.finditer(r'^\s*[A-Z][A-Za-z0-9]*\s+"([a-z_0-9]+)"\s+(-?[0-9][0-9.eE+-]*)\s*,', text, re.M):
+                table[m.group(1)] = float(m.group(2))
+            cache[blob] = table
+        return cache[blob]
+
     def sha(self):
         """The commit new jobs build: plan.json's ref, read after a fetch."""
         if self._sha:
@@ -241,7 +256,7 @@ class Plan:
             "set -e; [ -f ~/.cargo/env ] && . ~/.cargo/env; export PATH=$HOME/.cargo/bin:$PATH\n"
             "Q=~/%s; C=%s; mkdir -p $Q/trials; echo %s | base64 -d > $Q/trials/%s.weights\n"
             "cd $C/wt && export CARGO_TARGET_DIR=$HOME/fleet/target\n"
-            "TRIAL=$Q/trials/%s.weights SEEDS=%d SEED0=%d SECS=%d MAP=%s RESPAWNS=3 JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) scripts/census.sh 2>&1 | tail -3\n"
+            "TRIAL=$Q/trials/%s.weights SEEDS=%d SEED0=%d SECS=%d MAP=%s RESPAWNS=3 JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) CENSUS_BIN=$C/census-bin scripts/census.sh 2>&1 | tail -3\n"
             "d=$(ls -td build/census/*/ | head -1); s=$(basename $d)\n"
             "rm -rf $Q/out/%s; mkdir -p $Q/out/%s/$s; cp $d/*.txt $d/*.env $d/*.weights $d/g-*.log $Q/out/%s/$s/; rm -rf $d\n"
         ) % (self.home, self.cdir(), b, out_id, out_id, seeds, seed0, w["secs"], w["map"], out_id, out_id, out_id)
@@ -264,13 +279,19 @@ class Plan:
         return out
 
     def same_defaults(self, commit):
-        """A row's commit read with today's weights.rs (and no '+': uncommitted source)."""
+        """A row's commit read with today's defaults: every weight both
+        commits have at the same default (a weight added since, at a default
+        that plays as before, keeps the history; a promotion, which moves a
+        default, starts anew). No '+' (uncommitted source)."""
         if not commit or commit.endswith("+"):
             return False
-        c = self.state["commits"]
-        if commit not in c:
-            c[commit] = {"weights_rs": self.weights_rs(commit)}
-        return bool(c[commit]["weights_rs"]) and c[commit]["weights_rs"] == c[self.sha()]["weights_rs"]
+        memo = self.state.setdefault("same", {})
+        key = "%s:%s" % (commit, self.short())
+        if key not in memo:
+            a, b = self.defaults_at(commit), self.defaults_at(self.sha())
+            common = set(a) & set(b)
+            memo[key] = bool(common) and all(a[k] == b[k] for k in common)
+        return memo[key]
 
     def ledger(self):
         """The fit's input: the queue's own rows, and the fleet's history rows
@@ -529,7 +550,7 @@ class Plan:
         c = n["census"]
         census_one = (
             "cd $C/wt && export CARGO_TARGET_DIR=$HOME/fleet/target\n"
-            "SEEDS=%d SEED0=%d SECS=%d MAP=%s RESPAWNS=3 JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) CENSUS_NET=$Q/judge/%03d/%%s.bin scripts/census.sh 2>&1 | tail -2\n"
+            "SEEDS=%d SEED0=%d SECS=%d MAP=%s RESPAWNS=3 JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) CENSUS_NET=$Q/judge/%03d/%%s.bin CENSUS_BIN=$C/census-bin scripts/census.sh 2>&1 | tail -2\n"
             "d=$(ls -td build/census/*/ | head -1); mkdir -p $Q/judge/%03d/%%s; cp $d/*.txt $d/*.env $d/g-*.log $Q/judge/%03d/%%s/; rm -rf $d\n"
         ) % (c["seeds"], c["seed0"], c["secs"], c["map"], r, r, r)
         judge = {
@@ -723,7 +744,7 @@ class Plan:
             "Q=~/%s; C=%s; mkdir -p $Q/trials\n"
             "echo %s | base64 -d > $Q/trials/%s.trial; echo %s | base64 -d > $Q/trials/%s.base\n"
             "cd $C/wt && export CARGO_TARGET_DIR=$HOME/fleet/target\n"
-            "%s%s%sSEEDS=%d SEED0=%d SECS=%s MAP=%s RESPAWNS=%s JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) scripts/census.sh 2>&1 | tail -3\n"
+            "%s%s%sSEEDS=%d SEED0=%d SECS=%s MAP=%s RESPAWNS=%s JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) CENSUS_BIN=$C/census-bin scripts/census.sh 2>&1 | tail -3\n"
             "d=$(ls -td build/census/*/ | head -1); s=$(basename $d)\n"
             "rm -rf $Q/out/%s; mkdir -p $Q/out/%s/$s; cp $d/*.txt $d/*.env $d/*.weights $d/g-*.log $Q/out/%s/$s/ 2>/dev/null; rm -rf $d\n"
         ) % (self.home, self.cdir(), b1, jid, b2, jid,
@@ -768,9 +789,9 @@ class Plan:
         return settings, items
 
     def run_jobs(self, n):
+        # Runs advance whether or not a machine has built the newest commit:
+        # a new job waits for its machine's build (after_host) by itself.
         jobs = []
-        if not self.cpu_ready():
-            return jobs
         for r in self.runs():
             if len(jobs) >= n:
                 break
@@ -1131,7 +1152,9 @@ class Plan:
                 "git worktree remove --force $W 2>/dev/null || true; git worktree prune; git branch -D $B 2>/dev/null || true\n"
                 "git worktree add -q -b $B $W origin/main\n"
                 "cd $W && echo %s | base64 -d > $O/promote.weights && python3 -I scripts/set-defaults.py $O/promote.weights | tee $O/changed.txt\n"
-                "export CARGO_TARGET_DIR=$HOME/fleet/target-promote\n"
+                # Its own target folder: two worktrees in one share the test
+                # binary's file name, and cargo can call another's fresh (LR 117).
+                "export CARGO_TARGET_DIR=$W/target\n"
                 "cargo test -q -p treadcore-brain --release > $O/tests.txt 2>&1 || { tail -30 $O/tests.txt; echo 'the tests failed: not committed'; exit 1; }\n"
                 "grep 'test result' $O/tests.txt\n"
                 "cargo test -q -p treadcore-brain --release -- --ignored every_family_holds_its_floor --nocapture > $O/families-full.txt 2>&1 || { grep -E '^family|panicked|under' $O/families-full.txt; echo 'a family fell under its floor: not committed'; exit 1; }\n"
