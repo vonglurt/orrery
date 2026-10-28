@@ -92,15 +92,42 @@ k nvidia_pci "$g"
 k gpu "$(command -v lspci >/dev/null && lspci 2>/dev/null | grep -iE 'vga|3d' | grep -i nvidia | sed 's/.*: //' | head -n1)"
 k nvidia_driver "$(sed -n 's/.*Kernel Module *\([0-9.]*\).*/\1/p' /proc/driver/nvidia/version 2>/dev/null | head -n1)"
 k nvidia_smi "$(command -v nvidia-smi >/dev/null && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1)"
-k cuda "$(ls -d /usr/local/cuda-*/bin/nvcc 2>/dev/null | sed 's|/usr/local/cuda-\([^/]*\)/.*|\1|' | tail -n1)"
+k cuda "$(ls -d /usr/local/cuda-*/bin/nvcc 2>/dev/null | sed 's|/usr/local/cuda-\([^/]*\)/.*|\1|' | awk '{print length($0), $0}' | sort -n | tail -n1 | cut -d' ' -f2)"
 k cargo "$( ( [ -x ~/.cargo/bin/cargo ] && ~/.cargo/bin/cargo --version ) || ( command -v cargo >/dev/null && cargo --version ) )"
 k treadcore "$(git -C ~/code/treadcore log --oneline -1 2>/dev/null | cut -c1-7)"
 k tmux "$(command -v tmux)"
 k screen "$(command -v screen)"
 k copal_tm "$( ( [ -x ~/.local/bin/copal-tm ] && echo ~/.local/bin/copal-tm ) || command -v copal-tm)"
 k topnotch "$( [ -x /usr/local/bin/topnotch ] && echo yes)"
-p=$(command -v poweroff || echo /sbin/poweroff)
-k poweroff "$( (sudo -n -l "$p" >/dev/null 2>&1 && echo sudo) || ( [ -r /etc/doas.d/fleet-poweroff.conf ] && echo doas) )"
+# The power-off command exactly as the rule allows it (fleet-poweroff-setup.sh):
+# sudo lists it, for a NOPASSWD rule, to the user; doas's rule file is root's
+# alone, but that it exists can be seen.
+p=$(sudo -n -l 2>/dev/null | sed -n 's/.*NOPASSWD: *\(.*poweroff.*\)$/\1/p' | head -n1)
+if [ -n "$p" ]; then k poweroff "sudo -n $p"
+elif [ -e /etc/doas.d/fleet-poweroff.conf ]; then k poweroff "doas -n $(command -v poweroff || echo /sbin/poweroff)"
+else k poweroff ""; fi
+k uptime "$(uptime | sed 's/.*up *//; s/, *[0-9]* user.*//')"
+'''
+
+
+# This Mac, the coordinator (a host whose target is "-"): read here, with
+# macOS's own tools, since it has no /proc and no ssh address.
+LOCAL_PROBE = r'''
+k() { printf '%s=%s\n' "$1" "$2"; }
+k os_id macos; k os_version "$(sw_vers -productVersion)"; k pretty "macOS $(sw_vers -productVersion)"
+k hostname "$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
+k kernel "$(uname -r)"; k arch "$(uname -m)"
+k cpus "$(sysctl -n hw.ncpu)"; k cpu_model "$(sysctl -n machdep.cpu.brand_string)"
+k mem_gb "$(( $(sysctl -n hw.memsize) / 1073741824 ))"
+k disk "$(df -h /System/Volumes/Data 2>/dev/null | awk 'NR==2 {print $3 " of " $2}')"
+a=""; for i in en0 en1 en2; do x=$(ipconfig getifaddr $i 2>/dev/null) && a="$a$i $x;"; done; k addrs "$a"
+k gpu "$(system_profiler SPDisplaysDataType 2>/dev/null | sed -n 's/^ *Chipset Model: *//p' | head -n1)"
+PATH="$PATH:$HOME/.cargo/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+k cargo "$(command -v cargo >/dev/null && cargo --version)"
+k treadcore "$(git -C ~/code/treadcore log --oneline -1 2>/dev/null | cut -c1-7)"
+k tmux "$(command -v tmux)"; k copal_tm "$(command -v copal-tm)"
+k orrery_app "$( [ -d ~/Applications/Orrery.app ] && echo yes)"
+k copal_tm_app "$( [ -d ~/Applications/'Copal TM.app' ] && echo yes)"
 k uptime "$(uptime | sed 's/.*up *//; s/, *[0-9]* user.*//')"
 '''
 
@@ -127,10 +154,8 @@ class Machines:
         self.reg = load(self.reg_path, {})
         # Machines in the queue are in the registry by being there.
         for h in self.cfg.get("hosts", []):
-            if h.get("target") in (None, "-"):
-                continue
             m = self.reg.setdefault(h["name"], {})
-            m["target"] = h["target"]
+            m["target"] = h.get("target") or "-"
         self.fleet = self.cfg.get("fleet", "grove")
 
     def keep(self):
@@ -143,7 +168,10 @@ class Machines:
     def probe(self, name):
         m = self.reg[name]
         try:
-            r = subprocess.run(SSH + [m["target"], PROBE], capture_output=True, text=True, timeout=60)
+            if m["target"] == "-":
+                r = subprocess.run(["bash", "-c", LOCAL_PROBE], capture_output=True, text=True, timeout=60)
+            else:
+                r = subprocess.run(SSH + [m["target"], PROBE], capture_output=True, text=True, timeout=60)
         except subprocess.TimeoutExpired:
             m["probe_error"] = "no answer in 60 s"
             return
@@ -271,10 +299,9 @@ class Machines:
             raise SystemExit("%s has no Rust or no treadcore checkout yet: apply fleet-node first, then probe" % name)
         caps = ["cpu", "gpu"] if f.get("nvidia_smi") and f.get("cuda") else ["cpu"]
         host = {"name": name, "target": m["target"], "caps": caps, "nice": 10}
-        if f.get("poweroff") == "sudo":
-            host["poweroff"] = "sudo -n poweroff"
-        elif f.get("poweroff") == "doas":
-            host["poweroff"] = "doas poweroff"
+        # The command exactly as the machine's rule allows it.
+        if f.get("poweroff"):
+            host["poweroff"] = f["poweroff"]
         cfg = load(os.path.join(self.q, "config.json"), {})
         cfg["hosts"].append(host)
         save(os.path.join(self.q, "config.json"), cfg)

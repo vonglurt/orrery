@@ -196,7 +196,7 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
             ui.outline(r, t.accent);
         }
         let open = x.recipes.iter().filter(|r| r.state == "not applied").count();
-        let tag = if x.joined { "in the fleet" } else { "new" };
+        let tag = if x.target == "-" { format!("this Mac: {}", x.fact("hostname")) } else if x.joined { "in the fleet".into() } else { "new".into() };
         ui.label_in(r.x + 6, y, lw - 12, &format!("{}  {}", x.name, tag), &F8X13, if x.joined { t.ink } else { t.up });
         let sys = if !x.error.is_empty() {
             x.error.clone()
@@ -234,7 +234,8 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
     let rx = body.x + lw + 20;
     let rw = body.right() - rx;
     let mut y = body.y;
-    ui.label(rx, y, &format!("{}  {}", x.name, x.target), &F8X13, t.ink);
+    let head = if x.target == "-" { format!("{}  this Mac ({}), the coordinator: it runs the keeper and pushes", x.name, x.fact("hostname")) } else { format!("{}  {}", x.name, x.target) };
+    ui.label_in(rx, y, rw - 210, &head, &F8X13, t.ink);
     if st.operator && st.confirm.is_none() && ui.button(rect(body.right() - 90, y - 4, 90, 22), "Probe", true) {
         st.ask = Some(Ask::Probe(x.name.clone()));
     }
@@ -246,10 +247,20 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
     let facts: [(&str, String); 7] = [
         ("system", format!("{} ({} {})", x.fact("pretty"), x.fact("kernel"), x.fact("arch"))),
         ("CPU", format!("{} · {} threads · {} GB", x.fact("cpu_model"), x.fact("cpus"), x.fact("mem_gb"))),
-        ("GPU", if x.fact("gpu").is_empty() && x.fact("nvidia_pci").is_empty() { "none".into() } else { format!("{} · driver {} · CUDA {}", x.fact("gpu"), or(x.fact("nvidia_driver"), "none"), or(x.fact("cuda"), "none")) }),
+        ("GPU", if x.fact("os_id") == "macos" {
+            format!("{} (Metal; no CUDA)", or(x.fact("gpu"), "?"))
+        } else if x.fact("gpu").is_empty() && x.fact("nvidia_pci").is_empty() {
+            "none".into()
+        } else {
+            format!("{} · driver {} · CUDA {}", x.fact("gpu"), or(x.fact("nvidia_driver"), "none"), or(x.fact("cuda"), "none"))
+        }),
         ("disk, net", format!("{} on / · {}", x.fact("disk"), x.fact("addrs").trim_end_matches(';').replace(';', ", "))),
         ("fleet tools", format!("Rust {} · treadcore {} · tmux {} · copal-tm {}", or(x.fact("cargo").split_whitespace().nth(1).unwrap_or(""), "no"), or(x.fact("treadcore"), "no"), yes(x.fact("tmux")), yes(x.fact("copal_tm")))),
-        ("login, power", format!("topnotch {} · power-off rule {}", yes(x.fact("topnotch")), or(x.fact("poweroff"), "no"))),
+        ("login, power", if x.fact("os_id") == "macos" {
+            format!("Orrery.app {} · Copal TM.app {} · up {}", yes(x.fact("orrery_app")), yes(x.fact("copal_tm_app")), x.fact("uptime"))
+        } else {
+            format!("topnotch {} · power-off {}", yes(x.fact("topnotch")), or(x.fact("poweroff"), "no"))
+        }),
         ("read", if x.probed.is_empty() { "not yet: Probe".into() } else { x.probed.replace('T', " ") }),
     ];
     for (k, v) in facts.iter() {
