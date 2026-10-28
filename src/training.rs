@@ -153,6 +153,8 @@ pub struct Queue {
     pub progress: Vec<(String, String, String)>,
     /// Auto mode: candidates promote themselves (config "auto").
     pub auto: bool,
+    /// The rotation: auto mode asks one of each kind in turn ("rotation").
+    pub rotation: bool,
     /// The keeper, in a line: its pid, how long up, the last and next sync,
     /// and whether it holds this Mac awake.
     pub keeper: String,
@@ -360,6 +362,7 @@ impl Model {
                 flags: arr(q, "flags").iter().map(|f| (s(f, "id"), s(f, "t"), s(f, "kind"), s(f, "text"))).collect(),
                 progress: arr(q, "progress").iter().map(|f| (s(f, "t"), s(f, "kind"), s(f, "text"))).collect(),
                 auto: !matches!(q.get("auto"), Some(json::Value::Bool(false))),
+                rotation: !matches!(q.get("rotation"), Some(json::Value::Bool(false))),
                 keeper: q
                     .get("keeper")
                     .filter(|k| k.get("pid").is_some())
@@ -710,24 +713,42 @@ fn draw_fleet_rows(ui: &mut Ui, at: Rect, m: &Model) {
 fn draw_runs_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     let t = ui.t;
     let lh = F8X13.height as i32 + 3;
+    // Each kind: its button, its command, what it does in the cycle (LR 118):
+    // a search's result is adopted with its held-out reads; a measurement
+    // runs once on each set of defaults; the rest are the learned tank's.
     const KINDS: [(&str, &str, &str); 13] = [
-        ("census", "new census trial=@best name=best", "the search's newest best against the defaults, 55 seeds"),
-        ("parts", "new parts", "each part of the brain off, against all on"),
-        ("switches", "new switches", "each switch that is off, alone"),
-        ("roundrobin", "new roundrobin", "every pair of profiles/*.weights"),
-        ("spsa", "new spsa", "SPSA on named weights, a step a census"),
-        ("tune", "new tune", "the (1 + lambda) evolution strategy"),
-        ("train", "new train", "the learned tank, evolution strategies, phase 1"),
-        ("gauntlet", "new gauntlet", "single-decision tests of every net"),
-        ("clips", "new clips host=mac", "a short GIF of each milestone net (this Mac)"),
-        ("school", "new school", "the learned tank's curriculum"),
-        ("record", "new record", "recordings for cloning, to calber"),
-        ("families", "new families", "every candidate against the families again"),
-        ("promote", "new promote candidate=@strongest", "the strongest candidate onto a branch, for approval"),
+        ("spsa", "new spsa", "search: SPSA on the dodge; its result is adopted"),
+        ("tune", "new tune", "search: (1 + lambda) on 15 weights; result adopted"),
+        ("census", "new census trial=@best name=best", "the search's newest best, 55 seeds; passing, adopted"),
+        ("parts", "new parts", "measure: each part of the brain off, against all on"),
+        ("switches", "new switches", "measure: each switch that is off, alone"),
+        ("roundrobin", "new roundrobin", "measure: every pair of profiles/*.weights"),
+        ("record", "new record", "recordings for cloning, to the GPU store"),
+        ("gauntlet", "new gauntlet", "net: single-decision tests of every net"),
+        ("train", "new train", "net: evolution strategies, phase 1 (days)"),
+        ("school", "new school", "net: the learned tank's curriculum (days)"),
+        ("clips", "new clips host=mac", "net: a short GIF of each milestone net (this Mac)"),
+        ("families", "new families", "every candidate's families again (auto after a promotion)"),
+        ("promote", "new promote candidate=@strongest", "the strongest current candidate, now"),
     ];
     let half = at.w / 2 - 6;
     let mut y = at.y;
-    ui.label(at.x, y, if st.operator { "Ask for a run" } else { "Kinds of run (an operator can ask for one)" }, &F8X13, t.ink);
+    // The rotation: what auto mode asks by itself, one of each in turn.
+    let rot = if q.auto && q.rotation {
+        "Rotation ON, one of each in turn. brain: spsa tune census parts switches roundrobin record. net: gauntlet train school"
+    } else if q.auto {
+        "Rotation OFF: only the standing search, and what is asked here."
+    } else {
+        "Auto mode is off: no rotation; only the standing search, and what is asked here."
+    };
+    let rbw = if st.operator && q.auto { 150 } else { 0 };
+    ui.label_in(at.x, y, at.w - rbw - 10, rot, &F8X13, if q.auto && q.rotation { t.up } else { t.dim });
+    if rbw > 0 && ui.button(rect(at.right() - rbw, y - 3, rbw, lh + 2), if q.rotation { "Turn rotation off" } else { "Turn rotation on" }, true) {
+        st.ctl = Some(if q.rotation { "rotation off".into() } else { "rotation on".into() });
+    }
+    y += lh + 8;
+    let top = y;
+    ui.label(at.x, y, if st.operator { "Ask for a run (it goes first)" } else { "Kinds of run (an operator can ask for one)" }, &F8X13, t.ink);
     y += lh;
     let bw = F8X13.measure("roundrobin") as i32 + 16;
     for (label, verb, what) in KINDS.iter() {
@@ -747,8 +768,8 @@ fn draw_runs_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     // Every run asked for, newest at the bottom.
     let rx = at.x + half + 12;
     let rw = at.right() - rx;
-    let mut y = at.y;
-    ui.label(rx, y, "Runs asked for", &F8X13, t.ink);
+    let mut y = top;
+    ui.label(rx, y, "Runs (r: the rotation's, a: auto mode's)", &F8X13, t.ink);
     y += lh;
     // Approve pushes to the project's branch: say whether this machine can.
     let (pushline, pc) = match &q.push {
@@ -768,7 +789,12 @@ fn draw_runs_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
         let ready = r.kind == "promote" && r.status == "prepared";
         let cw = if st.operator && (live || ready) { 70 } else { 0 };
         let colour = if r.status == "failed" { t.alarm } else if ready { t.up } else if live { t.ink } else { t.dim };
-        let line = if r.detail.is_empty() { format!("{} {} {}", r.id, r.kind, r.status) } else { format!("{} {} {}: {}", r.id, r.kind, r.status, r.detail) };
+        let by = match r.by.as_str() {
+            "rotation" => " r",
+            "auto" => " a",
+            _ => "",
+        };
+        let line = if r.detail.is_empty() { format!("{}{} {} {}", r.id, by, r.kind, r.status) } else { format!("{}{} {} {}: {}", r.id, by, r.kind, r.status, r.detail) };
         ui.label_in(rx, y, rw - cw - 6, &line, &F8X13, colour);
         if cw > 0 && live && ui.button(rect(at.right() - cw, y - 2, cw, lh), "Cancel", true) {
             st.ctl = Some(format!("cancel {}", r.id));

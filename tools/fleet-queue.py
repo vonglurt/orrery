@@ -744,6 +744,7 @@ def status(q):
     return {"dir": q.d, "state": state, "keeper_pid": pid, "adding": not q.flag("STOP_ADDING"),
             "keeper": keeper_info, "flags": q.flags(), "progress": q.progress()[-200:],
             "auto": q.config().get("auto", True) is not False,
+            "rotation": q.config().get("rotation", True) is not False,
             "shutdown": shutdown, "sync": sync,
             "counts": counts, "lanes": lanes,
             "recent": [{"id": j["id"], "kind": j.get("kind"), "title": j.get("title"), "host": j.get("host"),
@@ -831,19 +832,21 @@ def main(argv):
         else:
             for f in fl:
                 print("%s %s %-10s %s%s" % (f["id"], f["t"], f["kind"], f["text"], "  (acknowledged by %s)" % f["ack"]["by"] if f.get("ack") else ""))
-    elif cmd == "auto":
-        # auto on|off: whether candidates promote themselves (the plan reads
-        # config.json's "auto"; on unless false).
+    elif cmd in ("auto", "rotation"):
+        # auto on|off: whether candidates promote themselves; rotation on|off:
+        # whether auto mode asks one of each kind of run in turn. The plan
+        # reads config.json's "auto" and "rotation", each on unless false.
+        key = cmd
         if len(argv) < 3 or argv[2] not in ("on", "off"):
-            print("auto is %s" % ("on" if q.config().get("auto", True) is not False else "off"))
+            print("%s is %s" % (key, "on" if q.config().get(key, True) is not False else "off"))
         else:
             cfg = json.load(open(q.p("config.json")))
-            cfg["auto"] = argv[2] == "on"
+            cfg[key] = argv[2] == "on"
             with open(q.p("config.json.tmp"), "w") as f:
                 json.dump(cfg, f, indent=1)
             os.replace(q.p("config.json.tmp"), q.p("config.json"))
-            q.event("auto", on=cfg["auto"])
-            print("auto is %s" % argv[2])
+            q.event(key, on=cfg[key])
+            print("%s is %s" % (key, argv[2]))
     elif cmd == "progress":
         for f in q.progress():
             print("%s %-10s %s" % (f["t"], f["kind"], f["text"]))

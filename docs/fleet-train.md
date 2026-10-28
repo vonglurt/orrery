@@ -296,6 +296,26 @@ mode. We should be in auto mode." The cycle, with no one asked:
 With auto mode off, step 5 waits for a promotion asked by hand and step 6
 for Approve.
 
+**The rotation** (config `"rotation"`, on unless `false`;
+`fleet-queue.py $Q rotation on|off`, or the button on the Runs page) is
+auto mode's default work beside the standing search: one run of each
+kind in turn, a run active in each of two lanes.
+
+| Lane | In turn |
+| --- | --- |
+| brain | spsa, tune, census of `@best`, parts, switches, roundrobin, record |
+| net | gauntlet, train, school (train and school can take days) |
+
+- Each search gets fresh seeds (seed0 from 500,000,000, a million a
+  turn), and record the next 48 seeds.
+- parts, switches, roundrobin and gauntlet run once on each set of
+  defaults.
+- Rotation runs share the fleet with the search at normal priority; a run
+  asked on the Runs page goes first.
+- A search's result, and a passing census of `@best`, are adopted (step 2).
+- A rotation run's lane is in its run file; `fleet-queue.py $Q runs`
+  shows `by: rotation`.
+
 **Flags and progress.** A flag asks a person: a run failed, a family
 fell under its floor, a machine was lost, the breaker, push refused, auto
 mode paused. Progress needs no one: a candidate, a run finished, a

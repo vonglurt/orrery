@@ -762,13 +762,13 @@ class Plan:
         promote, unless we are not in AUTO mode. We should be in auto mode")."""
         return self.cfg.get("auto", True) is not False
 
-    def new_run(self, kind, params, by):
+    def new_run(self, kind, params, by, **extra):
         """A run file, as fleet-queue.py new writes one."""
         d = os.path.join(self.q, "runs")
         os.makedirs(d, exist_ok=True)
         n = 1 + max([int(f[1:5]) for f in os.listdir(d) if f[:1] == "r" and f[1:5].isdigit()] or [0])
         rid = "r%04d" % n
-        save(os.path.join(d, rid + ".json"), {"kind": kind, "params": params, "asked": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": by})
+        save(os.path.join(d, rid + ".json"), dict({"kind": kind, "params": params, "asked": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": by}, **extra))
         return rid
 
     def adopt(self, text, what):
@@ -785,16 +785,72 @@ class Plan:
         done = self.state.setdefault("adopted", {})
         for r in self.runs():
             rid, kind = r["id"], r["kind"]
-            if kind not in ("spsa", "tune") or rid in done or self.rstate(rid).get("status") != "done":
+            st = self.rstate(rid)
+            if kind not in ("spsa", "tune", "census") or rid in done or st.get("status") != "done":
                 continue
-            f = os.path.join(self.rdir(rid), "theta.weights" if kind == "spsa" else "best.weights")
-            text = open(f).read() if os.path.exists(f) else ""
+            if kind == "census":
+                # A census of a trial (the rotation's @best): adopted when it
+                # passed, so its held-out reads follow.
+                items = st.get("items", [])
+                ds = glob.glob(os.path.join(self.q, "results", items[0]["job"], self.home, "out", items[0]["job"], "*", "")) if len(items) == 1 else []
+                if not ds or not self.passes(ds[0]) or not os.path.exists(os.path.join(ds[0], "trial.weights")):
+                    done[rid] = None
+                    continue
+                text = open(os.path.join(ds[0], "trial.weights")).read()
+            else:
+                f = os.path.join(self.rdir(rid), "theta.weights" if kind == "spsa" else "best.weights")
+                text = open(f).read() if os.path.exists(f) else ""
             dflt = parse_weights(open(self.defaults()).read()) if self.defaults() else {}
             moved = {k: v for k, v in parse_weights(text).items() if k in dflt and abs(v - dflt[k]) > 1e-9}
             if not moved:
                 done[rid] = None
                 continue
             done[rid] = self.adopt(text, "%s %s" % (kind, rid))
+
+    # One of each, in turn: the default work of auto mode beside the standing
+    # search (Paul, 28 October: "Is there a do one of each on rotation method
+    # that is the default choice? Can we have that."). Two lanes, a run
+    # active in each: the brain's searches and measurements, and the
+    # learned tank's (train and school can take days).
+    ROTATION = {
+        "brain": [["spsa", {}], ["tune", {}], ["census", {"trial": "@best", "name": "best"}],
+                  ["parts", {}], ["switches", {}], ["roundrobin", {}], ["record", {}]],
+        "net": [["gauntlet", {}], ["train", {}], ["school", {}]],
+    }
+    # Measurements that say nothing new on the same defaults: once each.
+    ONCE_PER_DEFAULTS = ("parts", "switches", "roundrobin", "gauntlet")
+
+    def rotate(self):
+        if not self.auto() or self.cfg.get("rotation") is False:
+            return
+        rot = self.state.setdefault("rotation", {})
+        runs = self.runs()
+        lanes = self.cfg.get("rotation") if isinstance(self.cfg.get("rotation"), dict) else self.ROTATION
+        for lane, kinds in lanes.items():
+            if any(r.get("lane") == lane and self.rstate(r["id"]).get("status") in ("new", "running") for r in runs):
+                continue
+            i = rot.get(lane, 0)
+            for step in range(len(kinds)):
+                kind, params = kinds[(i + step) % len(kinds)]
+                if kind in self.ONCE_PER_DEFAULTS and any(
+                        r["kind"] == kind and self.rstate(r["id"]).get("status") in ("done", "running")
+                        and self.same_defaults(self.rstate(r["id"]).get("commit")) for r in runs):
+                    continue
+                params = dict(params)
+                cycle = rot.get("cycle", 0)
+                rot["cycle"] = cycle + 1
+                # Fresh seeds every time, clear of the trials' (20M), the
+                # held-out reads' (60M up) and the recordings' (9.9M).
+                if kind in ("spsa", "tune", "census"):
+                    params["seed0"] = 500000000 + 1000000 * cycle
+                if kind == "record":
+                    nxt = rot.get("record_next", 9920000)
+                    params.update({"seed0": nxt, "count": 48, "per": 12, "run": "rot%d" % cycle})
+                    rot["record_next"] = nxt + 48
+                rid = self.new_run(kind, params, "rotation", lane=lane)
+                rot[lane] = (i + step + 1) % len(kinds)
+                self.flag("rotation", "rotation (%s): %s asked a %s" % (lane, rid, kind), key="rotation:%s" % rid, progress=True)
+                break
 
     def adopt_jobs(self):
         w = self.cfg.get("weights")
@@ -987,6 +1043,7 @@ class Plan:
         for r in self.runs():
             if len(jobs) >= n:
                 break
+            first = len(jobs)
             rid, kind, p = r["id"], r["kind"], r.get("params", {})
             st = self.rstate(rid)
             if st["status"] in ("done", "failed", "stopped", "approved", "rejected"):
@@ -1011,9 +1068,11 @@ class Plan:
             else:
                 st.update({"status": "failed", "why": "no such kind %s" % kind})
                 self.rsave(rid, st)
-        # What a person asked for goes ahead of the standing search.
-        for j in jobs:
-            j["priority"] = "high"
+            # What a person asked for goes ahead of the standing search; the
+            # rotation's runs share the fleet with it.
+            if r.get("by") != "rotation":
+                for j in jobs[first:]:
+                    j["priority"] = "high"
         return jobs
 
     # census, parts, switches, roundrobin: a census an item, then a table.
@@ -1132,6 +1191,9 @@ class Plan:
         tune = p.get("tune", default_tune).replace(",", " ").split()
         gens, lam, sigma = int(p.get("generations", 5)), int(p.get("lambda", 4)), float(p.get("sigma", 0.15))
         seeds, secs, mp = int(p.get("seeds", 2)), p.get("secs", 900), p.get("map", "all")
+        # Its seeds: the same for every child of a run (a fair comparison),
+        # new for each run (the rotation passes seed0).
+        seed0 = int(p.get("seed0", 0))
         done, gone = self.ids("done"), self.ids("failed", "stopped")
         if st["status"] == "new":
             if not p.get("start") and not self.defaults():
@@ -1143,7 +1205,7 @@ class Plan:
                   "log": [], "commit": self.short()}
             self.rsave(rid, st)
             return [self.census_job(jid, "tune %s: the parent" % rid, "".join("%s = %s\n" % kv for kv in parent.items()), "",
-                                    seeds, 0, secs, mp)]
+                                    seeds, seed0, secs, mp)]
         if any(j in gone for j in st["children"]):
             st.update({"status": "failed", "why": "a child's census failed"})
             self.rsave(rid, st)
@@ -1180,7 +1242,7 @@ class Plan:
             st["children"].append(jid)
             st["kids"][jid] = kid
             jobs.append(self.census_job(jid, "tune %s: generation %d child %d" % (rid, st["g"], c),
-                                        "".join("%s = %s\n" % kv for kv in kid.items()), "", seeds, 0, secs, mp))
+                                        "".join("%s = %s\n" % kv for kv in kid.items()), "", seeds, seed0, secs, mp))
         self.rsave(rid, st)
         return jobs
 
@@ -1532,6 +1594,7 @@ class Plan:
         # main, so the builds are asked for after it.
         self.adopt_runs()
         self.auto_promote()
+        self.rotate()
         jobs = self.net_jobs()
         # What a person asked for comes before the standing search.
         jobs += self.run_jobs(n)
