@@ -41,8 +41,10 @@ done
 D=/etc/copal-fleet
 M=/etc/update-motd.d
 # 50-landscape-sysinfo too: fleet-status shows load, memory, disk and address,
-# as bars, so Ubuntu's lines would say it twice.
-SILENCE='10-help-text 50-landscape-sysinfo 50-motd-news 91-contract-ua-esm-status 91-release-upgrade'
+# as bars, so Ubuntu's lines would say it twice. And 90-updates-available,
+# which prints the update count wrapped in the ESM advertising ("Enable ESM
+# Apps to receive ..."): fleet-status prints the count alone.
+SILENCE='10-help-text 50-landscape-sysinfo 50-motd-news 90-updates-available 91-contract-ua-esm-status 91-release-upgrade'
 
 if [ "$UNDO" = 1 ]; then
     for f in $SILENCE; do [ -e "$M/$f" ] && chmod +x "$M/$f" && echo "on again: $f"; done

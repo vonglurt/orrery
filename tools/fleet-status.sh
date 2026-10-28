@@ -63,6 +63,11 @@ mu=$(( mt - ma ))
 printf '  mem   %s   %s of %s GB\n' "$(bar $(( 100 * mu / mt )))" "$(awk -v k="$mu" 'BEGIN{printf "%.1f", k/1048576}')" "$(awk -v k="$mt" 'BEGIN{printf "%.0f", k/1048576}')"
 read -r dsz dus dpc <<<"$(df -BG --output=size,used,pcent / | tail -1 | tr -d 'G%')"
 printf '  disk  %s   %s of %s GB on /\n' "$(bar "$dpc")" "$dus" "$dsz"
+# The update count, from the file Ubuntu's own login message reads (written
+# by apt's update-notifier), without the ESM advertising around it.
+upd=$(grep -h 'can be applied immediately' /var/lib/update-notifier/updates-available 2>/dev/null | head -n1)
+[ -n "$upd" ] && printf '  apt   %s\n' "$upd"
+[ -f /var/run/reboot-required ] && printf '  %sa reboot is required%s\n' "$Y" "$Z"
 
 # ---- the GPU ---------------------------------------------------------------------
 if command -v nvidia-smi >/dev/null 2>&1; then
