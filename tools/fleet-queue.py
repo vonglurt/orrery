@@ -980,6 +980,21 @@ def health(q):
             check("ok", "search", said + ": widened (bound %s, half of each generation wide trials)" % s.get("bound"))
         else:
             check("ok", "search", said)
+    # The difficulty: how far every bar is lowered, so a promotion comes
+    # about every every_min. At its floor and a promotion twice overdue, the
+    # trials hold no more at any bar a promotion should pass.
+    d = s.get("difficulty") or {}
+    if d.get("since"):
+        every = d.get("every_min", 150)
+        ago = (now() - d["since"]) / 60
+        said = "bars lowered %.1f errors (held-out z %.1f), %s since %s, aiming at one each %s" % (
+            d.get("ease", 0), d.get("held_z", 3), took(ago * 60),
+            "the last promotion (%s)" % d["last_promotion"] if d.get("last_promotion") == d.get("seen") and d.get("last_gap_min") else "it began",
+            took(every * 60))
+        if d.get("ease", 0) >= 2.0 and ago > 2 * every + 300:
+            check("warn", "difficulty", said + ": at its floor and no promotion")
+        else:
+            check("ok", "difficulty", said)
     return out
 
 

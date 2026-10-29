@@ -485,6 +485,7 @@ class Plan:
         if want > 0:
             s = self.search(defaults)
             s["sequential"] = self.seq_counts(seq)
+            s["difficulty"] = dict(self.state.get("difficulty", {}), last_promotion=(self.promotions() or [[None, None]])[-1][1])
             g = self.state["gen"]
             out = os.path.join(self.pd, "gen%d" % g)
             shutil.rmtree(out, ignore_errors=True)
@@ -644,7 +645,10 @@ class Plan:
     # one fixed read of 55, simulated with the measured noise and a fleet of
     # mostly no-better trials: 40% more real finds a seed, a quarter of the
     # false passes (29 October). The held-out reads still decide.
-    SEQ = ((1, 0.5, None), (2, 1.0, None), (4, 1.5, 2.6), (8, None, 2.0))
+    # Since 29 October the stages grow by half, not double (Paul: "more like
+    # 1.2x or 1.6x"), the read-on bar rising from 0.5 to 1.7 across them:
+    # 55, 82, 124, 187, 275, 418 seeds. Simulated, 5% more gain a day.
+    SEQ = ((1, 0.5, None), (1.5, 0.8, None), (2.25, 1.1, None), (3.4, 1.4, 2.6), (5, 1.7, 2.6), (7.6, None, 2.0))
 
     # The held-out reads decide together: pooled, 800 seeds, z past HELD_Z and
     # no map two errors under. Each read had to pass alone (d past two of its
@@ -658,7 +662,87 @@ class Plan:
     def held_pass(self, ds):
         """True when a trial's two held-out reads, pooled, pass."""
         p = self.pool(ds) if len(ds) == 2 else None
-        return bool(p) and p["every"][1] > 0 and p["every"][0] / p["every"][1] >= self.HELD_Z and not p["below"]
+        return bool(p) and p["every"][1] > 0 and p["every"][0] / p["every"][1] >= self.HELD_Z - self.ease() and not p["below"]
+
+    # ---- difficulty: a promotion about every PROMOTE_EVERY minutes ---------------------
+    # Paul, 29 October: "something like a block height difficulty ... a
+    # promotion every 20 minutes at average." Every bar (each stage's read
+    # on and pass, the held-out reads' HELD_Z) is lowered by one ease, in
+    # errors. Simulated with the measured trials (true gains N(-0.45, 0.3) a
+    # seat, a seed's swing 4.9, 5,400 seeds an hour): at ease 0 a promotion
+    # a day, each truly +0.5, +0.4 a day; at 2 one in 2.5 hours, each +0.2
+    # and one in ten truly worse, +2.0 a day, the most; at 3 one in 80
+    # minutes, four in ten worse, +1.0; at 4 one in 47 minutes and two in
+    # three worse, the brain 2 a day poorer. One in 20 minutes is past
+    # what the trials hold, so the aim is the peak and EASE_MAX its floor.
+    # Like a block's difficulty: no promotion in its time and the ease
+    # rises a step each PROMOTE_EVERY more; a promotion sooner than its
+    # time lowers it by half a step for each halving (one quick promotion
+    # is as much luck as a sign). The anchor reads catch the one in ten
+    # (anchor_trial).
+    PROMOTE_EVERY = 150
+    EASE_MAX = 2.0
+    EASE_STEP = 1.0
+    HARDEN = 0.5
+
+    def promotions(self):
+        """[(approved epoch, run id, state)] of the promotions on main, oldest first."""
+        out = []
+        for r in self.runs():
+            if r["kind"] != "promote":
+                continue
+            st_ = self.rstate(r["id"])
+            if st_.get("status") in ("approved", "self-modified") and st_.get("approved"):
+                out.append((time.mktime(time.strptime(st_["approved"], "%Y-%m-%dT%H:%M:%S")), r["id"], st_))
+        return sorted(out, key=lambda x: x[0])
+
+    def ease(self):
+        """The errors every bar is lowered by now (state difficulty)."""
+        if getattr(self, "_ease", None) is not None:
+            return self._ease
+        every = 60 * float((self.cfg.get("weights") or {}).get("promote_every_min", self.PROMOTE_EVERY))
+        d = self.state.setdefault("difficulty", {})
+        last = (self.promotions() or [None])[-1]
+        now = time.time()
+        if "since" not in d:
+            # Begun from now, not the last promotion: it eases in its time.
+            d.update({"since": now, "base": 0.0, "seen": last[1] if last else None})
+        if last and last[1] != d.get("seen"):
+            gap = max(60.0, last[0] - d["since"])
+            e = d.get("ease", 0.0)
+            d.update({"base": max(0.0, e - self.HARDEN * max(0.0, math.log2(every / gap))),
+                      "since": last[0], "seen": last[1], "last_gap_min": round(gap / 60)})
+        over = (now - d["since"]) / every - 1
+        self._ease = min(self.EASE_MAX, d["base"] + self.EASE_STEP * max(0.0, over))
+        d.update({"ease": round(self._ease, 3), "every_min": round(every / 60), "held_z": round(self.HELD_Z - self._ease, 3)})
+        return self._ease
+
+    ANCHOR = 3
+
+    def anchor_trial(self):
+        """Each promotion, once its machines build it, read against the
+        defaults ANCHOR promotions back: those as a trial (its census and
+        two held-out reads), the values each moved put back. Today's better,
+        it fails; if not, it passes as any trial and promotes itself, the
+        drift undone."""
+        if not self.auto():
+            return
+        done = self.state.setdefault("anchored", [])
+        p = self.promotions()
+        if not p or p[-1][1] in done or not p[-1][2].get("confirmed"):
+            return
+        back, old = p[-self.ANCHOR:], {}
+        for _, _, st_ in back:
+            for l in st_.get("changed", []):
+                m = re.match(r"^([a-z_][a-z0-9_]*) ([-+0-9.eE]+) -> ([-+0-9.eE]+)$", l)
+                if m and m.group(1) not in old:
+                    old[m.group(1)] = m.group(2)
+        done.append(p[-1][1])
+        if old:
+            text = "".join("%s = %s\n" % kv for kv in sorted(old.items()))
+            jid = self.adopt(text, "anchor: the defaults before %s" % back[0][1])
+            self.flag("anchor", "%s reads the defaults before %s against today's, after %s" % (jid, back[0][1], p[-1][1]),
+                      key="anchor:%s" % p[-1][1], progress=True)
 
     @staticmethod
     def pool(dirs):
@@ -717,8 +801,10 @@ class Plan:
                 continue
             d, se, n = p["every"]
             z = d / se
-            stage = max([i for i, s in enumerate(self.SEQ) if s[0] * base <= n] or [0])
+            stage = max([i for i, s in enumerate(self.SEQ) if round(s[0] * base) <= n] or [0])
             _, keep, ok = self.SEQ[stage]
+            e = self.ease()
+            keep, ok = (None if keep is None else keep - e), (None if ok is None else ok - e)
             if jid in self.state["held_read"]:
                 status = "passed"
             elif jid in inflight:
@@ -746,7 +832,7 @@ class Plan:
             if v["status"] != "read on":
                 continue
             base = w["seeds"]
-            more = self.SEQ[v["stage"] + 1][0] * base - v["seeds"]
+            more = round(self.SEQ[v["stage"] + 1][0] * base) - v["seeds"]
             if more <= 0:
                 continue
             k = self.state.get("read_on_n", 0)
@@ -2513,6 +2599,7 @@ class Plan:
         self.adopt_runs()
         self.candidate_states()
         self.auto_promote()
+        self.anchor_trial()
         self.reread_older()
         self.rotate()
         jobs = self.net_jobs()
@@ -2541,6 +2628,12 @@ class Plan:
         jobs += self.weight_jobs(max(0, want - len(jobs)))
         # The GPU lanes' own work: it takes no treadcore lane.
         jobs += self.crucible_jobs()
+        # The difficulty each plan, whether or not the search was asked.
+        note = load(os.path.join(self.pd, "search.json"), {})
+        if note:
+            self.ease()
+            note["difficulty"] = dict(self.state.get("difficulty", {}), last_promotion=(self.promotions() or [[None, None]])[-1][1])
+            save(os.path.join(self.pd, "search.json"), note)
         self.keep()
         print(json.dumps(jobs))
 

@@ -271,9 +271,15 @@ one cost two held-out reads of 400 seeds. Now each trial's reads are pooled
 | Seeds read | Read on when z is at least | Passes when z is at least |
 |---|---|---|
 | 55 | 0.5 | — |
-| 110 | 1.0 | — |
-| 220 | 1.5 | 2.6 |
-| 440 | — | 2.0 |
+| 82 | 0.8 | — |
+| 124 | 1.1 | — |
+| 187 | 1.4 | 2.6 |
+| 275 | 1.7 | 2.6 |
+| 418 | — | 2.0 |
+
+The stages grow by half, not double (since 29 October). Simulated, that
+gives about 5% more gain a day. Every bar in this table, and the held-out
+z below, is lowered by the difficulty's ease.
 
 Each read on is a job `eNNNN` titled `read on N of wNNNN`, with as many
 fresh seeds again (300M up). The most promising go first, and they take
@@ -291,6 +297,34 @@ w1198 (+0.67 ± 0.19 pooled, z 3.5) and w1266 (+0.59 ± 0.16, z 3.7) each
 passed one read and were lost. A trial no better reaches z 3 one time in
 750 (the old rule: one in 2,000), and a trial +0.6 six times in ten. A
 candidate still has its families and the tests to pass before it promotes.
+
+**A difficulty, like a block's.** Every bar is lowered by one *ease*, in
+errors, so that a promotion comes about every 2.5 hours (plan.json
+`weights.promote_every_min`, 150). If no promotion comes in that time, the
+ease rises by 1 for each further 2.5 hours, up to its floor of 2 (held-out
+z 1.0). A promotion that comes early raises the bars again, by half a step
+for each halving of its time. The aim comes from a simulation using the
+measured trials: their true gains spread as N(−0.45, 0.3) a seat, a seed
+swings by 4.9, and the fleet reads 5,400 seeds an hour.
+
+| Ease | One promotion every | True gain of each | Truly worse | Gain a day |
+|---|---|---|---|---|
+| 0 | 30 h | +0.50 | 0% | +0.4 |
+| 1 | 6.8 h | +0.37 | 1% | +1.4 |
+| 2 (the floor) | 2.5 h | +0.20 | 9% | +2.0 |
+| 3 | 80 min | +0.06 | 38% | +1.1 |
+| 4 | 50 min | −0.06 | 66% | −1.7 |
+
+A promotion every 20 minutes is past what the trials hold: there the
+brain gets worse every day. That is why the floor is 2.
+
+**The anchor reads catch the one in ten.** Once a promotion is built on
+its machines, the defaults from three promotions back are queued as a
+trial, with its census and two held-out reads. If today's defaults are
+better, the trial fails. If not, it passes like any other trial and
+promotes itself, which undoes the drift. The **difficulty** check in
+health shows the ease and how long since the last promotion. It turns
+amber at the floor with no promotion in twice its time.
 
 The planner writes `plan/search.json`, which is the **search** check in
 health. It turns amber once the search has been widened for 450 trials
