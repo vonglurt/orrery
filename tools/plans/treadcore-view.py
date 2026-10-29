@@ -160,6 +160,11 @@ def queue():
         q["candidate_state"] = json.load(open(os.path.join(QDIR, "plan", "candidates.json")))
     except (OSError, ValueError):
         q["candidate_state"] = {}
+    # crucible's islands (plan/crucible.json, the planner's): the Projects view.
+    try:
+        q["crucible"] = json.load(open(os.path.join(QDIR, "plan", "crucible.json")))
+    except (OSError, ValueError):
+        q["crucible"] = {}
     try:
         q["push"] = json.load(open(os.path.join(QDIR, "plan", "push.json")))
     except (OSError, ValueError):

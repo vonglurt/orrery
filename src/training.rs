@@ -113,6 +113,20 @@ pub struct State {
     pub page: usize,
 }
 
+/// One crucible island: a GPU lane's population, trained a segment at a time.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Island {
+    pub name: String,
+    pub segments: i64,
+    pub generations: i64,
+    pub running: String,
+    pub failures: i64,
+    /// The last yardstick read: (generation, share of games won).
+    pub yard: Option<(i64, f64)>,
+    pub curve: Vec<f64>,
+    pub msteps: f64,
+}
+
 /// One machine's lane in the queue.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QLane {
@@ -160,6 +174,8 @@ pub struct Queue {
     pub current: Vec<(String, bool, String)>,
     /// The rotation: auto mode asks one of each kind in turn ("rotation").
     pub rotation: bool,
+    /// crucible's islands, one a GPU lane (plan/crucible.json).
+    pub islands: Vec<Island>,
     /// The keeper, in a line: its pid, how long up, the last and next sync,
     /// and whether it holds this Mac awake.
     pub keeper: String,
@@ -375,6 +391,22 @@ impl Model {
                     _ => Vec::new(),
                 },
                 rotation: !matches!(q.get("rotation"), Some(json::Value::Bool(false))),
+                islands: match q.get("crucible") {
+                    Some(json::Value::Obj(m)) => m
+                        .iter()
+                        .map(|(k, v)| Island {
+                            name: k.clone(),
+                            segments: n(v, "segments") as i64,
+                            generations: n(v, "generations") as i64,
+                            running: s(v, "running"),
+                            failures: n(v, "failures") as i64,
+                            yard: v.get("yard").and_then(|y| y.as_array()).and_then(|y| Some((y.first()?.as_num()? as i64, y.get(1)?.as_num()?))),
+                            curve: arr(v, "yard_curve").iter().filter_map(|y| Some(y.as_array()?.get(1)?.as_num()?)).collect(),
+                            msteps: n(v, "msteps"),
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                },
                 keeper: q
                     .get("keeper")
                     .filter(|k| k.get("pid").is_some())

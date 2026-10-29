@@ -703,7 +703,8 @@ fn write_frame(
                 ui_state.pointer = (-1, -1);
                 let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
                 if view == nav::View::Projects {
-                    projects::draw(&mut u, &m, &mut projects::Crucible::new());
+                    let mut ps = projects::State { operator: st.operator, ..Default::default() };
+                    projects::draw(&mut u, &m, &mut projects::Crucible::new(), &mut ps);
                 } else {
                     training::draw(&mut u, &m, &mut st, view);
                 }
@@ -924,6 +925,8 @@ fn gui_loop<S: surface::Surface>(
     let mut lab_state = lab::Lab::new(posture);
     let mut view = nav::View::default();
     let mut crucible = projects::Crucible::new();
+    let mut projects_state = projects::State { operator: posture == lab::Posture::Operator && !queue_ctl.is_empty(), ..Default::default() };
+    let projects_said: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     // The card pane reads files rather than the fleet, so it is opened once
     // and reloaded after anything that writes one.
     let mut media = if demo_fixture {
@@ -1130,8 +1133,24 @@ fn gui_loop<S: surface::Surface>(
                 (None, nav::View::Lab) => action = lab::draw(&mut u, &model, &mut lab_state),
                 (None, nav::View::Projects) => {
                     let text = jobs_doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                    if let Some(v) = projects::draw(&mut u, &training::Model::parse(&text, &jobs_source), &mut crucible) {
+                    projects_state.said = projects_said.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    if let Some(v) = projects::draw(&mut u, &training::Model::parse(&text, &jobs_source), &mut crucible, &mut projects_state) {
                         action = Some(lab::Action::Go(v));
+                    }
+                    // The lanes change in config.json; the keeper starts or
+                    // ends them on its next look.
+                    if let Some(verb) = projects_state.ask.take() {
+                        let cmd = format!("{} {}", mcmd, verb);
+                        let said = Arc::clone(&projects_said);
+                        *said.lock().unwrap_or_else(|e| e.into_inner()) = format!("{}...", verb);
+                        thread::spawn(move || {
+                            let out = std::process::Command::new("sh").arg("-c").arg(&cmd).output();
+                            let line = match out {
+                                Ok(o) => String::from_utf8_lossy(if o.status.success() { &o.stdout } else { &o.stderr }).lines().last().unwrap_or("").to_string(),
+                                Err(e) => e.to_string(),
+                            };
+                            *said.lock().unwrap_or_else(|e| e.into_inner()) = line;
+                        });
                     }
                 }
                 (None, v @ (nav::View::Queue | nav::View::Results)) => {

@@ -314,6 +314,53 @@ class Machines:
         self.keep()
         return host
 
+    # ---- crucible's lanes ------------------------------------------------------------
+    # Paul, 28 October: "i want to see a button to add more gpu CUDA to the
+    # mix, add crucible." A machine in the queue whose probe found an NVIDIA
+    # card and CUDA gets a second lane, NAME-cuda, caps ["cuda"]: the same
+    # machine, taking only crucible's segments, so its CPUs go on with
+    # treadcore's censuses. It has no power-off of its own; the machine's own
+    # lane powers it off.
+    def cuda_ready(self):
+        """(name, why not or ''): every joined machine, and whether it can
+        take a crucible lane."""
+        out = []
+        for h in self.cfg.get("hosts", []):
+            if "cuda" in h.get("caps", []):
+                continue
+            f = (self.reg.get(h["name"]) or {}).get("facts") or {}
+            why = "" if f.get("nvidia_smi") and f.get("cuda") else ("no NVIDIA card" if not f.get("nvidia_pci") else "no CUDA yet: apply cuda-node")
+            out.append((h["name"], why))
+        return out
+
+    def cuda_lanes(self, how, which="all"):
+        cfg = load(os.path.join(self.q, "config.json"), {})
+        hosts = cfg.get("hosts", [])
+        have = {h["name"] for h in hosts}
+        done = []
+        if how == "add":
+            for name, why in self.cuda_ready():
+                if why or (which != "all" and name != which) or name + "-cuda" in have:
+                    continue
+                me = next(h for h in hosts if h["name"] == name)
+                hosts.append({"name": name + "-cuda", "target": me["target"], "caps": ["cuda"], "nice": 10, "lane_of": name})
+                done.append(name + "-cuda")
+        elif how == "remove":
+            keep = [h for h in hosts if not ("cuda" in h.get("caps", []) and (which == "all" or h.get("lane_of") == which))]
+            done = [h["name"] for h in hosts if h not in keep]
+            hosts[:] = keep
+        else:
+            raise SystemExit("cuda-lanes add|remove [NAME|all]")
+        if done:
+            cfg["hosts"] = hosts
+            save(os.path.join(self.q, "config.json"), cfg)
+            for n in done:
+                m = self.reg.get(n[:-5] if n.endswith("-cuda") else n)
+                if m is not None:
+                    m.setdefault("log", []).append({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "cuda_lane": how})
+            self.keep()
+        return done
+
     def status(self):
         out = []
         for name in sorted(self.reg, key=lambda n: (self.joined(n), n)):
@@ -321,8 +368,11 @@ class Machines:
             f = m.get("facts") or {}
             out.append({"name": name, "target": m.get("target", ""), "joined": self.joined(name),
                          "probed": m.get("probed", ""), "error": m.get("probe_error", ""), "facts": f,
-                         "recipes": self.recipe_states(name), "log": m.get("log", [])[-5:]})
-        return {"fleet": self.fleet, "machines": out}
+                         "recipes": self.recipe_states(name), "log": m.get("log", [])[-5:],
+                         "cuda_lane": any(h.get("lane_of") == name for h in self.cfg.get("hosts", []))})
+        ready = [n for n, why in self.cuda_ready() if not why]
+        lanes = [h["name"] for h in self.cfg.get("hosts", []) if "cuda" in h.get("caps", [])]
+        return {"fleet": self.fleet, "machines": out, "cuda_ready": ready, "cuda_lanes": lanes}
 
 
 def main(argv):
@@ -353,6 +403,15 @@ def main(argv):
         print(json.dumps(ms.stage(argv[3], argv[4])))
     elif cmd == "join":
         print(json.dumps(ms.join(argv[3])))
+    elif cmd == "cuda-lanes":
+        how = argv[3] if len(argv) > 3 else "list"
+        if how == "list":
+            for n, why in ms.cuda_ready():
+                lane = any(h.get("lane_of") == n for h in ms.cfg.get("hosts", []))
+                print("%-13s %s" % (n, "crucible lane" if lane else (why or "ready for a crucible lane")))
+        else:
+            done = ms.cuda_lanes(how, argv[4] if len(argv) > 4 else "all")
+            print("%s: %s" % ("added" if how == "add" else "removed", ", ".join(done) or "nothing to do"))
     else:
         sys.exit(__doc__)
 

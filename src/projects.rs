@@ -87,16 +87,62 @@ pub fn parse_run(name: &str, text: &str) -> CrucibleRun {
     r
 }
 
-pub fn draw(ui: &mut Ui, m: &Model, c: &mut Crucible) -> Option<nav::View> {
+/// What the page asks of the coordinator, and what it last said.
+#[derive(Debug, Clone, Default)]
+pub struct State {
+    pub operator: bool,
+    /// A button pressed once: the next press does it.
+    pub armed: Option<&'static str>,
+    /// `machines.py cuda-lanes ...`, taken and run by main.rs.
+    pub ask: Option<String>,
+    pub said: String,
+}
+
+/// The GPU lanes in the queue (NAME-cuda) and the machines with a card.
+fn lanes(m: &Model) -> (Vec<String>, usize) {
+    let lanes = m.queue.as_ref().map(|q| q.lanes.iter().filter(|l| l.host.ends_with("-cuda")).map(|l| l.host.clone()).collect()).unwrap_or_default();
+    (lanes, m.machines.iter().filter(|x| x.gpu.is_some()).count())
+}
+
+pub fn draw(ui: &mut Ui, m: &Model, c: &mut Crucible, st: &mut State) -> Option<nav::View> {
     let t = ui.t;
     c.refresh();
-    let gpus = m.machines.iter().filter(|x| x.gpu.is_some()).count();
-    let right = format!("{} machines, {} with a GPU", m.machines.len(), gpus);
+    let (cuda, gpus) = lanes(m);
+    let right = format!("{} machines, {} with a GPU, {} in crucible", m.machines.len(), gpus, cuda.len());
     let (rest, go, _) = nav::header(ui, nav::View::Projects, true, &right, None);
     let body = rest.inset(10);
     let mut y = body.y;
-    ui.label_in(body.x, y, body.w, "Two projects share the fleet: treadcore on the CPUs, crucible on the GPUs.", &F10X20, t.ink);
-    y += F10X20.height as i32 + 10;
+    ui.label_in(body.x, y, body.w - 330, "Two projects share the fleet: treadcore on the CPUs, crucible on the GPUs.", &F10X20, t.ink);
+    // The button: every GPU machine a crucible lane, or none. Two presses,
+    // as the queue's stop: it changes what the fleet runs.
+    if st.operator {
+        let (word, verb, key) = if cuda.len() < gpus {
+            ("Add the GPUs to crucible", "add", "add")
+        } else {
+            ("Take crucible off the GPUs", "remove", "remove")
+        };
+        let armed = st.armed == Some(key);
+        let label = if armed { "Press again to confirm" } else { word };
+        let b = rect(body.right() - 230, y - 2, 230, 26);
+        if ui.button(b, label, true) {
+            if armed {
+                st.ask = Some(format!("cuda-lanes {} all", verb));
+                st.armed = None;
+            } else {
+                st.armed = Some(key);
+            }
+        }
+    }
+    y += F10X20.height as i32 + 6;
+    let note = if !st.said.is_empty() {
+        st.said.clone()
+    } else if cuda.is_empty() {
+        "crucible runs on a GPU lane of its own (NAME-cuda), beside the machine's treadcore lane: the button adds one to each machine with a card and CUDA.".to_string()
+    } else {
+        format!("crucible lanes: {}. Each is an island: a segment at a time, swapping champions with the others.", cuda.join(", "))
+    };
+    ui.label_in(body.x, y, body.w, &note, &F8X13, if st.armed.is_some() { t.warn } else { t.dim });
+    y += F8X13.height as i32 + 8;
 
     let card_h = 150;
     let half = (body.w - 10) / 2;
@@ -163,6 +209,24 @@ fn draw_treadcore(ui: &mut Ui, at: Rect, m: &Model) {
 
 fn draw_crucible(ui: &mut Ui, at: Rect, m: &Model, c: &Crucible) {
     let t = ui.t;
+    let islands = m.queue.as_ref().map(|q| &q.islands[..]).unwrap_or(&[]);
+    if !islands.is_empty() {
+        let running = islands.iter().filter(|i| !i.running.is_empty()).count();
+        let state = format!("in the queue: {} island(s), {} running", islands.len(), running);
+        let y = card(ui, at, "crucible", (Light::Full, t.up, &state));
+        let mut rows: Vec<(String, crate::draw::Rgb)> = vec![("a self-learning loop entirely on the GPU; islands swap champions".into(), t.dim)];
+        for i in islands {
+            let yard = i.yard.map(|(g, w)| format!(", yardstick {:.0}% at {}", w * 100.0, g)).unwrap_or_default();
+            let fail = if i.failures > 0 { format!(", {} failed", i.failures) } else { String::new() };
+            rows.push((format!("{}: {} segments, {} generations{}{}", i.name, i.segments, i.generations, yard, fail), if i.failures >= 3 { t.alarm } else { t.ink }));
+        }
+        let best = islands.iter().map(|i| i.msteps).fold(0.0, f64::max);
+        if best > 0.0 {
+            rows.push((format!("fastest: {:.0} M tank-steps a second", best), t.ink));
+        }
+        lines(ui, at, y, &rows);
+        return;
+    }
     if !c.found {
         let y = card(ui, at, "crucible", (Light::Hollow, t.warn, "not found"));
         lines(ui, at, y, &[(format!("expected at {} (or ORRERY_CRUCIBLE)", c.dir), t.dim)]);
@@ -224,8 +288,17 @@ fn draw_matrix(ui: &mut Ui, at: Rect, m: &Model, c: &Crucible) {
         };
         ui.light(x_tc + 4, y + lh / 2 + 1, 4, lamp, col);
         ui.label_in(x_tc + 14, y + 1, x_cr - x_tc - 24, &word, &F8X13, col);
-        // crucible: a card is ready for it; the queue does not run it yet.
-        let (lamp, col, word) = if mc.gpu.is_none() {
+        // crucible: the machine's GPU lane, if it has one.
+        let cl = lanes.iter().find(|l| l.host == format!("{}-cuda", mc.name));
+        let isl = m.queue.as_ref().and_then(|q| q.islands.iter().find(|i| format!("{}-cuda", mc.name) == i.name || i.name == mc.name));
+        let (lamp, col, word) = if let Some(l) = cl {
+            let gens = isl.map(|i| format!(", {} generations", i.generations)).unwrap_or_default();
+            if l.state == "running" {
+                (Light::Full, t.up, format!("{}{}", l.title, gens))
+            } else {
+                (Light::Hollow, t.dim, format!("lane {}{}", l.state, gens))
+            }
+        } else if mc.gpu.is_none() {
             (Light::Hollow, t.line, "-".to_string())
         } else if c.found {
             (Light::Half, t.warn, "ready, not queued".to_string())

@@ -153,7 +153,12 @@ class Plan:
         self.name = os.path.basename(self.q.rstrip("/"))
         self.cfg = load(os.path.join(self.q, "plan.json"), {})
         self.qcfg = load(os.path.join(self.q, "config.json"), {})
-        self.hosts = self.qcfg.get("hosts", [])
+        # treadcore's machines; a GPU machine's crucible lane (caps
+        # ["cuda"], named NAME-cuda) is the same machine again, and builds
+        # nothing of treadcore's.
+        every = self.qcfg.get("hosts", [])
+        self.hosts = [h for h in every if "cpu" in h.get("caps", ["cpu"])]
+        self.cuda = [h for h in every if "cuda" in h.get("caps", [])]
         self.tc = os.path.expanduser(self.cfg.get("project", "~/code/treadcore"))
         self.pd = os.path.join(self.q, "plan")
         os.makedirs(self.pd, exist_ok=True)
@@ -1621,6 +1626,85 @@ class Plan:
             if v.get("verdict") == "UNDER":
                 self.flag("families", "%s falls under a family's floor" % name, key="under:%s" % name)
 
+    # ---- crucible: the second job, on the GPU lanes ----------------------------------------
+    # Paul, 28 October: "i want to see a button to add more gpu CUDA to the
+    # mix, add crucible." Each GPU machine given a crucible lane (machines.py
+    # cuda-lanes) is an island: its own population, trained a segment at a
+    # time (plan.json "crucible": gens, pop, eps), its state kept on the
+    # machine between segments. Each segment sends back its champion and its
+    # generations, and takes the other islands' newest champions into its
+    # hall of fame. The source is sent with every segment and built when it
+    # changed, so the islands run what this Mac has.
+    def crucible_src(self):
+        return os.path.expanduser(self.cfg.get("crucible", {}).get("source", "~/code/crucible"))
+
+    def crucible_jobs(self):
+        src = self.crucible_src()
+        if not self.cuda or not os.path.exists(os.path.join(src, "src", "crucible.cu")):
+            return []
+        opt = dict({"gens": 50, "pop": 2048, "eps": 128, "yard": 10}, **self.cfg.get("crucible", {}))
+        cr = self.state.setdefault("crucible", {})
+        live, done, bad = self.ids("queue", "running"), self.ids("done"), self.ids("failed", "stopped")
+        for h in self.cuda:
+            isl = cr.setdefault(h["name"], {"seg": 0, "job": None, "last": None, "failures": 0, "gens": 0})
+            j = isl.get("job")
+            if j and j in done:
+                isl.update({"seg": isl["seg"] + 1, "last": j, "job": None, "failures": 0, "gens": isl["gens"] + opt["gens"]})
+            elif j and j in bad:
+                isl.update({"job": None, "failures": isl["failures"] + 1})
+                if isl["failures"] >= 3:
+                    self.flag("crucible", "crucible on %s failed three segments in a row: see logs/%s.log" % (h["name"], j), key="crucible:%s:%s" % (h["name"], j))
+        jobs = []
+        for h in self.cuda:
+            name, isl = h["name"], cr[h["name"]]
+            if isl.get("job") or isl["failures"] >= 3:
+                continue
+            jid = "x-%s-%04d" % (name, isl["seg"])
+            home = "%s/crucible" % self.home
+            send = [{"src": os.path.join(src, f), "dst": "~/%s/%s" % (home, f)} for f in ("src/crucible.cu", "Makefile")]
+            imports = []
+            for o, oi in cr.items():
+                if o != name and oi.get("last"):
+                    champ = os.path.join(self.q, "results", oi["last"], self.home, "out", oi["last"], "champ.bin")
+                    if os.path.exists(champ):
+                        send.append({"src": champ, "dst": "~/%s/in/%s.bin" % (home, o)})
+                        imports.append("$H/in/%s.bin" % o)
+            seed = 1000 + 97 * (sum(map(ord, name)) % 1000)
+            cmd = (
+                "set -e; H=~/%s; O=~/%s/out/%s; mkdir -p $O $H/in\n"
+                "cd $H && make -s NVCC=${NVCC:-/usr/local/cuda/bin/nvcc} >/dev/null 2>&1 || make NVCC=${NVCC:-/usr/local/cuda/bin/nvcc}\n"
+                "L=''; [ -f $H/island.state ] && L=\"--load $H/island.state\"\n"
+                "I='%s'\n"
+                "./crucible --pop %d --eps %d --gens %d --yard %d --seed %d $L ${I:+--import $I} "
+                "--save $H/island.state --export $O/champ.bin --out $O/gens.tsv 2>&1 | tee $O/console.txt | grep '^#'\n"
+            ) % (home, self.home, jid, ",".join(imports), opt["pop"], opt["eps"], opt["gens"], opt["yard"], seed)
+            jobs.append({"id": jid, "kind": "crucible", "title": "crucible island %s, segment %d" % (name, isl["seg"]),
+                         "needs": "host:" + name, "cmd": cmd, "send": send, "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 4 * 3600})
+            isl["job"] = jid
+        self.crucible_view()
+        return jobs
+
+    def crucible_view(self):
+        """plan/crucible.json for orrery's Projects view: each island's
+        segments, generations, last yardstick and speed, from its results."""
+        out = {}
+        for name, isl in self.state.get("crucible", {}).items():
+            rows = []
+            for d in sorted(glob.glob(os.path.join(self.q, "results", "x-%s-*" % name))):
+                jid = os.path.basename(d)
+                f = os.path.join(d, self.home, "out", jid, "gens.tsv")
+                try:
+                    for line in open(f).read().splitlines()[1:]:
+                        rows.append(line.split("\t"))
+                except OSError:
+                    pass
+            yard = [(int(r[0]) + 1, float(r[7])) for r in rows if len(r) > 9 and float(r[7]) >= 0]
+            out[name] = {"segments": isl["seg"], "running": isl.get("job"), "failures": isl["failures"],
+                         "generations": max([int(r[0]) + 1 for r in rows] or [0]),
+                         "yard": yard[-1] if yard else None, "yard_curve": yard[-40:],
+                         "msteps": max([float(r[4]) / 1e6 for r in rows] or [0])}
+        save(os.path.join(self.pd, "crucible.json"), out)
+
     def plan(self, n):
         self.raise_found()
         # Auto mode: results adopted, the strongest candidate promoted, a
@@ -1636,6 +1720,8 @@ class Plan:
         jobs = self.prepare_jobs() + jobs
         self.propagation()
         jobs += self.adopt_jobs()
+        # The GPU lanes' own work: it takes no treadcore lane.
+        jobs += self.crucible_jobs()
         self.ticker_scan()
         # The families first, a share of the queue: a candidate waits on them.
         jobs += self.family_jobs(max(0, (n - len(jobs) + 1) // 2))
