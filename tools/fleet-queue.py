@@ -32,6 +32,9 @@ a keeper that keeps it all running, and two ways to stop.
                                              acknowledged (--all: every one)
     tools/fleet-queue.py DIR ack ID|all [--by NAME]
                                              mark a flag (or all) acknowledged
+    tools/fleet-queue.py DIR now            do it now: sync, then promote the strongest
+                                             current candidate (pushed in auto mode), or
+                                             re-read the older ones on today's defaults
     tools/fleet-queue.py DIR status [--json]
     tools/fleet-queue.py DIR add JOB.json    put a job on the queue by hand
 
@@ -806,6 +809,13 @@ def main(argv):
     elif cmd == "sync":
         cfg = q.config()
         r = subprocess.run(["bash", "-c", "%s sync" % cfg["planner"]], text=True)
+        sys.exit(r.returncode)
+    elif cmd == "now":
+        # Do it now: the planner syncs, then promotes the strongest current
+        # candidate (tested, its families read, pushed in auto mode), or
+        # re-reads the strongest older ones on today's defaults.
+        cfg = q.config()
+        r = subprocess.run(["bash", "-c", "%s now" % cfg["planner"]], text=True)
         sys.exit(r.returncode)
     elif cmd == "new":
         if len(argv) < 3:

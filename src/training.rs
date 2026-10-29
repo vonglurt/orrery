@@ -106,6 +106,12 @@ pub struct State {
     pub said: String,
     /// Shut the fleet down was pressed once: the next press does it.
     pub arm_shutdown: bool,
+    /// Do it now was pressed once: the next press does it.
+    pub arm_now: bool,
+    /// The Candidates page: the kind shown (0 all, 1 promoted, 2 current,
+    /// 3 older) and the first row.
+    pub cand_filter: u8,
+    pub cand_off: usize,
     /// Collect results and stop now, armed from the menu: the button says
     /// so, and its press runs it.
     pub arm_stop: bool,
@@ -604,8 +610,32 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State, view: nav::View) -> Option<n
         (Some(q), true) => results_headline(q),
         _ => sentence,
     };
-    ui.label_in(body.x, y, body.w, &sentence, &F10X20, t.ink);
+    // Do it now, on the Results (Paul, 28 October: "it has a do it now
+    // button to sync and push the values"): sync, then the strongest current
+    // candidate promoted -- its tests and families on a branch, then main --
+    // or, with none current, the strongest older ones read again. Two
+    // presses: it can push to main.
+    let room = if results && st.operator && m.queue.is_some() {
+        let b = rect(body.right() - 300, y - 2, 300, 26);
+        let label = if st.arm_now { "Press again: sync, promote, push" } else { "Do it now: sync, promote, push" };
+        if ui.button(b, label, true) {
+            if st.arm_now {
+                st.ctl = Some("now".into());
+                st.arm_now = false;
+            } else {
+                st.arm_now = true;
+            }
+        }
+        310
+    } else {
+        0
+    };
+    ui.label_in(body.x, y, body.w - room, &sentence, &F10X20, t.ink);
     y += F10X20.height as i32 + 8;
+    if results && !st.said.is_empty() {
+        ui.label_in(body.x, y, body.w, &st.said, &F8X13, t.warn);
+        y += F8X13.height as i32 + 4;
+    }
     if let Some(q) = &m.queue {
         // The queue's band (its controls) on the Queue only; the newest
         // change in one line on both; then the page the column chose.
@@ -908,38 +938,46 @@ fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
         st.ctl = Some(if q.auto { "auto off".into() } else { "auto on".into() });
     }
     y += lh + 4;
-    // Promotions, newest first: each machine's confirmation that the values
-    // reached it.
-    let proms: Vec<&RunRow> = q.runs.iter().filter(|r| r.kind == "promote").rev().take(3).collect();
+    // Promotions, newest first, a line each. The newest approved one shows
+    // each machine's confirmation that its values reached it. A failure
+    // older than an approved promotion is history, not an alarm: the cause
+    // was met and a later promotion landed (r0009 failed on the
+    // Tactics::default() test LR 119 fixed; r0019 landed after).
+    let proms: Vec<&RunRow> = q.runs.iter().filter(|r| r.kind == "promote").rev().collect();
+    let last_ok = proms.iter().find(|r| r.status == "approved").map(|r| r.id.clone());
     if !proms.is_empty() {
-        ui.label(at.x, y, "Promotions, and the machines that have their values", &F8X13, t.ink);
+        ui.label(at.x, y, "Promotions (newest first)", &F8X13, t.ink);
         y += lh;
-        let hw = F8X13.measure("saskatchewan  ") as i32;
-        for r in proms {
-            if y + lh > at.bottom() {
-                return;
-            }
+        for r in proms.iter().take(4) {
+            let superseded = r.status == "failed" && last_ok.as_ref().map(|ok| ok.as_str() > r.id.as_str()).unwrap_or(false);
             let c = match r.status.as_str() {
                 "approved" => t.up,
+                "failed" if superseded => t.dim,
                 "failed" => t.alarm,
-                _ => t.dim,
+                _ => t.warn,
             };
-            let who = if r.by == "auto" { " (auto)" } else { "" };
-            ui.label_in(at.x, y, at.w, &format!("{}{}  {}  {}: {}", r.id, who, r.candidate, r.status, r.detail), &F8X13, c);
+            let who = match r.by.as_str() { "auto" => " (auto)", "now" => " (do it now)", _ => "" };
+            let detail = if superseded { format!("{}; superseded by {}", r.detail, last_ok.clone().unwrap_or_default()) } else { r.detail.clone() };
+            ui.label_in(at.x, y, at.w, &format!("{}{}  {}  {}: {}", r.id, who, r.candidate, r.status, detail), &F8X13, c);
             y += lh;
-            for (host, state) in &r.hosts {
-                if y + lh > at.bottom() {
-                    return;
+            if Some(&r.id) == last_ok.as_ref() && !r.hosts.is_empty() {
+                // The machines on one line: ok where the build has the values.
+                let mut x = at.x + 16;
+                for (host, state) in &r.hosts {
+                    let ok = state.starts_with("confirmed");
+                    let bad = state.starts_with("differs") || state.contains("failed");
+                    let mark = if ok { "ok" } else if bad { "!!" } else { ".." };
+                    let col = if ok { t.up } else if bad { t.alarm } else { t.dim };
+                    x = ui.label(x, y, mark, &F8X13, col) + 4;
+                    x = ui.label(x, y, host, &F8X13, t.ink) + 14;
+                    if x > at.right() - 120 {
+                        break;
+                    }
                 }
-                let ok = state.starts_with("confirmed");
-                let bad = state.starts_with("differs") || state.contains("failed");
-                ui.label(at.x + 16, y, if ok { "ok" } else if bad { "!!" } else { ".." }, &F8X13, if ok { t.up } else if bad { t.alarm } else { t.dim });
-                ui.label(at.x + 44, y, host, &F8X13, t.ink);
-                ui.label_in(at.x + 44 + hw, y, at.w - 44 - hw, state, &F8X13, if ok { t.up } else if bad { t.alarm } else { t.dim });
                 y += lh;
             }
         }
-        y += 6;
+        y += 4;
     }
     let cands: Vec<&(String, String, String)> = q.progress.iter().filter(|p| p.1 == "candidate").collect();
     if cands.is_empty() {
@@ -948,59 +986,84 @@ fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     }
     let first = cands.first().map(|p| p.0.as_str()).unwrap_or("");
     let since = if first.len() >= 16 { first[..16].replace('T', " ") } else { first.to_string() };
-    let state = |id: &str| q.current.iter().find(|(k, _, _)| k == id).map(|(_, c, at)| (*c, at.clone()));
-    let is_promoted = |id: &str| q.runs.iter().any(|r| r.kind == "promote" && r.status == "approved" && r.candidate.rsplit('/').next() == Some(id));
-    let ids: Vec<&str> = cands.iter().map(|p| p.2.split_whitespace().next().unwrap_or("")).collect();
-    let n_promoted = ids.iter().filter(|id| is_promoted(id)).count();
-    let n_current = ids.iter().filter(|id| !is_promoted(id) && state(id).map(|s| s.0).unwrap_or(false)).count();
-    ui.label_in(
-        at.x,
-        y,
-        at.w,
-        &format!(
-            "{} candidate(s) since {}, newest first: {} promoted, {} current, {} on older defaults. {}",
-            cands.len(),
-            since,
-            n_promoted,
-            n_current,
-            cands.len() - n_current - n_promoted,
-            if q.auto { "The strongest current one promotes itself." } else { "A candidate is promoted from Runs (promote)." }
-        ),
-        &F8X13,
-        t.ink,
+    // Each candidate's standing: promoted (it is the defaults), current (read
+    // on today's defaults: it may promote itself), older (read before a
+    // promotion moved the defaults: auto mode reads the strongest again).
+    let standing = |id: &str| -> (u8, String) {
+        if let Some(r) = q.runs.iter().find(|r| r.kind == "promote" && r.status == "approved" && r.candidate.rsplit('/').next() == Some(id)) {
+            return (1, format!("promoted ({})", r.id));
+        }
+        match q.current.iter().find(|(k, _, _)| k == id) {
+            Some((_, true, _)) => (2, "current".to_string()),
+            Some((_, false, at)) => (3, format!("older ({})", if at.is_empty() { "?" } else { at })),
+            None => (3, "not read".to_string()),
+        }
+    };
+    let rows: Vec<(&(String, String, String), u8, String)> = cands
+        .iter()
+        .rev()
+        .map(|p| {
+            let id = p.2.split_whitespace().next().unwrap_or("");
+            let (k, tag) = standing(id);
+            (*p, k, tag)
+        })
+        .collect();
+    let count = |k: u8| rows.iter().filter(|r| r.1 == k).count();
+    // The filter, by kind: keys with their counts.
+    let filters: [(u8, String); 4] = [
+        (0, format!("All {}", rows.len())),
+        (1, format!("Promoted {}", count(1))),
+        (2, format!("Current {}", count(2))),
+        (3, format!("Older {}", count(3))),
+    ];
+    let mut fx = at.x;
+    for (k, label) in &filters {
+        let w = F8X13.measure(label) as i32 + 26;
+        let r = rect(fx, y - 3, w, 22);
+        let on = st.cand_filter == *k;
+        if t.metal {
+            ui.c.metal(r.x, r.y, r.w, r.h, if on { crate::draw::Finish::Pressed } else { crate::draw::Finish::Button }, 6);
+            ui.label(r.x + 13, r.y + 4 + if on { 1 } else { 0 }, label, &F8X13, t.engrave);
+        } else {
+            ui.panel(r, if on { t.tile } else { t.panel });
+            ui.outline(r, if on { t.accent } else { t.line });
+            ui.label(r.x + 13, r.y + 4, label, &F8X13, if on { t.ink } else { t.dim });
+        }
+        if ui.button_hit(r) {
+            st.cand_filter = *k;
+            st.cand_off = 0;
+        }
+        fx += w + 6;
+    }
+    let note = format!(
+        "since {}, newest first. {}",
+        since,
+        if q.auto { "The strongest current one promotes itself; with none current, the strongest older ones are read again." } else { "A candidate is promoted from Runs (promote)." }
     );
-    y += lh + 4;
-    // Columns: when; the trial and its two reads; what it moves.
+    ui.label_in(fx + 8, y, at.right() - fx - 8, &note, &F8X13, t.dim);
+    y += lh + 6;
+    let shown: Vec<&(&(String, String, String), u8, String)> = rows.iter().filter(|r| st.cand_filter == 0 || r.1 == st.cand_filter).collect();
+    // Columns: when; the trial and its two reads; its standing; what it moves.
     let when_w = F8X13.measure("10-28 00:00  ") as i32;
     let head_w = F8X13.measure("w0000  +0.00  +0.00   ") as i32;
     let state_w = F8X13.measure("older (8f852ac)  ") as i32;
-    for (when, _kind, text) in cands.iter().rev().map(|p| (&p.0, &p.1, &p.2)) {
-        if y + lh > at.bottom() {
-            break;
-        }
+    let box_ = rect(at.x, y, at.w, at.bottom() - y);
+    let mut off = st.cand_off;
+    let (area, first_row, fit) = ui.scroll_list(box_, shown.len(), lh, &mut off);
+    st.cand_off = off;
+    let mut y = area.y;
+    for ((when, _kind, text), k, tag) in shown.iter().skip(first_row).take(fit).map(|r| (r.0, r.1, &r.2)) {
         // "w0024 passed both held-out reads (+2.15, +2.61): castle_inside 8, ..."
         let (head, moved) = text.split_once(": ").unwrap_or((text.as_str(), ""));
         let id = head.split_whitespace().next().unwrap_or("");
-        let reads = head
-            .rsplit_once('(')
-            .map(|(_, r)| r.trim_end_matches(')').replace(',', " "))
-            .unwrap_or_default();
-        let w = if when.len() >= 16 { format!("{} {}", &when[5..10], &when[11..16]) } else { when.clone() };
-        // Current: read on today's defaults, so it may promote itself.
-        // Older: read before a promotion moved them; it waits to be read again.
-        // A candidate that is now the defaults says which promotion made it so.
-        let promoted = q.runs.iter().find(|r| r.kind == "promote" && r.status == "approved" && r.candidate.rsplit('/').next() == Some(id));
-        let (tag, cur) = match (promoted, state(id)) {
-            (Some(r), _) => (format!("promoted ({})", r.id), true),
-            (None, Some((true, _))) => ("current".to_string(), true),
-            (None, Some((false, at))) => (format!("older ({})", if at.is_empty() { "?" } else { &at }), false),
-            (None, None) => ("not read".to_string(), false),
-        };
-        ui.label(at.x, y, &w, &F8X13, t.dim);
-        ui.label(at.x + when_w, y, &format!("{}  {}", id, reads), &F8X13, if cur { t.up } else { t.dim });
-        ui.label(at.x + when_w + head_w, y, &tag, &F8X13, if cur { t.up } else { t.dim });
-        let mx = at.x + when_w + head_w + state_w;
-        ui.label_in(mx, y, at.right() - mx, moved, &F8X13, if cur { t.ink } else { t.dim });
+        let reads = head.rsplit_once('(').map(|(_, r)| r.trim_end_matches(')').replace(',', " ")).unwrap_or_default();
+        let w = if when.len() >= 16 { format!("{} {}", &when[5..10], &when[11..16]) } else { when.to_string() };
+        let cur = k != 3;
+        ui.label(area.x, y, &w, &F8X13, t.dim);
+        ui.label(area.x + when_w, y, &format!("{}  {}", id, reads), &F8X13, if cur { t.up } else { t.dim });
+        ui.label(area.x + when_w + head_w, y, tag, &F8X13, if cur { t.up } else { t.dim });
+        let mx = area.x + when_w + head_w + state_w;
+        ui.label_in(mx, y, area.right() - mx, moved, &F8X13, if cur { t.ink } else { t.dim });
         y += lh;
     }
 }
@@ -1358,6 +1421,46 @@ fn legend(ui: &mut Ui, r: Rect, max: f64, vertical: bool) {
 
 const LAYER_NAMES: [&str; 3] = ["senses -> layer 1", "layer 1 -> layer 2", "layer 2 -> scores"];
 
+/// What sense `i` of the 143 is (treadcore-brain senses.rs: the compass's
+/// 8 sectors of 11 channels, the body, the instruments, the periscope's
+/// contacts, the hints, the shell and air contacts).
+pub fn sense_name(i: usize) -> String {
+    const SECTOR: [&str; 8] = ["ahead", "ahead right", "right", "behind right", "behind", "behind left", "left", "ahead left"];
+    const CHANNEL: [&str; 11] = [
+        "hostile tank", "allied tank", "hostile pillbox", "neutral pillbox", "our pillbox", "depot to take",
+        "our depot", "shell coming", "ground stops us", "cover (forest)", "a friend's call",
+    ];
+    const REST: [&str; 55] = [
+        "armour", "shells", "fuel", "reloading", "speed", "in a boat", "pillboys out", "pillboy material",
+        "recon drones in bay", "interceptors in bay", "strike drones in bay", "longshots in bay",
+        "map x", "map y", "heading sine", "heading cosine", "nearest map edge", "hit just taken",
+        "enemy bearing sine", "enemy bearing cosine", "enemy strength", "enemy closing", "enemy pointing at us", "enemy in gun reach",
+        "thing to take sine", "thing to take cosine", "thing to take strength", "our depot sine", "our depot cosine", "our depot strength",
+        "call sine", "call cosine", "call strength", "call: help", "call: attack", "call: take",
+        "hint: economy", "hint: fortify", "hint: connect", "hint: expand", "hint: defend", "hint: the odds", "hint: base threatened",
+        "hint: errand sector", "hint: errand strength",
+        "shell impact sine", "shell impact cosine", "shell impact near", "shell lands soon", "inside the splash",
+        "drone sine", "drone cosine", "drone near", "drone diving (strike)", "our interceptor bubble",
+    ];
+    if i < 88 {
+        format!("compass {} ({}): {}", i / 11, SECTOR[i / 11], CHANNEL[i % 11])
+    } else {
+        REST.get(i - 88).map(|s| s.to_string()).unwrap_or_else(|| format!("sense {}", i))
+    }
+}
+
+/// What score `o` of the 47 is: a head's choice (the heads' sizes).
+pub fn score_name(o: usize, heads: &[(String, i64)]) -> String {
+    let mut at = 0usize;
+    for (h, n) in heads {
+        if o < at + *n as usize {
+            return format!("{} choice {} of {}", h, o - at + 1, n);
+        }
+        at += *n as usize;
+    }
+    format!("score {}", o)
+}
+
 /// The groups along one side of layer `i`'s matrix: the senses' groups for
 /// the first layer's inputs, the heads for the last layer's outputs, and the
 /// hidden units otherwise (as a group per 16).
@@ -1482,6 +1585,9 @@ fn draw_net(ui: &mut Ui, at: Rect, m: &Model) -> Option<usize> {
     let side = ((at.w - gap * 2) / 3).min(150).max(60);
     let mut x = at.x;
     let mut hover: Option<String> = None;
+    // Where each matrix was drawn: (x, y, w, h, rows, cols), for the marks
+    // the bars below put on them.
+    let mut boxes: Vec<(i32, i32, i32, i32, i32, i32)> = Vec::new();
     for (i, l) in net.layers.iter().enumerate() {
         let rows = l.cells.len().max(1) as i32;
         let cols = l.cells.first().map(|r| r.len()).unwrap_or(1).max(1) as i32;
@@ -1499,6 +1605,7 @@ fn draw_net(ui: &mut Ui, at: Rect, m: &Model) -> Option<usize> {
                 }
             }
         }
+        boxes.push((x, gy, gw, gh, rows, cols));
         let boxr = rect(x - 1, gy - 1, gw + 2, gh + 2);
         let hot = ui.is_hot(boxr);
         ui.outline(boxr, if hot { t.ink } else { t.line });
@@ -1538,20 +1645,94 @@ fn draw_net(ui: &mut Ui, at: Rect, m: &Model) -> Option<usize> {
     ui.label_in(at.x + 64 + lw + 26, y, at.right() - (at.x + 64 + lw + 26), &hint, &F8X13, t.dim);
     y += 9 + F8X13.height as i32 + 16;
 
-    // The 47 scores, split into the heads they belong to.
-    let total: i64 = net.heads.iter().map(|(_, c)| *c).sum::<i64>().max(1);
-    let mut hx = at.x;
-    let hb = at.w;
-    for (i, (name, c)) in net.heads.iter().enumerate() {
-        let hw = (hb as i64 * c / total) as i32;
-        let r = rect(hx, y, hw - 2, 18);
-        ui.panel(r, if i % 2 == 0 { mix(t.tile, t.accent, 60) } else { mix(t.tile, t.accent, 30) });
-        ui.label_in(r.x + 3, r.y + 3, r.w - 4, &format!("{} {}", name, c), &F8X13, t.ink);
-        hx += hw;
+    // Every sense and every score, a bar each (Paul, 28 October: "can we
+    // show each variable with a bar ... expand this for all values"). A
+    // sense's bar is how much the net listens to it: the sum of its column
+    // of matrix 1, in size. A score's is how much reaches it: its row of
+    // matrix 3. Pointing at a bar names it, says how it is transformed on
+    // its way, and marks its column or row on the matrix above.
+    let mut mark: Option<(usize, bool, usize)> = None; // (layer, column?, index)
+    let mut bar_hover: Option<String> = None;
+    let chart_h = 46;
+    let first = net.layers.first();
+    let last = net.layers.last();
+    let col_sums: Vec<f64> = first
+        .filter(|l| l.cells.len() as i64 == l.outputs && l.cells.first().map(|r| r.len() as i64) == Some(l.inputs))
+        .map(|l| (0..l.inputs as usize).map(|c| l.cells.iter().map(|r| r[c].abs()).sum()).collect())
+        .unwrap_or_default();
+    let row_sums: Vec<f64> = last
+        .filter(|l| l.cells.len() as i64 == l.outputs && l.cells.first().map(|r| r.len() as i64) == Some(l.inputs))
+        .map(|l| l.cells.iter().map(|r| r.iter().map(|v| v.abs()).sum()).collect())
+        .unwrap_or_default();
+    let hidden = net.sizes.get(1).copied().unwrap_or(0);
+    let hidden2 = net.sizes.get(net.sizes.len().saturating_sub(2)).copied().unwrap_or(0);
+    for (which, sums) in [(0usize, &col_sums), (1usize, &row_sums)] {
+        if sums.is_empty() || y + chart_h + 2 * F8X13.height as i32 > at.bottom() {
+            continue;
+        }
+        let title = if which == 0 {
+            format!("Every sense ({}), by how much the net listens to it: its column of matrix 1", sums.len())
+        } else {
+            format!("Every score ({}), by how much reaches it: its row of matrix 3", sums.len())
+        };
+        ui.label_in(at.x, y, at.w, &title, &F8X13, t.ink);
+        y += F8X13.height as i32 + 3;
+        let n = sums.len() as i32;
+        let bw = (at.w / n).max(2);
+        let top = sums.iter().cloned().fold(1e-9, f64::max);
+        let groups = if which == 0 { &net.input_groups } else { &net.output_groups };
+        let (px, py) = ui.pointer();
+        for (k, v) in sums.iter().enumerate() {
+            let bx = at.x + k as i32 * bw;
+            let h = ((chart_h - 2) as f64 * v / top).round() as i32;
+            let gi = groups.iter().position(|g| k as i64 >= g.1 && k as i64 <= g.2).unwrap_or(0);
+            let base = if gi % 2 == 0 { t.up } else { t.accent };
+            let hot = px >= bx && px < bx + bw && py >= y && py < y + chart_h;
+            ui.c.rect(bx, y + chart_h - h, (bw - 1).max(1), h.max(1), if hot { t.ink } else { base });
+            if hot {
+                mark = Some((if which == 0 { 0 } else { net.layers.len() - 1 }, which == 0, k));
+                bar_hover = Some(if which == 0 {
+                    format!(
+                        "sense {}: {}. Read by all {} units of layer 1 (column {} of matrix 1, sum of sizes {:.2}); each unit adds it, weighted, to the rest and clips below 0; layers 2 and 3 carry it to the 47 scores.",
+                        k, sense_name(k), hidden, k, v
+                    )
+                } else {
+                    format!(
+                        "score {}: {}. Row {} of matrix 3 (sum of sizes {:.2}): the {} units of layer 2, weighted and summed; the highest score of its head is what the net does.",
+                        k, score_name(k, &net.heads), k, v, hidden2
+                    )
+                });
+            }
+        }
+        ui.c.rect(at.x, y + chart_h, n * bw, 1, t.line);
+        // The groups' names under their bars.
+        for g in groups.iter() {
+            let gx = at.x + g.1 as i32 * bw;
+            let gw = ((g.2 - g.1 + 1) as i32 * bw).max(1);
+            ui.c.rect(gx, y + chart_h + 2, gw - 2, 2, t.dim);
+            ui.label_in(gx, y + chart_h + 5, gw - 2, &g.0, &F8X13, t.dim);
+        }
+        y += chart_h + 6 + F8X13.height as i32 + 6;
     }
-    y += 18 + 4;
-    ui.label_in(at.x, y, at.w, "the 47 scores, by what they choose: where to drive, where to shoot, when to fire the mortar ...", &F8X13, t.dim);
-    y += F8X13.height as i32 + 12;
+    // The bar under the pointer, marked on its matrix: a column for a sense,
+    // a row for a score.
+    if let Some((li, col, k)) = mark {
+        if let Some(&(bx, by, bw, bh, rows, cols)) = boxes.get(li) {
+            if col {
+                let mx = bx + (k as i32 * bw) / cols.max(1);
+                ui.c.rect(mx, by - 4, 1, bh + 8, t.warn);
+            } else {
+                let my = by + (k as i32 * bh) / rows.max(1);
+                ui.c.rect(bx - 4, my, bw + 8, 1, t.warn);
+            }
+        }
+    }
+    // What the bar under the pointer is, and how it is transformed.
+    if let Some(h) = &bar_hover {
+        let hy = y;
+        ui.label_in(at.x, hy, at.w, h, &F8X13, t.warn);
+        y += F8X13.height as i32 + 8;
+    }
 
     // How often it chooses what the scripted brain chose.
     if let Some(q) = &m.quality {

@@ -7,6 +7,7 @@
     python3 -I tools/plans/treadcore.py QDIR judged ID  (on_done of a judge job)
     python3 -I tools/plans/treadcore.py QDIR families   the families' verdicts so far
     python3 -I tools/plans/treadcore.py QDIR sync       every machine's ledger, one table
+    python3 -I tools/plans/treadcore.py QDIR now        do it now: sync, then promote or re-read
 
 tools/fleet-queue.py is the engine (jobs, lanes, the keeper, stops); this
 file is the plan it calls for treadcore. treadcore keeps only the work:
@@ -938,6 +939,63 @@ class Plan:
         self.flag("promote", "auto: %s asked to promote %s (held out %s)" % (rid, name, " and ".join("%+.2f" % h[0] for h in ev[name]["held"])),
                   key="auto:%s" % name, progress=True)
 
+    # ---- older candidates, read again on today's defaults ----------------------------
+    # Paul, 28 October: "why are some older, when it says promoted". A
+    # candidate is read against the defaults of its day; a promotion changes
+    # the defaults, and every other candidate is then evidence about a brain
+    # that is no longer the game's. It may promote itself only when read
+    # again on today's. With no current candidate, auto mode re-reads the
+    # strongest older ones (REREAD a time): each a new trial with its census
+    # and two held-out reads, on the newest commit.
+    REREAD = 3
+
+    def defaults_blob(self):
+        return self.state["commits"].get(self.sha(), {}).get("weights_rs") or self.weights_rs(self.sha())
+
+    def reread_older(self, force=False):
+        """Queue the strongest older candidates again; returns their names."""
+        if not force and not self.auto():
+            return []
+        ev = self.evidence()
+        if not force and any(v.get("current") for v in ev.values()):
+            return []
+        done = self.state.setdefault("reread", {})
+        blob = self.defaults_blob()
+        # One round a set of defaults, unless asked.
+        if not force and any(b == blob for b in done.values()):
+            return []
+        older = sorted(((k, v) for k, v in ev.items() if k.startswith(self.name + "/") and not v.get("current")
+                        and v["held_mean"] is not None and done.get(k) != blob),
+                       key=lambda kv: -kv[1]["held_mean"])[:self.REREAD]
+        for k, v in older:
+            self.adopt(v["weights"], "%s again on %s" % (k.split("/", 1)[1], self.short()))
+            done[k] = blob
+            self.flag("reread", "%s read again on today's defaults (%s): it was read on older ones" % (k, self.short()),
+                      key="reread:%s:%s" % (k, blob[:8]), progress=True)
+        return [k for k, _ in older]
+
+    def now(self):
+        """Do it now (Paul, 28 October: "it has a do it now button to sync and
+        push the values"): sync, then the strongest current candidate whose
+        families hold is promoted (tests and families on a branch, then
+        main); with none, the strongest older ones are read again."""
+        self.sync()
+        for r in self.runs():
+            if r["kind"] == "promote" and self.rstate(r["id"]).get("status") in ("new", "running", "prepared"):
+                print("a promotion is already under way: %s" % r["id"])
+                return
+        ev = {k: v for k, v in self.evidence().items() if v.get("current") and v["families"] == "holds" and v["held_mean"] is not None}
+        if ev:
+            name = max(ev, key=lambda k: ev[k]["held_mean"])
+            rid = self.new_run("promote", {"candidate": name}, "now")
+            self.keep()
+            print("%s: promoting %s (held out %s); in auto mode it is pushed to main when its tests and families pass"
+                  % (rid, name, " and ".join("%+.2f" % h[0] for h in ev[name]["held"])))
+            return
+        names = self.reread_older(force=True)
+        self.keep()
+        print("no candidate on today's defaults (%s) to promote; read again: %s" % (self.short(), ", ".join(names) or "none left"))
+
     def propagation(self):
         """For each approved promotion: has each machine built a commit whose
         defaults carry the promoted values? Read from the defaults.toml each
@@ -1713,6 +1771,7 @@ class Plan:
         self.adopt_runs()
         self.candidate_states()
         self.auto_promote()
+        self.reread_older()
         self.rotate()
         jobs = self.net_jobs()
         # What a person asked for comes before the standing search.
@@ -1771,6 +1830,11 @@ if __name__ == "__main__":
         # plans when its queue runs low or runs/ changes, and a prepared
         # promotion or a finished rotation run would otherwise wait for the
         # queue to drain. A file made and removed in runs/ is a change.
+        poke = os.path.join(p.q, "runs", ".sync-poke")
+        open(poke, "w").close()
+        os.remove(poke)
+    elif cmd == "now":
+        p.now()
         poke = os.path.join(p.q, "runs", ".sync-poke")
         open(poke, "w").close()
         os.remove(poke)

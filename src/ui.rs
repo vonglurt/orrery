@@ -421,6 +421,62 @@ impl<'c, 'p> Ui<'c, 'p> {
         clicked
     }
 
+    /// A list taller than its box (Paul, 28 October: "perhaps add a
+    /// scrollbar"). The wheel over it, or the bar on its right (pressed or
+    /// dragged), moves it; `offset` is the first row shown, the caller's to
+    /// keep. Returns the rows' area (the box less the bar), the first row and
+    /// how many fit.
+    pub fn scroll_list(&mut self, at: Rect, rows: usize, row_h: i32, offset: &mut usize) -> (Rect, usize, usize) {
+        let visible = (at.h / row_h.max(1)).max(1) as usize;
+        let max_off = rows.saturating_sub(visible);
+        if rows <= visible {
+            *offset = 0;
+            return (at, 0, visible);
+        }
+        let bar = rect(at.right() - 12, at.y, 12, at.h);
+        let area = rect(at.x, at.y, at.w - 16, at.h);
+        // The wheel: a trackpad sends pixels, a mouse lines; about a row a
+        // notch either way.
+        let dy = self.f.scroll.1;
+        if dy != 0 && self.is_hot(at) {
+            let step = ((dy.abs() + row_h / 2) / row_h.max(1)).max(1) as usize;
+            *offset = if dy > 0 { offset.saturating_sub(step) } else { (*offset + step).min(max_off) };
+        }
+        // The bar: a press puts the thumb's middle there, a drag keeps it
+        // under the pointer.
+        let id = id_of(bar, "\u{0}scroll");
+        for (p, b, _) in &self.f.presses {
+            if *b == Button::Left && bar.contains(*p) {
+                self.s.active = Some(id);
+            }
+        }
+        if self.s.active == Some(id) {
+            let frac = (self.s.pointer.1 - bar.y) as f64 / bar.h.max(1) as f64;
+            let want = (frac * rows as f64 - visible as f64 / 2.0).round().max(0.0) as usize;
+            *offset = want.min(max_off);
+            if !self.s.down {
+                self.s.active = None;
+            }
+        }
+        *offset = (*offset).min(max_off);
+        // Drawn: a sunk track, and a thumb the share of the list shown.
+        let t = self.t;
+        if t.metal {
+            self.c.well(bar.x, bar.y, bar.w, bar.h, t.tile, 5);
+        } else {
+            self.panel(bar, t.tile);
+            self.outline(bar, t.line);
+        }
+        let th = ((bar.h as f64 * visible as f64 / rows as f64) as i32).max(18).min(bar.h);
+        let ty = bar.y + ((bar.h - th) as f64 * *offset as f64 / max_off.max(1) as f64) as i32;
+        if t.metal {
+            self.c.metal(bar.x + 1, ty, bar.w - 2, th, crate::draw::Finish::Button, 5);
+        } else {
+            self.c.rect(bar.x + 2, ty, bar.w - 4, th, if self.s.active == Some(id) { t.accent } else { t.dim });
+        }
+        (area, *offset, visible)
+    }
+
     /// A status light: filled for up, hollow for missing, half for announced.
     ///
     /// DRAWN RATHER THAN TYPED. `font.rs` bakes five characters past Latin-1

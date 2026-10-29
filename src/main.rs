@@ -980,6 +980,11 @@ fn gui_loop<S: surface::Surface>(
                     training_state.page = 0;
                     training_state.arm_stop = true;
                 }
+                Cmd::ArmNow => {
+                    view = nav::View::Results;
+                    training_state.page = 5;
+                    training_state.arm_now = true;
+                }
                 Cmd::ArmShutdown => {
                     view = nav::View::Queue;
                     training_state.page = 0;

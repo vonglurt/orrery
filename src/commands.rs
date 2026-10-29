@@ -31,6 +31,8 @@ pub enum Cmd {
     ArmStop,
     /// The Queue's button, armed: Shut the fleet down.
     ArmShutdown,
+    /// The Results' button, armed: Do it now (sync, promote, push).
+    ArmNow,
     /// A run asked for, as the Runs page's buttons ask.
     Run(&'static str),
     /// The Machines view's, on the selected machine.
@@ -83,6 +85,7 @@ pub const MENU: &[(&str, &str, &str, Cmd)] = &[
     ("Lab", "Power...", "", Cmd::LabKey('p', false)),
     // ---- the fleet's queue
     ("Fleet", "Sync Now", "", Cmd::Queue("sync")),
+    ("Fleet", "Do It Now: Sync, Promote, Push...", "", Cmd::ArmNow),
     ("Fleet", "Start the Queue", "", Cmd::Queue("ensure")),
     ("Fleet", "Stop Adding", "", Cmd::Queue("stop-adding")),
     ("Fleet", "Resume Adding", "", Cmd::Queue("resume-adding")),
