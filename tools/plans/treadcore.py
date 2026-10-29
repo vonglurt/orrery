@@ -1605,6 +1605,15 @@ class Plan:
         st["status"] = "approved"
         st["detail"] = "on main at %s" % st["commit"][:7]
         st["approved"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # A micro version (Paul, 28 October: "essentially creating micro
+        # versions of this git submission. its part of the program"): an
+        # annotated tag brain-RID on the promotion's commit, pushed with it.
+        # Never v*: a v tag starts the packages workflow, a release only Paul
+        # asks for.
+        tag = self.micro_tag(rid, st)
+        if tag:
+            st["tag"] = tag
+            st["detail"] += ", tagged %s" % tag
         self.rsave(rid, st)
         # Every candidate's families again, on the new defaults; and the
         # commit is read anew, so this pass's prep jobs build it everywhere.
@@ -1613,6 +1622,20 @@ class Plan:
         self.flag("promote", "promotion %s approved%s: %s is main at %s; every machine builds it next" % (
             rid, " by auto mode" if self.auto() else "", st.get("candidate"), st["commit"][:7]), key="approved:%s" % rid, progress=True)
         return st
+
+    def micro_tag(self, rid, st):
+        tag = "brain-%s" % rid
+        remote, _ = self.push_target()
+        changed = [c.strip() for c in st.get("changed", []) if not c.strip().startswith("Tactics::default()")]
+        ev = st.get("evidence", {})
+        held = " and ".join("%+.2f" % h[0] for h in ev.get("held", []))
+        msg = "%s: %s as the brain's defaults\n\n%s\n\nheld out %s; families %s; queue %s, run %s, %s" % (
+            tag, st.get("candidate"), "\n".join(changed), held, ev.get("families", "?"), self.name, rid, time.strftime("%Y-%m-%dT%H:%M:%S"))
+        if run(["git", "-C", self.tc, "rev-parse", "-q", "--verify", "refs/tags/" + tag]).returncode != 0:
+            if run(["git", "-C", self.tc, "tag", "-a", tag, "-m", msg, st["commit"]]).returncode != 0:
+                return ""
+        r = run(["git", "-C", self.tc, "push", "-q", remote, "refs/tags/%s" % tag])
+        return tag if r.returncode == 0 else ""
 
     def runs_status(self):
         out = []
@@ -1833,6 +1856,18 @@ if __name__ == "__main__":
         poke = os.path.join(p.q, "runs", ".sync-poke")
         open(poke, "w").close()
         os.remove(poke)
+    elif cmd == "tag":
+        # tag RID: an approved promotion's micro version, made now (for one
+        # approved before tags were made).
+        st = p.rstate(sys.argv[3])
+        if st.get("status") != "approved":
+            sys.exit("%s is not an approved promotion" % sys.argv[3])
+        tag = p.micro_tag(sys.argv[3], st)
+        if tag:
+            st["tag"] = tag
+            p.rsave(sys.argv[3], st)
+            p.keep()
+        print(tag or "not tagged")
     elif cmd == "now":
         p.now()
         poke = os.path.join(p.q, "runs", ".sync-poke")
