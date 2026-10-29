@@ -1560,9 +1560,25 @@ class Plan:
                        "vars": changed_vars(st["changed"])})
         elif st["job"] in self.ids("failed", "stopped"):
             st["status"] = "failed"
-            st["why"] = "the tests or a family failed: see logs/%s.log" % st["job"]
+            st["why"] = self.promote_failure(st["job"])
         self.rsave(rid, st)
         return []
+
+    def promote_failure(self, jid):
+        """Which step of a promotion failed, read from its log: the brain's
+        tests (and the first that failed), a family under its floor, or the
+        job itself."""
+        try:
+            log = open(os.path.join(self.q, "logs", jid + ".log")).read()
+        except OSError:
+            log = ""
+        if "the tests failed" in log:
+            m = re.search(r"^(\S+) --- FAILED", log, re.M)
+            return "the brain's tests failed%s: see logs/%s.log" % (" (%s)" % m.group(1) if m else "", jid)
+        if "a family" in log and "under" in log:
+            m = re.search(r"^family (\S+).*under", log, re.M)
+            return "a family fell under its floor%s: see logs/%s.log" % (" (%s)" % m.group(1) if m else "", jid)
+        return "the promotion job failed: see logs/%s.log" % jid
 
     def approve(self, rid):
         """Paul's word: the prepared branch becomes main (a fast-forward), so
@@ -1856,6 +1872,14 @@ if __name__ == "__main__":
         poke = os.path.join(p.q, "runs", ".sync-poke")
         open(poke, "w").close()
         os.remove(poke)
+    elif cmd == "why":
+        # why RID: a failed promotion's reason, read again from its log.
+        st = p.rstate(sys.argv[3])
+        if st.get("status") == "failed" and st.get("job"):
+            st["why"] = p.promote_failure(st["job"])
+            p.rsave(sys.argv[3], st)
+            p.keep()
+        print(st.get("why", st.get("status")))
     elif cmd == "tag":
         # tag RID: an approved promotion's micro version, made now (for one
         # approved before tags were made).
