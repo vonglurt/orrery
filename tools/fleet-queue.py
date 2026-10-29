@@ -967,6 +967,11 @@ def health(q):
                 else "nothing found in %d" % s["since_find"])
         said = "%d trials on today's defaults, %d different (%d repeats not asked); %s" % (
             s.get("reads", 0), s.get("distinct", 0), s.get("repeats", 0), last)
+        q_ = s.get("sequential") or {}
+        if q_:
+            said += "; read on until decided: %d reading, %d to read on, %d dropped, %d passed to the held-out reads%s" % (
+                q_.get("reading", 0), q_.get("read on", 0), q_.get("dropped", 0), q_.get("passed", 0),
+                ", %d seeds a decision" % q_["seeds_a_decision"] if q_.get("seeds_a_decision") else "")
         stall = s.get("stall", 150)
         if s.get("stalled") and s.get("reads", 0) - s.get("widened_at", s.get("reads", 0)) >= 3 * stall:
             check("warn", "search", said + ": dry %d trials since it widened, the next gain wants a change to the brain itself"

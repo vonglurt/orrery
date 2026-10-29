@@ -25,7 +25,7 @@ import sys
 q = sys.argv[1]
 GAME = re.compile(r"^seed \S+ on \S+: trial team \d+, over")
 METER = re.compile(r"^brain_census: trial .*meter: (\d+) seat-ticks, (\d+) thinks, (\d+) moves")
-KIND = {"w": "weight trial", "h": "held-out read", "j": "net judge"}
+KIND = {"w": "weight trial", "e": "read on", "h": "held-out read", "j": "net judge"}
 
 by = collections.defaultdict(lambda: [0, 0, 0, 0, 0])  # kind -> logs, games, seat-ticks, thinks, moves
 for f in glob.glob(os.path.join(q, "results", "*", "**", "g-*.log"), recursive=True):

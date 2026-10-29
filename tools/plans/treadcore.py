@@ -460,12 +460,12 @@ class Plan:
         if not w or not defaults or not self.cpu_ready() or n <= 0:
             return []
         jobs = []
-        # Held-out reads first, for trials that passed and have not been read.
-        for d in self.census_dirs():
-            jid = d.rstrip("/").split(os.sep)[-2]
-            if not jid.startswith("w") or jid in self.state["held_read"] or not self.passes(d):
+        seq = self.sequential()
+        # Held-out reads first, for trials the sequential read passed.
+        for jid, v in sorted(seq.items()):
+            if v["status"] != "passed" or jid in self.state["held_read"]:
                 continue
-            trial = open(os.path.join(d, "trial.weights")).read()
+            trial = v["text"]
             for k in range(2):
                 hid = "h%04d" % self.state["held_n"]
                 seed0 = w["held_seed0"] + 200000 * self.state["held_n"]
@@ -474,10 +474,17 @@ class Plan:
                              "needs": "cpu", "after_host": self.after_host(), "cmd": self.census_cmd(trial, w["held_seeds"], seed0, hid),
                              "fetch": "%s/out/%s" % (self.home, hid), "timeout_s": 6 * 3600})
             self.state["held_read"].append(jid)
+        # Then the reads on, the most promising first: a test begun is
+        # finished before most new ones begin (Fishtest's way). A third of
+        # the room is kept for new trials, so a backlog of reads on (the
+        # 1,100 trials read before this rule, say) does not stop the search.
+        room = n - len(jobs)
+        jobs += self.read_on_jobs(seq, room - room // 3, w)
         # Then new trials from the fit.
         want = n - len(jobs)
         if want > 0:
             s = self.search(defaults)
+            s["sequential"] = self.seq_counts(seq)
             g = self.state["gen"]
             out = os.path.join(self.pd, "gen%d" % g)
             shutil.rmtree(out, ignore_errors=True)
@@ -501,27 +508,22 @@ class Plan:
                     break
                 text = open(f).read()
                 key = self.trial_key(text)
-                # Once a generation whatever it is: suggest.py cuts a read
-                # again's name at 60 letters, and two of them can be one file.
-                if key in now:
+                # suggest.py's reads again are the sequential read's to make
+                # (read_on_jobs, pooled with the first): not new trials.
+                name = os.path.basename(f)
+                if name.startswith("again-") or key in now:
                     continue
                 now.add(key)
-                # A trial once on today's defaults, and a read again (successive
-                # halving's) once more. suggest.py sees only what has been read, so
-                # each generation, five minutes apart, asked again for what was
-                # still queued: since w0300, 721 trials and 310 different ones,
-                # one of them read 77 times (29 October).
+                # A trial once on today's defaults. suggest.py sees only what
+                # has been read, so each generation, five minutes apart, asked
+                # again for what was still queued: since w0300, 721 trials and
+                # 310 different ones, one of them read 77 times (29 October).
                 # The fit's best, which moves by a hair a generation: again
                 # once there are 20 new reads to have moved it.
-                name = os.path.basename(f)
-                again = name.startswith("again-")
-                if (s["tried"].get(key) and not again) or (again and key in s["agains"]) or (
-                        name.startswith("best") and s["reads"] < s.get("best_at", -99) + 20):
+                if s["tried"].get(key) or (name.startswith("best") and s["reads"] < s.get("best_at", -99) + 20):
                     s["repeats"] = s.get("repeats", 0) + 1
                     continue
                 s["tried"][key] = s["tried"].get(key, 0) + 1
-                if again:
-                    s["agains"].append(key)
                 picked.append((f, text))
             if any(os.path.basename(f).startswith("best") for f, _ in picked):
                 s["best_at"] = s["reads"]
@@ -561,7 +563,7 @@ class Plan:
         trials = [(d, d.rstrip("/").split(os.sep)[-2]) for d in self.census_dirs()]
         trials = [(d, jid) for d, jid in trials if re.match(r"w\d+$", jid) and self.same_defaults(self.census_commit(d))]
         if not s or s.get("defaults") != fp:
-            s = {"defaults": fp, "tried": {}, "agains": [], "repeats": 0}
+            s = {"defaults": fp, "tried": {}, "repeats": 0}
             texts = [open(os.path.join(d, "trial.weights")).read() for d, _ in trials if os.path.exists(os.path.join(d, "trial.weights"))]
             for f in glob.glob(os.path.join(self.q, "queue", "w*.json")) + glob.glob(os.path.join(self.q, "running", "*", "w*.json")):
                 m = re.search(r"echo (\S+) \| base64 -d", load(f, {}).get("cmd", ""))
@@ -587,7 +589,7 @@ class Plan:
 
     def search_note(self, s):
         """plan/search.json, for fleet-queue.py health and the Settings page."""
-        note = {k: v for k, v in s.items() if k not in ("tried", "agains")}
+        note = {k: v for k, v in s.items() if k != "tried"}
         note.update({"distinct": len(s["tried"]), "stall": self.STALL, "checked": time.strftime("%Y-%m-%dT%H:%M:%S")})
         save(os.path.join(self.pd, "search.json"), note)
 
@@ -631,6 +633,128 @@ class Plan:
                     fh.write("# orrery: wide, past the fit's bound (the search stalled)\n" + "\n".join(lines) + "\n")
                 files.append(f)
         return files
+
+    # ---- the sequential read -----------------------------------------------------------
+    # Fishtest's way, in seeds: a test begun is read on until it is decided,
+    # pooled. At 55 seeds a census is good to +/-0.66 a seat (a seed swings
+    # 4.9), so a trial truly +0.5 above passed 11 times in 100, and a trial
+    # no better passed 2 in 100: of 1,000 trials after w0034 every one that
+    # passed was noise, and each cost two held-out reads of 400 seeds. Each
+    # stage: (seeds read by then, read on at z past, pass at z past). Against
+    # one fixed read of 55, simulated with the measured noise and a fleet of
+    # mostly no-better trials: 40% more real finds a seed, a quarter of the
+    # false passes (29 October). The held-out reads still decide.
+    SEQ = ((1, 0.5, None), (2, 1.0, None), (4, 1.5, 2.6), (8, None, 2.0))
+
+    @staticmethod
+    def pool(dirs):
+        """The censuses of one trial pooled, by inverse variance: {"every":
+        (d, se, seeds), "below": a map more than two errors under}."""
+        every, maps = [], {}
+        for d in dirs:
+            try:
+                lines = open(os.path.join(d, "pooled.txt")).read().splitlines()
+            except OSError:
+                continue
+            for l in lines:
+                m = re.match(r"^(\S+(?: map)?)\s+([-+][\d.]+) \+/- ([\d.]+)(?: over\s+(\d+) seeds)?", l)
+                if not m or float(m.group(3)) <= 0:
+                    continue
+                row = (float(m.group(2)), float(m.group(3)), int(m.group(4) or 0))
+                (every.append(row) if m.group(1) == "every map" else maps.setdefault(m.group(1), []).append(row))
+
+        def comb(rows):
+            iw = sum(1 / se ** 2 for _, se, _ in rows)
+            return sum(d / se ** 2 for d, se, _ in rows) / iw, 1 / math.sqrt(iw), sum(n for _, _, n in rows)
+        if not every:
+            return None
+        below = any(dd < -2 * se for dd, se, _ in (comb(r) for r in maps.values()))
+        return {"every": comb(every), "below": below}
+
+    def sequential(self):
+        """{trial: {status, d, se, seeds, z, stage, text}} for every trial on
+        today's defaults: reading (a read of it queued or running), read on
+        (its stage says more), passed, or dropped. Its reads are its own
+        census and the jobs titled "read on N of TRIAL"."""
+        title, inflight = {}, set()
+        for f in glob.glob(os.path.join(self.q, "done", "*.json")):
+            m = re.match(r"read on \d+ of (w\d+)", load(f, {}).get("title", ""))
+            if m:
+                title[load(f, {})["id"]] = m.group(1)
+        for f in glob.glob(os.path.join(self.q, "queue", "*.json")) + glob.glob(os.path.join(self.q, "running", "*", "*.json")):
+            j = load(f, {})
+            m = re.match(r"read on \d+ of (w\d+)", j.get("title", ""))
+            if m or re.match(r"w\d+$", j.get("id", "")):
+                inflight.add(m.group(1) if m else j["id"])
+        reads = {}
+        for d in self.census_dirs():
+            jid = d.rstrip("/").split(os.sep)[-2]
+            if re.match(r"w\d+$", jid):
+                reads.setdefault(jid, []).insert(0, d)
+            elif jid in title:
+                reads.setdefault(title[jid], []).append(d)
+        base = self.cfg["weights"]["seeds"]
+        out = {}
+        for jid, ds in reads.items():
+            if not os.path.exists(os.path.join(ds[0], "trial.weights")) or not self.same_defaults(self.census_commit(ds[0])):
+                continue
+            p = self.pool(ds)
+            if not p:
+                continue
+            d, se, n = p["every"]
+            z = d / se
+            stage = max([i for i, s in enumerate(self.SEQ) if s[0] * base <= n] or [0])
+            _, keep, ok = self.SEQ[stage]
+            if jid in self.state["held_read"]:
+                status = "passed"
+            elif jid in inflight:
+                status = "reading"
+            elif ok is not None and z >= ok and not p["below"]:
+                status = "passed"
+            elif keep is None or z < keep:
+                # A map under blocks a pass, not a read on: eleven maps at 55
+                # seeds put one two errors under, by chance, a time in five.
+                status = "dropped"
+            else:
+                status = "read on"
+            out[jid] = {"status": status, "d": d, "se": se, "seeds": n, "z": z, "stage": stage,
+                        "text": open(os.path.join(ds[0], "trial.weights")).read()}
+        return out
+
+    def read_on_jobs(self, seq, room, w):
+        """The next stage's census for the trials that read on, highest z
+        first: as many seeds again as read so far, on fresh seeds (300M up,
+        clear of the trials', the held-out reads' and the rotation's)."""
+        jobs = []
+        for jid, v in sorted(seq.items(), key=lambda kv: -kv[1]["z"]):
+            if len(jobs) >= room:
+                break
+            if v["status"] != "read on":
+                continue
+            base = w["seeds"]
+            more = self.SEQ[v["stage"] + 1][0] * base - v["seeds"]
+            if more <= 0:
+                continue
+            k = self.state.get("read_on_n", 0)
+            self.state["read_on_n"] = k + 1
+            eid = "e%04d" % k
+            jobs.append({"id": eid, "kind": "weights",
+                         "title": "read on %d of %s (%d seeds more, z %+.2f on %d)" % (v["stage"] + 2, jid, more, v["z"], v["seeds"]),
+                         "needs": "cpu", "after_host": self.after_host(),
+                         "cmd": self.census_cmd(v["text"], more, 300000000 + 1000 * k, eid),
+                         "fetch": "%s/out/%s" % (self.home, eid), "timeout_s": 6 * 3600})
+        return jobs
+
+    @staticmethod
+    def seq_counts(seq):
+        """For plan/search.json: how many trials at each status, and the
+        seeds a decided trial took."""
+        out = {}
+        for v in seq.values():
+            out[v["status"]] = out.get(v["status"], 0) + 1
+        decided = [v["seeds"] for v in seq.values() if v["status"] in ("passed", "dropped")]
+        out["seeds_a_decision"] = round(sum(decided) / len(decided)) if decided else None
+        return out
 
     # ---- the families ------------------------------------------------------------------
     @staticmethod

@@ -261,6 +261,28 @@ the next 1,000 held out. Three causes, all fixed in the planner:
   three weights at a time, each a quarter to four times its default, the
   ones the fit is least sure of the likelier. A find narrows it again.
 
+**A trial is read on until it is decided (Fishtest's way).** At 55 seeds a
+census is good to ±0.66 a seat, because one seed swings by about 4.9. A
+trial truly +0.5 better passed 11 times in 100, and a trial no better
+passed 2 in 100. So every trial that passed after w0034 was noise, and each
+one cost two held-out reads of 400 seeds. Now each trial's reads are pooled
+(by inverse variance), and its stage decides what happens next:
+
+| Seeds read | Read on when z is at least | Passes when z is at least |
+|---|---|---|
+| 55 | 0.5 | — |
+| 110 | 1.0 | — |
+| 220 | 1.5 | 2.6 |
+| 440 | — | 2.0 |
+
+Each read on is a job `eNNNN` titled `read on N of wNNNN`, with as many
+fresh seeds again (300M up). The most promising go first, and they take
+up to two thirds of the room, so new trials still begin. A map more than
+two errors under blocks a pass but not a read on. suggest.py's reads again
+are no longer asked for: the read on replaces them. Simulated with the
+measured noise against one fixed read of 55, this gives 40% more real finds
+a seed and a quarter of the false passes. The held-out reads still decide.
+
 The planner writes `plan/search.json`, which is the **search** check in
 health. It turns amber once the search has been widened for 450 trials
 with nothing found. By then the next gain needs a change to the brain
