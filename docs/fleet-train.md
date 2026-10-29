@@ -283,6 +283,15 @@ are no longer asked for: the read on replaces them. Simulated with the
 measured noise against one fixed read of 55, this gives 40% more real finds
 a seed and a quarter of the false passes. The held-out reads still decide.
 
+**The two held-out reads decide together.** They are pooled into 800 seeds,
+and the trial passes when z is at least 3.0 (`HELD_Z`) and no map is two
+errors under. Before this, each read of 400 had to pass alone, at about
++0.55, and a trial truly +0.6 did that both times only one time in three.
+w1198 (+0.67 ± 0.19 pooled, z 3.5) and w1266 (+0.59 ± 0.16, z 3.7) each
+passed one read and were lost. A trial no better reaches z 3 one time in
+750 (the old rule: one in 2,000), and a trial +0.6 six times in ten. A
+candidate still has its families and the tests to pass before it promotes.
+
 The planner writes `plan/search.json`, which is the **search** check in
 health. It turns amber once the search has been widened for 450 trials
 with nothing found. By then the next gain needs a change to the brain

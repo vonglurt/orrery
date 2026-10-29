@@ -574,7 +574,7 @@ class Plan:
                 s["tried"][k] = s["tried"].get(k, 0) + 1
             self.state["search"] = s
         found = [int(jid[1:]) for jid, ds in self.held_pairs().items()
-                 if len(ds) == 2 and all(self.passes(d) and self.same_defaults(self.census_commit(d)) for d in ds)]
+                 if self.held_pass(ds) and all(self.same_defaults(self.census_commit(d)) for d in ds)]
         last = max(found) if found else None
         since = len([1 for _, jid in trials if last is None or int(jid[1:]) > last])
         s.update({"reads": len(trials), "last_find": "w%04d" % last if last is not None else None,
@@ -645,6 +645,20 @@ class Plan:
     # mostly no-better trials: 40% more real finds a seed, a quarter of the
     # false passes (29 October). The held-out reads still decide.
     SEQ = ((1, 0.5, None), (2, 1.0, None), (4, 1.5, 2.6), (8, None, 2.0))
+
+    # The held-out reads decide together: pooled, 800 seeds, z past HELD_Z and
+    # no map two errors under. Each read had to pass alone (d past two of its
+    # errors, about +0.55), and a trial truly +0.6 did that both times one
+    # time in three: w1198 (+0.67 +/- 0.19 pooled, z 3.5) and w1266 (+0.59 +/-
+    # 0.16, z 3.7) each passed one read and were lost (29 October). A trial no
+    # better reaches z 3 one time in 750, near the old rule's one in 2,000; a
+    # trial +0.6 does six times in ten.
+    HELD_Z = 3.0
+
+    def held_pass(self, ds):
+        """True when a trial's two held-out reads, pooled, pass."""
+        p = self.pool(ds) if len(ds) == 2 else None
+        return bool(p) and p["every"][1] > 0 and p["every"][0] / p["every"][1] >= self.HELD_Z and not p["below"]
 
     @staticmethod
     def pool(dirs):
@@ -790,7 +804,7 @@ class Plan:
         out = [("defaults@%s" % self.short(), "")]
         if f.get("queue", True):
             for jid, ds in sorted(self.held_pairs().items()):
-                if len(ds) == 2 and all(self.passes(d) for d in ds):
+                if self.held_pass(ds):
                     trial = glob.glob(os.path.join(self.q, "results", jid, self.home, "out", jid, "*", "trial.weights"))
                     if trial:
                         out.append(("%s/%s" % (self.name, jid), self.weights_set(open(trial[0]).read())))
@@ -1774,7 +1788,7 @@ class Plan:
         out = {}
         # This queue's: trials that passed both held-out reads.
         for jid, ds in self.held_pairs().items():
-            if len(ds) == 2 and all(self.passes(d) for d in ds):
+            if self.held_pass(ds):
                 tw = glob.glob(os.path.join(self.q, "results", jid, self.home, "out", jid, "*", "trial.weights"))
                 c = self.job_census(jid)
                 held = [self.job_census(d.rstrip("/").split(os.sep)[-2]) for d in ds]
@@ -2225,7 +2239,7 @@ class Plan:
         """Flags for what the fleet found: a trial past both held-out reads,
         and a candidate under a family's floor."""
         for jid, ds in self.held_pairs().items():
-            if len(ds) == 2 and all(self.passes(d) for d in ds):
+            if self.held_pass(ds):
                 c = self.job_census(jid)
                 held = [self.job_census(d.rstrip("/").split(os.sep)[-2]) for d in ds]
                 tw = glob.glob(os.path.join(self.q, "results", jid, self.home, "out", jid, "*", "trial.weights"))
