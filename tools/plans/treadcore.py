@@ -964,8 +964,12 @@ class Plan:
         # One round a set of defaults, unless asked.
         if not force and any(b == blob for b in done.values()):
             return []
+        # A promoted candidate is the defaults: read again it would be
+        # measured against itself.
+        promoted = {self.rstate(r["id"]).get("candidate") for r in self.runs()
+                    if r["kind"] == "promote" and self.rstate(r["id"]).get("status") == "approved"}
         older = sorted(((k, v) for k, v in ev.items() if k.startswith(self.name + "/") and not v.get("current")
-                        and v["held_mean"] is not None and done.get(k) != blob),
+                        and k not in promoted and v["held_mean"] is not None and done.get(k) != blob),
                        key=lambda kv: -kv[1]["held_mean"])[:self.REREAD]
         for k, v in older:
             self.adopt(v["weights"], "%s again on %s" % (k.split("/", 1)[1], self.short()))
@@ -1739,45 +1743,60 @@ class Plan:
         src = self.crucible_src()
         if not self.cuda or not os.path.exists(os.path.join(src, "src", "crucible.cu")):
             return []
-        opt = dict({"gens": 50, "pop": 2048, "eps": 128, "yard": 10}, **self.cfg.get("crucible", {}))
+        opt = dict({"gens": 50, "pop": 2048, "eps": 128, "yard": 10, "ahead": 6}, **self.cfg.get("crucible", {}))
         cr = self.state.setdefault("crucible", {})
-        live, done, bad = self.ids("queue", "running"), self.ids("done"), self.ids("failed", "stopped")
+        done, bad = self.ids("done"), self.ids("failed", "stopped")
+        # Each island keeps `ahead` segments queued, each after the one
+        # before (its state file is the last one's), so the GPU lane is not
+        # left idle between the keeper's plans.
         for h in self.cuda:
-            isl = cr.setdefault(h["name"], {"seg": 0, "job": None, "last": None, "failures": 0, "gens": 0})
-            j = isl.get("job")
-            if j and j in done:
-                isl.update({"seg": isl["seg"] + 1, "last": j, "job": None, "failures": 0, "gens": isl["gens"] + opt["gens"]})
-            elif j and j in bad:
-                isl.update({"job": None, "failures": isl["failures"] + 1})
-                if isl["failures"] >= 3:
-                    self.flag("crucible", "crucible on %s failed three segments in a row: see logs/%s.log" % (h["name"], j), key="crucible:%s:%s" % (h["name"], j))
+            isl = cr.setdefault(h["name"], {"seg": 0, "last": None, "failures": 0, "gens": 0})
+            isl.setdefault("queued", [isl["job"]] if isl.get("job") else [])
+            isl.setdefault("next", isl["seg"] + len(isl["queued"]))
+            isl.pop("job", None)
+            live = []
+            for j in isl["queued"]:
+                if j in done:
+                    isl.update({"seg": isl["seg"] + 1, "last": j, "failures": 0, "gens": isl["gens"] + opt["gens"]})
+                elif j in bad:
+                    isl["failures"] += 1
+                else:
+                    live.append(j)
+            isl["queued"] = live
+            if isl["failures"] >= 3:
+                self.flag("crucible", "crucible on %s failed three segments in a row: see its logs" % h["name"], key="crucible:%s:%d" % (h["name"], isl["seg"]))
         jobs = []
         for h in self.cuda:
             name, isl = h["name"], cr[h["name"]]
-            if isl.get("job") or isl["failures"] >= 3:
+            if isl["failures"] >= 3:
                 continue
-            jid = "x-%s-%04d" % (name, isl["seg"])
-            home = "%s/crucible" % self.home
-            send = [{"src": os.path.join(src, f), "dst": "~/%s/%s" % (home, f)} for f in ("src/crucible.cu", "Makefile")]
-            imports = []
-            for o, oi in cr.items():
-                if o != name and oi.get("last"):
-                    champ = os.path.join(self.q, "results", oi["last"], self.home, "out", oi["last"], "champ.bin")
-                    if os.path.exists(champ):
-                        send.append({"src": champ, "dst": "~/%s/in/%s.bin" % (home, o)})
-                        imports.append("$H/in/%s.bin" % o)
-            seed = 1000 + 97 * (sum(map(ord, name)) % 1000)
-            cmd = (
-                "set -e; H=~/%s; O=~/%s/out/%s; mkdir -p $O $H/in\n"
-                "cd $H && make -s NVCC=${NVCC:-/usr/local/cuda/bin/nvcc} >/dev/null 2>&1 || make NVCC=${NVCC:-/usr/local/cuda/bin/nvcc}\n"
-                "L=''; [ -f $H/island.state ] && L=\"--load $H/island.state\"\n"
-                "I='%s'\n"
-                "./crucible --pop %d --eps %d --gens %d --yard %d --seed %d $L ${I:+--import $I} "
-                "--save $H/island.state --export $O/champ.bin --out $O/gens.tsv 2>&1 | tee $O/console.txt | grep '^#'\n"
-            ) % (home, self.home, jid, ",".join(imports), opt["pop"], opt["eps"], opt["gens"], opt["yard"], seed)
-            jobs.append({"id": jid, "kind": "crucible", "title": "crucible island %s, segment %d" % (name, isl["seg"]),
-                         "needs": "host:" + name, "cmd": cmd, "send": send, "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 4 * 3600})
-            isl["job"] = jid
+            while len(isl["queued"]) < opt["ahead"]:
+                jid = "x-%s-%04d" % (name, isl["next"])
+                isl["next"] += 1
+                home = "%s/crucible" % self.home
+                send = [{"src": os.path.join(src, f), "dst": "~/%s/%s" % (home, f)} for f in ("src/crucible.cu", "Makefile")]
+                imports = []
+                for o, oi in cr.items():
+                    if o != name and oi.get("last"):
+                        champ = os.path.join(self.q, "results", oi["last"], self.home, "out", oi["last"], "champ.bin")
+                        if os.path.exists(champ):
+                            send.append({"src": champ, "dst": "~/%s/in/%s.bin" % (home, o)})
+                            imports.append("$H/in/%s.bin" % o)
+                seed = 1000 + 97 * (sum(map(ord, name)) % 1000)
+                cmd = (
+                    "set -e; H=~/%s; O=~/%s/out/%s; mkdir -p $O $H/in\n"
+                    "cd $H && make -s NVCC=${NVCC:-/usr/local/cuda/bin/nvcc} >/dev/null 2>&1 || make NVCC=${NVCC:-/usr/local/cuda/bin/nvcc}\n"
+                    "L=''; [ -f $H/island.state ] && L=\"--load $H/island.state\"\n"
+                    "I='%s'\n"
+                    "./crucible --pop %d --eps %d --gens %d --yard %d --seed %d $L ${I:+--import $I} "
+                    "--save $H/island.state --export $O/champ.bin --out $O/gens.tsv 2>&1 | tee $O/console.txt | grep '^#'\n"
+                ) % (home, self.home, jid, ",".join(imports), opt["pop"], opt["eps"], opt["gens"], opt["yard"], seed)
+                job = {"id": jid, "kind": "crucible", "title": "crucible island %s, segment %d" % (name, isl["next"] - 1),
+                       "needs": "host:" + name, "cmd": cmd, "send": send, "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 4 * 3600}
+                if isl["queued"]:
+                    job["after"] = [isl["queued"][-1]]
+                jobs.append(job)
+                isl["queued"].append(jid)
         self.crucible_view()
         return jobs
 
@@ -1796,7 +1815,7 @@ class Plan:
                 except OSError:
                     pass
             yard = [(int(r[0]) + 1, float(r[7])) for r in rows if len(r) > 9 and float(r[7]) >= 0]
-            out[name] = {"segments": isl["seg"], "running": isl.get("job"), "failures": isl["failures"],
+            out[name] = {"segments": isl["seg"], "running": (isl.get("queued") or [""])[0], "failures": isl["failures"],
                          "generations": max([int(r[0]) + 1 for r in rows] or [0]),
                          "yard": yard[-1] if yard else None, "yard_curve": yard[-40:],
                          "msteps": max([float(r[4]) / 1e6 for r in rows] or [0])}
