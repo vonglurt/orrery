@@ -2077,7 +2077,7 @@ class Plan:
         src = self.crucible_src()
         if not self.cuda or not os.path.exists(os.path.join(src, "src", "crucible.cu")):
             return []
-        opt = dict({"gens": 50, "pop": 2048, "eps": 128, "yard": 10, "ahead": 6, "lad": 0.2}, **self.cfg.get("crucible", {}))
+        opt = dict({"gens": 50, "pop": 2048, "eps": 128, "yard": 10, "ahead": 6, "lad": 0.2, "draw": -1.0}, **self.cfg.get("crucible", {}))
         if not os.path.exists(self.crucible_dir("ladder", "ladder.txt")):
             self.ladder_write()
         cr = self.state.setdefault("crucible", {})
@@ -2133,9 +2133,9 @@ class Plan:
                     # The milestones by name, oldest first, from their slots.
                     "rm -rf $H/rungs; mkdir -p $H/rungs; R=''\n"
                     "while IFS=\"$(printf '\\t')\" read -r s m; do if [ -n \"$m\" ]; then cp $H/ladder/$s $H/rungs/$m.bin; R=\"$R${R:+,}$H/rungs/$m.bin\"; fi; done < $H/ladder/ladder.txt\n"
-                    "./crucible --pop %d --eps %d --gens %d --yard %d --seed %d --lad %s $L ${I:+--import $I} ${R:+--ladder $R} "
+                    "./crucible --pop %d --eps %d --gens %d --yard %d --seed %d --lad %s --draw %s $L ${I:+--import $I} ${R:+--ladder $R} "
                     "--save $H/island.state --export $O/champ.bin --out $O/gens.tsv --exam $O/exam.tsv 2>&1 | tee $O/console.txt | grep '^#'\n"
-                ) % (home, self.home, jid, ",".join(imports), opt["pop"], opt["eps"], opt["gens"], opt["yard"], seed, opt["lad"])
+                ) % (home, self.home, jid, ",".join(imports), opt["pop"], opt["eps"], opt["gens"], opt["yard"], seed, opt["lad"], opt["draw"])
                 job = {"id": jid, "kind": "crucible", "title": "crucible island %s, segment %d" % (name, isl["next"] - 1),
                        "needs": "host:" + name, "cmd": cmd, "send": send, "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 4 * 3600}
                 if isl["queued"]:
