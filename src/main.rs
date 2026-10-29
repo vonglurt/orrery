@@ -303,7 +303,7 @@ fn main() {
                 jobs_answer(&format!("{} status", machines_cmd(&queue_ctl)))
             };
             Frame::Machines { doc, select: frame_select.clone() }
-        } else if ["training", "jobs", "queue", "results", "projects"].contains(&frame_view.as_str()) {
+        } else if ["training", "jobs", "queue", "results", "projects", "settings"].contains(&frame_view.as_str()) {
             // A saved document, or the training command's answer.
             let doc = if !frame_state.is_empty() {
                 std::fs::read_to_string(&frame_state).unwrap_or_else(|e| {
@@ -318,6 +318,7 @@ fn main() {
             let view = match frame_view.as_str() {
                 "results" => nav::View::Results,
                 "projects" => nav::View::Projects,
+                "settings" => nav::View::Settings,
                 _ => nav::View::Queue,
             };
             Frame::Training { doc, view }
@@ -695,7 +696,8 @@ fn write_frame(
                 let mut st = training::State {
                     zoom: std::env::var("ORRERY_FRAME_ZOOM").ok().and_then(|v| v.parse().ok()),
                     operator: std::env::var("ORRERY_FRAME_OPERATOR").is_ok(),
-                    // ORRERY_FRAME_PAGE=N draws the queue's page N (0 Fleet, 1 Runs, 2 Found, 3 Net, 4 Flags, 5 Candidates).
+                    // ORRERY_FRAME_PAGE=N draws the queue's page N (0 Fleet, 1 Runs, 2 Found, 3 Net, 4 Flags, 5 Candidates,
+                    // 6 Keeper, 7 Commits).
                     page: std::env::var("ORRERY_FRAME_PAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
                     ..training::State::default()
                 };
@@ -952,7 +954,11 @@ fn gui_loop<S: surface::Surface>(
                     }
                 }
                 Cmd::Page(p) => {
-                    view = if p <= 1 { nav::View::Queue } else { nav::View::Results };
+                    view = match p {
+                        0 | 1 => nav::View::Queue,
+                        6 | 7 => nav::View::Settings,
+                        _ => nav::View::Results,
+                    };
                     training_state.page = p;
                 }
                 Cmd::Grid => {
@@ -1158,12 +1164,20 @@ fn gui_loop<S: surface::Surface>(
                         });
                     }
                 }
-                (None, v @ (nav::View::Queue | nav::View::Results)) => {
+                (None, v @ (nav::View::Queue | nav::View::Results | nav::View::Settings)) => {
                     let text = jobs_doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     training_state.said = queue_said.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     let go = training::draw(&mut u, &training::Model::parse(&text, &jobs_source), &mut training_state, v);
                     // A control runs on a thread: the queue's commands return at
                     // once, but a window that waits on a process stops drawing.
+                    // A commit clicked on the Commits page: its page on GitHub,
+                    // in the browser this machine opens links with.
+                    if let Some(url) = training_state.open.take() {
+                        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+                        if url.starts_with("https://") {
+                            let _ = std::process::Command::new(opener).arg(&url).spawn();
+                        }
+                    }
                     if let Some(verb) = training_state.ctl.take() {
                         let cmd = format!("{} {}", queue_ctl, verb);
                         let said = Arc::clone(&queue_said);

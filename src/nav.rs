@@ -14,6 +14,13 @@
 //! (Projects), the work is queued and runs (Queue), what it found is read and
 //! promoted (Results), and anything can be watched or touched (Watch). Each
 //! chapter's pages are keys in the steel column on the left.
+//!
+//! SETTINGS IS THE SIXTH, AND OUTSIDE THE STORY (Paul, 28 October: "make
+//! sure orrery gui has a settings screen to observe that the keeper and all
+//! are running like they should"). The story is the work; Settings is the
+//! machinery under it -- the keeper, its code, its planning, each commit the
+//! fleet builds -- which is right when nobody has to look, and has a key so
+//! anybody can.
 
 use crate::font::F8X13;
 use crate::surface::Sym;
@@ -40,6 +47,10 @@ pub enum View {
     /// The machines' terminals in a grid, each a resumable tmux session
     /// (sessions.rs).
     Sessions,
+    /// Is it running as it should: the keeper's checks and its buttons, and
+    /// the commits the fleet builds with the values each changed
+    /// (training.rs).
+    Settings,
 }
 
 impl Default for View {
@@ -60,11 +71,13 @@ impl View {
             View::Results => "Results",
             View::Lab => "Lab",
             View::Sessions => "Sessions",
+            View::Settings => "Settings",
         }
     }
 
     /// Every view, chapter by chapter.
-    pub const ALL: &'static [View] = &[View::Machines, View::Media, View::Projects, View::Queue, View::Results, View::Lab, View::Sessions];
+    pub const ALL: &'static [View] =
+        &[View::Machines, View::Media, View::Projects, View::Queue, View::Results, View::Lab, View::Sessions, View::Settings];
 
     pub fn chapter(&self) -> Chapter {
         match self {
@@ -73,6 +86,7 @@ impl View {
             View::Queue => Chapter::Queue,
             View::Results => Chapter::Results,
             View::Lab | View::Sessions => Chapter::Watch,
+            View::Settings => Chapter::Settings,
         }
     }
 }
@@ -85,10 +99,12 @@ pub enum Chapter {
     Queue,
     Results,
     Watch,
+    Settings,
 }
 
 impl Chapter {
-    pub const ALL: &'static [Chapter] = &[Chapter::Machines, Chapter::Projects, Chapter::Queue, Chapter::Results, Chapter::Watch];
+    pub const ALL: &'static [Chapter] =
+        &[Chapter::Machines, Chapter::Projects, Chapter::Queue, Chapter::Results, Chapter::Watch, Chapter::Settings];
 
     pub fn title(&self) -> &'static str {
         match self {
@@ -97,6 +113,7 @@ impl Chapter {
             Chapter::Queue => "Queue",
             Chapter::Results => "Results",
             Chapter::Watch => "Watch",
+            Chapter::Settings => "Settings",
         }
     }
 
@@ -108,6 +125,7 @@ impl Chapter {
             Chapter::Queue => &[View::Queue],
             Chapter::Results => &[View::Results],
             Chapter::Watch => &[View::Lab, View::Sessions],
+            Chapter::Settings => &[View::Settings],
         }
     }
 
@@ -119,6 +137,7 @@ impl Chapter {
             Chapter::Queue => &["3. The work runs:", "each machine's", "job, and the", "runs asked for."],
             Chapter::Results => &["4. What it found:", "candidates", "promote", "themselves."],
             Chapter::Watch => &["5. Look in: the", "room, and every", "terminal."],
+            Chapter::Settings => &["Under it all: the", "keeper, its code,", "and each commit", "the fleet builds."],
         }
     }
 }
@@ -371,11 +390,11 @@ mod tests {
             .map(|c| F8X13.measure(c.title()) as i32 + 22)
             .sum();
         assert_eq!(width_for(false), sum);
-        // Five views since Machines (28 October): about 370 pixels, still a
-        // strip beside the fleet's name at 960 wide; in metal, with a lamp
-        // and a digit on each key, under 500.
-        assert!(width_for(false) > 0 && width_for(false) < 400, "the strip is not a strip");
-        assert!(width_for(true) < 500, "the metal strip is {}", width_for(true));
+        // Six chapters since Settings (28 October): under 500 pixels, still
+        // a strip beside the fleet's name at 960 wide; in metal, with a lamp
+        // and a digit on each key, under 600.
+        assert!(width_for(false) > 0 && width_for(false) < 500, "the strip is {}", width_for(false));
+        assert!(width_for(true) < 600, "the metal strip is {}", width_for(true));
     }
 
     #[test]
@@ -467,6 +486,7 @@ mod tests {
             assert!(v.chapter().views().contains(v));
         }
         let titles: Vec<&str> = Chapter::ALL.iter().map(|c| c.title()).collect();
-        assert_eq!(titles, ["Machines", "Projects", "Queue", "Results", "Watch"]);
+        // The story's five, then Settings, outside it.
+        assert_eq!(titles, ["Machines", "Projects", "Queue", "Results", "Watch", "Settings"]);
     }
 }

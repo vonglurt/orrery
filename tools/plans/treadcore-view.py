@@ -169,6 +169,12 @@ def queue():
         q["push"] = json.load(open(os.path.join(QDIR, "plan", "push.json")))
     except (OSError, ValueError):
         q["push"] = None
+    # The line the fleet builds, each commit's changed defaults (the
+    # planner's, each plan): the Settings view's Commits page.
+    try:
+        q["commits"] = json.load(open(os.path.join(QDIR, "plan", "commits.json")))
+    except (OSError, ValueError):
+        q["commits"] = {}
     s = read(os.path.join(QDIR, "plan", "summary.json"))
     if s:
         try:

@@ -226,6 +226,39 @@ for an acknowledgement, and is not brought to the agent. It shows:
   it moves, newest first.
 - **On the command line:** `fleet-queue.py $Q progress`.
 
+### Settings: is it running as it should
+
+**A lane with nothing it can start is the question, not the queue's length.**
+On 28 October five CPU lanes sat idle under a queue of eleven: five builds
+for whitewolf waiting behind its six-hour school job, and six of crucible's
+segments queued for the GPU lanes. Eleven was above the low-water mark, so
+the keeper asked for nothing. It now asks the planner every minute that any
+lane has been idle with nothing it can start (`starve_s`, 60).
+
+**The keeper restarts itself on new code.** That keeper had been running since
+12:28 on 12:28's code, and the fix made at 14:29 waited all evening for its
+next start. When `fleet-queue.py` changes on disk, the keeper restarts itself
+in place (same pid, same caffeinate) once nothing running is older than
+`restart_lose_s` (600). The jobs it cuts short go back on the queue. It does
+not throw away a six-hour job just because its own code changed.
+
+**The window's sixth chapter, Settings:**
+- **Keeper:** each check as a lamp and a sentence: the keeper, its heartbeat,
+  its code against the file, planning, sync, caffeinate, the machines, idle
+  lanes, and jobs waiting for one machine. Beside them are the buttons for
+  what the keeper does not do by itself, or not yet:
+  - **Plan now:** touches `runs/`, which every keeper plans on.
+  - **Sync now.**
+  - **Restart the keeper:** asks twice, and says which jobs will run again.
+    A keeper from before self-restart is stopped from outside: its jobs are
+    stopped on their hosts first, so they never run twice.
+- **Commits:** the line the fleet builds, newest first. Each commit shows the
+  `weights!` defaults it changed (old to new), when the fleet first built it,
+  and whether it is on the local line only. Click one to open its page on
+  GitHub. This is the planner's `plan/commits.json`, rewritten each time it
+  plans.
+- **On the command line:** `fleet-queue.py $Q health`, `plan-now`, `restart`.
+
 **For an agent working with you** (Claude Code), a `UserPromptSubmit` hook
 that runs `fleet-queue.py $Q flags --brief` puts every flag not yet
 acknowledged in front of it with each message, so it needs no process of its

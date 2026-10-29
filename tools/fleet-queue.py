@@ -36,6 +36,11 @@ a keeper that keeps it all running, and two ways to stop.
                                              current candidate (pushed in auto mode), or
                                              re-read the older ones on today's defaults
     tools/fleet-queue.py DIR status [--json]
+    tools/fleet-queue.py DIR health         is it running as it should: the keeper, its code,
+                                             its planning and syncing, the lanes, the jobs waiting
+    tools/fleet-queue.py DIR plan-now        the keeper asks the planner for work at its next beat
+    tools/fleet-queue.py DIR restart         the keeper restarts on the code on disk; the jobs
+                                             running go back on the queue and run again
     tools/fleet-queue.py DIR add JOB.json    put a job on the queue by hand
 
 DIR/config.json says who works and who plans:
@@ -100,6 +105,7 @@ class Queue:
         for sub in ("queue", "running", "done", "failed", "stopped", "logs", "results", "lanes"):
             os.makedirs(os.path.join(self.d, sub), exist_ok=True)
         self.lock = threading.Lock()
+        self.restarting = False
 
     # ---- files ---------------------------------------------------------
     def p(self, *a):
@@ -338,15 +344,68 @@ def fits(host, job):
     return need in host.get("caps", ["cpu"])
 
 
+def ready(host, job, done):
+    """The host could start the job now: it fits, and what it waits for
+    (its jobs, and its build on this host) is done."""
+    ah = job.get("after_host")
+    if ah and ah.format(host=host["name"]) not in done:
+        return False
+    return fits(host, job) and all(a in done for a in job.get("after", []))
+
+
+def lane_file(q, name):
+    try:
+        with open(q.p("lanes", name + ".json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def starved(q, cfg, idle_s=None):
+    """The lanes idle at least idle_s with nothing queued they could start.
+
+    THE QUEUE'S LENGTH IS NOT THE QUESTION. On 28 October it held eleven jobs
+    and five CPU lanes sat idle: five were builds for whitewolf, waiting
+    behind its six-hour school job, and six were crucible's segments, queued
+    ahead for the GPU lanes. Eleven is above the low-water mark, so the
+    keeper never asked for more. A lane with nothing it can start is the
+    question, whatever else is queued."""
+    idle_s = cfg.get("starve_idle_s", 30) if idle_s is None else idle_s
+    jobs = q.jobs_in("queue")
+    done = q.ids_in("done")
+    out = []
+    for h in cfg["hosts"]:
+        l = lane_file(q, h["name"])
+        if l.get("state") == "idle" and now() - l.get("since", now()) >= idle_s and not any(ready(h, j, done) for j in jobs):
+            out.append(h["name"])
+    return out
+
+
+def code_id():
+    """This file's identity: what a keeper runs, against what is on disk."""
+    try:
+        with open(os.path.abspath(__file__), "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:12]
+    except OSError:
+        return None
+
+
 def lane(q, host, alive):
     name = host["name"]
     os.makedirs(q.p("running", name), exist_ok=True)
 
+    said = {}
+
     def say(state, job=None):
+        # "since" is when the lane came to this state: an idle lane says
+        # idle every three seconds, and an hour of it must read as an hour.
+        jid = job and job["id"]
+        if said.get("state") != state or said.get("job") != jid:
+            said.update(state=state, job=jid, since=now())
         tmp = q.p("lanes", ".%s.tmp" % name)
         with open(tmp, "w") as f:
-            json.dump({"host": name, "state": state, "job": job and job["id"], "kind": job and job.get("kind"),
-                       "title": job and job.get("title"), "since": now()}, f)
+            json.dump({"host": name, "state": state, "job": jid, "kind": job and job.get("kind"),
+                       "title": job and job.get("title"), "since": said["since"]}, f)
         os.rename(tmp, q.p("lanes", name + ".json"))
 
     say("idle")
@@ -389,10 +448,7 @@ def lane(q, host, alive):
                 except OSError:
                     pass
                 continue
-            ah = j.get("after_host")
-            if ah and ah.format(host=name) not in done:
-                continue
-            if all(a in done for a in after):
+            if ready(host, j, done):
                 try:
                     claimed = q.p("running", name, os.path.basename(j["_file"]))
                     os.rename(j["_file"], claimed)
@@ -480,6 +536,13 @@ def work(q, host, j, say):
             ok = fetch(q, host, j, log)
         if q.flag("STOP_NOW") and not ok:
             dest = "stopped"
+        elif q.restarting and not ok:
+            # The keeper restarts for new code: what it cut short runs again.
+            with open(log, "a") as out:
+                out.write("the keeper restarted for new code: the job goes back on the queue\n")
+            os.rename(j["_file"], q.p("queue", os.path.basename(j["_file"])))
+            q.event("requeued", job=j["id"], host=name, why="the keeper restarted for new code")
+            return
         elif not ok and rc == 255 and not reachable(host):
             # ssh's own failure, and the host is gone: not the job's fault.
             # It goes back on the queue for any host, its log kept.
@@ -523,14 +586,25 @@ def keeper(q):
     # waits on the keeper's pid and ends with it (config "keep_awake": false
     # to leave the Mac to its own settings).
     awake = None
-    if sys.platform == "darwin" and cfg.get("keep_awake", True):
+    # A keeper that restarted itself is the same process (exec keeps the
+    # pid), so the caffeinate waiting on it still holds: it is kept.
+    try:
+        inherited = int(os.environ.pop("FLEET_QUEUE_AWAKE", ""))
+        os.kill(inherited, 0)
+        awake = inherited
+    except (ValueError, OSError):
+        pass
+    if awake is None and sys.platform == "darwin" and cfg.get("keep_awake", True):
         try:
             awake = subprocess.Popen(["caffeinate", "-dimsu", "-w", str(os.getpid())], stdin=subprocess.DEVNULL,
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True).pid
         except OSError:
             awake = None
     life = {"pid": os.getpid(), "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "awake": awake,
-            "last_plan": None, "last_sync": None, "sync_s": cfg.get("sync_s", 1800)}
+            "last_plan": None, "last_sync": None, "sync_s": cfg.get("sync_s", 1800),
+            # The code it runs: health() sets it against the file on disk.
+            "code": code_id(), "file": os.path.abspath(__file__),
+            "restart_lose_s": cfg.get("restart_lose_s", 600)}
 
     def tell():
         with open(q.p(".keeper.json.tmp"), "w") as f:
@@ -586,6 +660,34 @@ def keeper(q):
     runs_seen = 0.0
     planned_at = 0.0
     plan_s = cfg.get("plan_s", 300)
+    # A lane idle with nothing it can start asks for work each starve_s,
+    # however long the queue (starved()).
+    starve_s = cfg.get("starve_s", 60)
+    told_hungry = []
+    code_seen = (life["code"], os.stat(__file__).st_mtime if os.path.exists(__file__) else 0)
+
+    def restart(why):
+        # THE KEEPER RESTARTS ITSELF ON NEW CODE. A keeper started at 12:28
+        # ran 12:28's code until 21:20, and the fix made at 14:29 waited for
+        # "its next start" all evening. The lanes stop, what they cut short
+        # goes back on the queue (work(), q.restarting), and the process
+        # execs itself: the same pid, so keeper.pid and the caffeinate hold.
+        q.restarting = True
+        q.event("keeper restarting", why=why)
+        alive.clear()
+        for jid, (p, host) in list(q.procs.items()):
+            stop_remote(host, jid)
+            p.terminate()
+        for t in threads.values():
+            t.join(timeout=90)
+        try:
+            os.remove(q.p("RESTART"))
+        except OSError:
+            pass
+        sys.stdout.flush()
+        sys.stderr.flush()
+        env = dict(os.environ, FLEET_QUEUE_AWAKE=str(awake or ""))
+        os.execve(sys.executable, [sys.executable, os.path.abspath(__file__), q.d, "start"], env)
 
     try:
         while True:
@@ -639,18 +741,45 @@ def keeper(q):
                 open(q.p("STOP_ADDING"), "w").close()
                 q.event("stop adding", why="%d jobs failed in a row: read logs/, fix, then resume-adding" % q.streak)
                 q.notice("breaker", "%d jobs failed in a row: the queue stopped adding (read logs/, fix, then Resume adding)" % q.streak)
+            # New code on disk: the keeper restarts when that throws away
+            # little (nothing running longer than restart_lose_s, ten
+            # minutes: a census or a segment, run again), or at once when a
+            # person pressed Restart (DIR/RESTART). A six-hour job is not
+            # thrown away for a code change on the keeper's own word.
+            try:
+                mtime = os.stat(__file__).st_mtime
+            except OSError:
+                mtime = code_seen[1]
+            if mtime != code_seen[1]:
+                code_seen = (code_id() or code_seen[0], mtime)
+            stale = code_seen[0] != life["code"]
+            life["code_on_disk"] = code_seen[0]
+            if q.flag("RESTART"):
+                restart("Restart was pressed")
+            if stale:
+                ages = [now() - l.get("since", now()) for l in (lane_file(q, h["name"]) for h in q.config()["hosts"])
+                        if l.get("job")]
+                if max(ages, default=0) < life["restart_lose_s"]:
+                    restart("new code on disk (%s, was %s)" % (code_seen[0], life["code"]))
             queued = len(q.jobs_in("queue"))
             running = len(q.jobs_in("running"))
+            hungry = starved(q, cfg) if planner and not q.flag("STOP_ADDING") else []
+            life["starved"] = hungry
             if q.flag("STOP_ADDING"):
                 if queued == 0 and running == 0:
                     collect()
                     q.event("drained")
                     alive.clear()
                     break
-            elif planner and (queued < low or runs_mtime(q) > runs_seen or time.time() - planned_at > plan_s):
+            elif planner and (queued < low or runs_mtime(q) > runs_seen or time.time() - planned_at > plan_s
+                              or (hungry and time.time() - planned_at > starve_s)):
                 # Also every plan_s (300 s) whatever the queue's length, so
                 # auto mode's promotions and the rotation never wait for it
-                # to drain.
+                # to drain; and each starve_s while a lane is idle with
+                # nothing it can start (starved()). Plan now touches runs/.
+                if hungry and queued >= low and hungry != told_hungry:
+                    q.event("planning for idle lanes", hosts=hungry, queued=queued)
+                told_hungry = hungry
                 runs_seen = runs_mtime(q)
                 planned_at = time.time()
                 try:
@@ -702,6 +831,140 @@ def keeper_alive(q):
         return pid
     except (OSError, ValueError):
         return None
+
+
+def took(s):
+    s = int(s)
+    return "%d h %02d m" % (s // 3600, s // 60 % 60) if s >= 3600 else "%d min" % (s // 60) if s >= 60 else "%d s" % s
+
+
+def stamp_age(t):
+    """Seconds since a keeper.json stamp (local time), or None."""
+    try:
+        return now() - time.mktime(time.strptime(t, "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return None
+
+
+def health(q):
+    """Is it running as it should? Each check a level (ok, warn, bad), a name
+    and a sentence, for the console's Settings page and `health`. Nothing is
+    fixed here: the keeper fixes what it can by itself (plans for idle
+    lanes, restarts on new code), and what is left is a button."""
+    cfg = q.config()
+    pid = keeper_alive(q)
+    out = []
+
+    def check(level, name, text):
+        out.append({"level": level, "name": name, "text": text})
+    info = {}
+    if pid:
+        try:
+            info = json.load(open(q.p("keeper.json")))
+        except (OSError, ValueError):
+            pass
+    lanes = {h["name"]: lane_file(q, h["name"]) for h in cfg["hosts"]}
+    running = [(n, l) for n, l in lanes.items() if l.get("job")]
+    oldest = max(running, key=lambda r: now() - r[1].get("since", now()), default=None)
+    if not pid:
+        check("bad", "keeper", "no keeper is running: nothing starts (Start the queue)")
+        return out
+    check("ok", "keeper", "pid %d since %s" % (pid, (info.get("started") or "?")[11:16]))
+    beat = stamp_age(info.get("beat"))
+    poll = cfg.get("poll_s", 10)
+    if beat is None or beat > max(60, 6 * poll):
+        check("bad", "heartbeat", "no beat for %s: the keeper is alive but its loop is stuck" % took(beat or 0))
+    else:
+        check("ok", "heartbeat", "last beat %s ago" % took(beat))
+    disk = code_id()
+    lose = info.get("restart_lose_s", 600)
+    held = ("; %s's %s is %s in" % (oldest[0], oldest[1].get("title") or oldest[1]["job"], took(now() - oldest[1]["since"]))
+            if oldest and now() - oldest[1].get("since", now()) >= lose else "")
+    if info.get("code"):
+        if info["code"] == disk:
+            check("ok", "code", "it runs the code on disk (%s)" % disk)
+        else:
+            check("warn", "code", "it runs older code (%s, the file is %s): it restarts itself once nothing running "
+                  "is older than %s%s, or press Restart the keeper" % (info["code"], disk, took(lose), held))
+    else:
+        changed = os.stat(__file__).st_mtime
+        started = stamp_age(info.get("started"))
+        if started is not None and now() - started < changed:
+            check("warn", "code", "it started at %s, before the file changed at %s, and is too old to restart "
+                  "itself: press Restart the keeper%s" % (info["started"][11:16], time.strftime("%H:%M", time.localtime(changed)), held))
+        else:
+            check("ok", "code", "it started after the file last changed")
+    events = []
+    try:
+        events = [json.loads(l) for l in open(q.p("events.jsonl")).readlines()[-400:]]
+    except (OSError, ValueError):
+        pass
+    plan_s = cfg.get("plan_s", 300)
+    planned = stamp_age(info.get("last_plan"))
+    failed = [e for e in events if e.get("event") == "planner failed" and (info.get("last_plan") or "") < e["t"]]
+    if failed:
+        check("bad", "planning", "the planner failed at %s: %s" % (failed[-1]["t"][11:16], (failed[-1].get("detail") or "")[-160:]))
+    elif q.flag("STOP_ADDING"):
+        check("warn", "planning", "adding nothing: the queue drains (Resume adding)")
+    elif planned is None or planned > 2 * plan_s + 60:
+        check("warn", "planning", "last asked the planner %s ago" % (took(planned) if planned is not None else "never"))
+    else:
+        check("ok", "planning", "last asked the planner %s ago" % took(planned))
+    sync_s = cfg.get("sync_s", 1800)
+    synced = stamp_age(info.get("last_sync"))
+    if not sync_s:
+        check("ok", "sync", "sync_s is 0: the keeper gathers nothing by itself")
+    elif synced is None or synced > sync_s + 600:
+        check("warn", "sync", "last gathered the machines' records %s ago" % (took(synced) if synced is not None else "never"))
+    else:
+        check("ok", "sync", "last gathered %s ago" % took(synced or 0))
+    if info.get("awake") is not None or sys.platform == "darwin":
+        try:
+            os.kill(int(info.get("awake")), 0)
+            check("ok", "awake", "caffeinate %d holds this Mac awake" % info["awake"])
+        except (TypeError, ValueError, OSError):
+            check("warn" if cfg.get("keep_awake", True) else "ok", "awake", "nothing holds this Mac awake" if cfg.get("keep_awake", True) else "keep_awake is off")
+    down = [n for n, l in lanes.items() if l.get("state") == "unreachable"]
+    if down:
+        check("bad", "machines", "cannot be reached, its lane waiting: %s" % ", ".join(down))
+    else:
+        check("ok", "machines", "every machine answers")
+    hungry = starved(q, cfg)
+    if hungry:
+        check("warn", "lanes", "idle with nothing they can start: %s (the keeper asks the planner for them each %s)"
+              % (", ".join(hungry), took(cfg.get("starve_s", 60))))
+    else:
+        check("ok", "lanes", "%d of %d running; every idle lane has work it can start" % (len(running), len(lanes)))
+    # The jobs no lane can take: needs no machine has, or one machine only
+    # (a build for it, say) and that machine an hour into something else.
+    done = q.ids_in("done")
+    nobody, behind = [], {}
+    for j in q.jobs_in("queue"):
+        can = [h for h in cfg["hosts"] if fits(h, j)]
+        if not can:
+            nobody.append(j["id"])
+        elif len(can) == 1 and ready(can[0], j, done):
+            behind.setdefault(can[0]["name"], []).append(j["id"])
+    if nobody:
+        check("bad", "jobs", "%d queued that no machine can take (%s): their needs match no lane" % (len(nobody), ", ".join(nobody[:4])))
+    waits = ["%d behind %s's %s (%s in)" % (len(v), n, lanes[n].get("title") or lanes[n]["job"], took(now() - lanes[n]["since"]))
+             for n, v in sorted(behind.items()) if lanes[n].get("job") and now() - lanes[n].get("since", now()) > 3600]
+    if waits:
+        check("warn", "jobs", "waiting for one machine, busy over an hour: " + "; ".join(waits))
+    elif not nobody:
+        check("ok", "jobs", "every queued job has a machine it can run on")
+    return out
+
+
+def restart_cost(q):
+    """What Restart the keeper throws away: the jobs running, run again."""
+    rows = []
+    for h in q.config()["hosts"]:
+        l = lane_file(q, h["name"])
+        if l.get("job"):
+            rows.append((now() - l.get("since", now()), l.get("title") or l["job"], h["name"]))
+    rows.sort(reverse=True)
+    return {"jobs": len(rows), "oldest": ("%s's %s, %s in" % (rows[0][2], rows[0][1], took(rows[0][0]))) if rows else ""}
 
 
 def status(q):
@@ -759,7 +1022,58 @@ def status(q):
             "recent": [{"id": j["id"], "kind": j.get("kind"), "title": j.get("title"), "host": j.get("host"),
                         "seconds": j.get("seconds"), "ok": j["_file"].startswith(q.p("done"))} for j in recent],
             "upcoming": [{"id": j["id"], "kind": j.get("kind"), "title": j.get("title"), "needs": j.get("needs")} for j in upcoming],
-            "events": events}
+            "events": events, "health": health(q), "restart": restart_cost(q)}
+
+
+def ensure(q):
+    pid = keeper_alive(q)
+    if pid:
+        print("the keeper is running (pid %d)" % pid)
+        return
+    log = open(q.p("keeper.log"), "a")
+    p = subprocess.Popen([sys.executable, os.path.abspath(__file__), q.d, "start"], stdout=log, stderr=log,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+    print("the keeper started (pid %d)" % p.pid)
+
+
+def restart_keeper(q):
+    """Restart the keeper on the code on disk. A keeper that can restart
+    itself (keeper.json says its code) is asked to (DIR/RESTART); one from
+    before that is stopped from outside: its jobs stopped on their hosts
+    (their ssh would outlive it, and the new keeper would run them twice),
+    then a new keeper, which puts them back on the queue."""
+    pid = keeper_alive(q)
+    if not pid:
+        return ensure(q)
+    try:
+        info = json.load(open(q.p("keeper.json")))
+    except (OSError, ValueError):
+        info = {}
+    cost = restart_cost(q)
+    if info.get("code"):
+        open(q.p("RESTART"), "w").close()
+        q.event("restart asked")
+        print("the keeper restarts at its next beat; %d running jobs run again" % cost["jobs"])
+        return
+    q.event("restart asked", how="stopped from outside: a keeper from before restarts")
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(40):
+        if not keeper_alive(q):
+            break
+        time.sleep(0.5)
+    else:
+        sys.exit("the keeper (pid %d) did not end" % pid)
+    hosts = {h["name"]: h for h in q.config()["hosts"]}
+    for j in q.jobs_in("running"):
+        h = hosts.get(os.path.basename(os.path.dirname(j["_file"])))
+        if h:
+            stop_remote(h, j["id"])
+    try:
+        os.remove(q.p("keeper.pid"))
+    except OSError:
+        pass
+    ensure(q)
+    print("restarted: %d running jobs went back on the queue" % cost["jobs"])
 
 
 def main(argv):
@@ -768,7 +1082,8 @@ def main(argv):
     q = Queue(argv[0])
     cmd = argv[1]
     if cmd == "start":
-        if keeper_alive(q):
+        # A keeper that restarted itself is this process: its pid is ours.
+        if keeper_alive(q) and keeper_alive(q) != os.getpid():
             sys.exit("a keeper is already running (pid %s)" % keeper_alive(q))
         for f in ("STOP_NOW", "SHUTDOWN"):
             try:
@@ -777,14 +1092,23 @@ def main(argv):
                 pass
         keeper(q)
     elif cmd == "ensure":
-        pid = keeper_alive(q)
-        if pid:
-            print("the keeper is running (pid %d)" % pid)
-            return
-        log = open(q.p("keeper.log"), "a")
-        p = subprocess.Popen([sys.executable, os.path.abspath(__file__), q.d, "start"], stdout=log, stderr=log,
-                             stdin=subprocess.DEVNULL, start_new_session=True)
-        print("the keeper started (pid %d)" % p.pid)
+        ensure(q)
+    elif cmd == "plan-now":
+        # The keeper plans when runs/ changes: every keeper, this one and
+        # those from before the button.
+        os.makedirs(q.p("runs"), exist_ok=True)
+        os.utime(q.p("runs"))
+        q.event("plan asked")
+        print("the keeper asks the planner for work at its next beat")
+    elif cmd == "restart":
+        restart_keeper(q)
+    elif cmd == "health":
+        h = health(q)
+        if "--json" in argv:
+            print(json.dumps(h, indent=1))
+        else:
+            for c in h:
+                print("%-4s %-10s %s" % ({"ok": "ok", "warn": "LOOK", "bad": "BAD"}[c["level"]], c["name"], c["text"]))
     elif cmd == "stop-adding":
         open(q.p("STOP_ADDING"), "w").close()
         q.event("stop adding")

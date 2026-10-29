@@ -137,6 +137,14 @@ def short_moved(text, room=60):
     return ", ".join(out)
 
 
+def github_web(url):
+    """A remote's web page on GitHub, from any of the ways git spells it
+    (git@github.com:o/r.git, ssh://git@ssh.github.com:443/o/r.git,
+    https://github.com/o/r), or "" for a remote that is not GitHub."""
+    m = re.search(r"github\.com[:/](?:\d+/)?([^/]+)/([^/]+?)(?:\.git)?/?$", url or "")
+    return "https://github.com/%s/%s" % m.groups() if m else ""
+
+
 def write_tsv(path, rows):
     if not rows:
         return False
@@ -253,6 +261,34 @@ class Plan:
 
     def cdir(self):
         return "~/%s/c/%s" % (self.home, self.short())
+
+    def commits_log(self, n=40):
+        """The line the fleet builds, newest first, each commit with the
+        weights! defaults it changed (old, new), when the fleet first built
+        it, and its page on GitHub (none for the local line's own commits,
+        which are not there): plan/commits.json, for the console's Settings.
+        A commit's changes never change, so each is read once (state)."""
+        head = self.sha()
+        remote, branch = self.push_target()
+        web = github_web(run(["git", "-C", self.tc, "remote", "get-url", remote]).stdout.strip())
+        local = set(run(["git", "-C", self.tc, "rev-list", "%s/%s..%s" % (remote, branch, head)]).stdout.split())
+        r = run(["git", "-C", self.tc, "log", "--first-parent", "-n", str(n), "--format=%H%x09%P%x09%aI%x09%an%x09%s", head])
+        seen = self.state.setdefault("commit_values", {})
+        out = []
+        for line in r.stdout.splitlines():
+            parts = line.split("\t", 4)
+            if len(parts) < 5:
+                continue
+            sha, parents, when, who, subject = parts
+            if sha not in seen:
+                parent = parents.split()[0] if parents else ""
+                a, b = (self.defaults_at(parent) if parent else {}), self.defaults_at(sha)
+                seen[sha] = [[k, a.get(k), b.get(k)] for k in sorted(set(a) | set(b)) if parent and a.get(k) != b.get(k)]
+            out.append({"sha": sha, "short": sha[:7], "when": when[:19], "who": who, "subject": subject[:400],
+                        "values": seen[sha], "built": (self.state["commits"].get(sha) or {}).get("first_seen"),
+                        "local": sha in local, "url": "%s/commit/%s" % (web, sha) if web and sha not in local else ""})
+        save(os.path.join(self.pd, "commits.json"), {"head": head, "branch": "%s/%s" % (remote, branch), "web": web,
+                                                      "checked": time.strftime("%Y-%m-%dT%H:%M:%S"), "commits": out})
 
     # ---- preparing the hosts --------------------------------------------------------
     def prep_id(self, host):
@@ -2203,6 +2239,10 @@ class Plan:
         self.propagation()
         jobs += self.adopt_jobs()
         self.ticker_scan()
+        try:
+            self.commits_log()
+        except Exception as e:  # the log is for reading; planning goes on
+            print("commits: %s" % e, file=sys.stderr)
         # The CPU lanes' share: three queued jobs a CPU machine (the keeper
         # running since 12:28 plans at its half-hourly sync, and a census
         # takes 15 minutes: two a lane between syncs, and one spare). The

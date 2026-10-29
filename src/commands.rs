@@ -59,6 +59,7 @@ pub const MENU: &[(&str, &str, &str, Cmd)] = &[
     ("View", "Queue", "3", Cmd::Go(View::Queue)),
     ("View", "Results", "4", Cmd::Go(View::Results)),
     ("View", "Watch: Lab", "5", Cmd::Go(View::Lab)),
+    ("View", "Settings", "6", Cmd::Go(View::Settings)),
     ("View", "-", "", Cmd::Separator),
     ("View", "Machines: Media", "", Cmd::Go(View::Media)),
     ("View", "Queue: Fleet", "", Cmd::Page(0)),

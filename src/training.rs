@@ -117,6 +117,13 @@ pub struct State {
     pub arm_stop: bool,
     /// Which page of the queue's view: 0 Fleet, 1 Runs, 2 Found, 3 Net.
     pub page: usize,
+    /// Restart the keeper was pressed once: the next press does it (it runs
+    /// the running jobs again).
+    pub arm_restart: bool,
+    /// A page to open in the browser: a commit, clicked on the Commits page.
+    pub open: Option<String>,
+    /// The Commits page's first row.
+    pub commit_off: usize,
 }
 
 /// One crucible island: a GPU lane's population, trained a segment at a time.
@@ -203,10 +210,35 @@ pub struct Queue {
     /// The keeper, in a line: its pid, how long up, the last and next sync,
     /// and whether it holds this Mac awake.
     pub keeper: String,
+    /// Is it running as it should (fleet-queue.py's health): (level -- ok,
+    /// warn, bad --, name, sentence).
+    pub health: Vec<(String, String, String)>,
+    /// What Restart the keeper throws away: (jobs running, the oldest).
+    pub restart: (i64, String),
+    /// The line the fleet builds, newest first (the planner's
+    /// plan/commits.json), and where it was read from.
+    pub commits: Vec<Commit>,
+    pub commits_from: String,
     /// Push permission to the project's branch: (ok, "url branch", detail).
     /// Paul Accepts is a push, so a template must have it to land on main
     /// (without it a promotion self-modifies onto the local line).
     pub push: Option<(bool, String, String)>,
+}
+
+/// One commit on the line the fleet builds: what it changed of the brain's
+/// defaults, when the fleet first built it, and its page on GitHub (empty for
+/// the local line's own commits, which are not there).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Commit {
+    pub short: String,
+    pub when: String,
+    pub who: String,
+    pub subject: String,
+    /// (name, old, new); None where the table had no such entry.
+    pub values: Vec<(String, Option<f64>, Option<f64>)>,
+    pub built: String,
+    pub local: bool,
+    pub url: String,
 }
 
 /// One coefficient one census moved: what, to what, how far from its
@@ -467,6 +499,36 @@ impl Model {
                         )
                     })
                     .unwrap_or_default(),
+                health: arr(q, "health").iter().map(|c| (s(c, "level"), s(c, "name"), s(c, "text"))).collect(),
+                restart: q.get("restart").map(|r| (n(r, "jobs") as i64, s(r, "oldest"))).unwrap_or_default(),
+                commits: q
+                    .get("commits")
+                    .map(|c| arr(c, "commits"))
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|c| Commit {
+                        short: s(c, "short"),
+                        when: s(c, "when"),
+                        who: s(c, "who"),
+                        subject: s(c, "subject"),
+                        values: arr(c, "values")
+                            .iter()
+                            .filter_map(|v| v.as_array())
+                            .map(|v| {
+                                let at = |i: usize| v.get(i).and_then(|x| x.as_num());
+                                (v.first().and_then(|x| x.as_str()).unwrap_or("").to_string(), at(1), at(2))
+                            })
+                            .collect(),
+                        built: s(c, "built"),
+                        local: c.get("local").and_then(|b| b.as_bool()).unwrap_or(false),
+                        url: s(c, "url"),
+                    })
+                    .collect(),
+                commits_from: q
+                    .get("commits")
+                    .filter(|c| c.get("head").is_some())
+                    .map(|c| format!("{} at {}, read {}", s(c, "branch"), &s(c, "head")[..7.min(s(c, "head").len())], s(c, "checked").replace('T', " ")))
+                    .unwrap_or_default(),
                 push: q.get("push").filter(|p| p.get("ok").is_some()).map(|p| {
                     (p.get("ok").and_then(|b| b.as_bool()).unwrap_or(false), format!("{} {}", s(p, "url"), s(p, "branch")), s(p, "detail"))
                 }),
@@ -572,24 +634,29 @@ fn bar(ui: &mut Ui, r: Rect, frac: f64, c: Rgb) {
     ui.c.rect(r.x + 1, r.y + 1, w, r.h - 2, c);
 }
 
-/// The pages of each chapter this file draws: the Queue's (Fleet, Runs) and
-/// the Results' (Candidates, Found, Net, Flags), by page number.
+/// The pages of each chapter this file draws: the Queue's (Fleet, Runs),
+/// the Results' (Candidates, Found, Net, Flags) and the Settings' (Keeper,
+/// Commits), by page number.
 const QUEUE_PAGES: [usize; 2] = [0, 1];
 const RESULTS_PAGES: [usize; 4] = [5, 2, 3, 4];
+const SETTINGS_PAGES: [usize; 2] = [6, 7];
 
 /// (page number, name, what it shows). Candidates came after the rest and
 /// keeps the number 5, so ORRERY_FRAME_PAGE and a saved page mean what they
 /// meant.
-const PAGES: [(usize, &str, &str); 6] = [
+const PAGES: [(usize, &str, &str); 8] = [
     (0, "Fleet", "each machine and its job"),
     (1, "Runs", "ask for a run, cancel, accept"),
     (2, "Found", "improvements, by variable and machine"),
     (5, "Candidates", "trials past both held-out reads: progress, nothing to answer"),
     (3, "Net", "the learned tank's weights"),
     (4, "Flags", "what needs attention; acknowledge it"),
+    (6, "Keeper", "is it running as it should: the keeper, its code, its planning, the lanes"),
+    (7, "Commits", "the line the fleet builds, newest first, with the defaults each changed; a row opens it on GitHub"),
 ];
 
-/// Draw the Queue or the Results (`view`). Returns a view to move to.
+/// Draw the Queue, the Results or the Settings (`view`). Returns a view to
+/// move to.
 pub fn draw(ui: &mut Ui, m: &Model, st: &mut State, view: nav::View) -> Option<nav::View> {
     let t = ui.t;
     let right = if m.fleet.is_empty() {
@@ -599,13 +666,22 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State, view: nav::View) -> Option<n
         format!("fleet {}  {} of {} machines answering", m.fleet, up, m.machines.len())
     };
     let results = view == nav::View::Results;
-    let pages: &[usize] = if results { &RESULTS_PAGES } else { &QUEUE_PAGES };
+    let settings = view == nav::View::Settings;
+    let pages: &[usize] = if settings {
+        &SETTINGS_PAGES
+    } else if results {
+        &RESULTS_PAGES
+    } else {
+        &QUEUE_PAGES
+    };
     if !pages.contains(&st.page) {
         st.page = pages[0];
     }
     // The Flags key carries its count, its lamp red while any is
     // unacknowledged; the Candidates key its count, green.
     let (flags, found) = m.queue.as_ref().map(|q| (q.flags.len(), q.progress.iter().filter(|p| p.1 == "candidate").count())).unwrap_or((0, 0));
+    // The Keeper key's lamp: its worst check, amber or red.
+    let worst = m.queue.as_ref().map(|q| q.health.iter().map(|c| level(&c.0)).max().unwrap_or(0)).unwrap_or(0);
     let keys: Vec<nav::Key> = pages
         .iter()
         .map(|&p| {
@@ -613,6 +689,8 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State, view: nav::View) -> Option<n
             let (label, lamp) = match name {
                 "Flags" if flags > 0 => (format!("Flags {}", flags), Some(t.alarm)),
                 "Candidates" if found > 0 => (format!("Candidates {}", found), Some(t.up)),
+                "Keeper" if worst == 2 => (name.to_string(), Some(t.alarm)),
+                "Keeper" if worst == 1 => (name.to_string(), Some(t.warn)),
                 _ => (name.to_string(), None),
             };
             nav::Key { label, on: st.page == p, lamp }
@@ -645,8 +723,9 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State, view: nav::View) -> Option<n
         st.zoom = None;
     }
     let (sentence, step) = headline(m);
-    let sentence = match (&m.queue, results) {
-        (Some(q), true) => results_headline(q),
+    let sentence = match (&m.queue, results, settings) {
+        (Some(q), _, true) => settings_headline(q),
+        (Some(q), true, _) => results_headline(q),
         _ => sentence,
     };
     // Do it now, on the Results (Paul, 28 October: "it has a do it now
@@ -671,17 +750,19 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State, view: nav::View) -> Option<n
     };
     ui.label_in(body.x, y, body.w - room, &sentence, &F10X20, t.ink);
     y += F10X20.height as i32 + 8;
-    if results && !st.said.is_empty() {
+    if (results || settings) && !st.said.is_empty() {
         ui.label_in(body.x, y, body.w, &st.said, &F8X13, t.warn);
         y += F8X13.height as i32 + 4;
     }
     if let Some(q) = &m.queue {
         // The queue's band (its controls) on the Queue only; the newest
         // change in one line on both; then the page the column chose.
-        if !results {
+        if !results && !settings {
             y = draw_queue(ui, rect(body.x, y, body.w, 64), q, st) + 6;
         }
-        y = draw_latest(ui, rect(body.x, y, body.w, 18), q) + 6;
+        if !settings {
+            y = draw_latest(ui, rect(body.x, y, body.w, 18), q) + 6;
+        }
         let what = PAGES.iter().find(|p| p.0 == st.page).map(|p| p.2).unwrap_or("");
         ui.label_in(body.x, y, body.w, what, &F8X13, t.dim);
         y += F8X13.height as i32 + 8;
@@ -691,6 +772,8 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State, view: nav::View) -> Option<n
             2 => draw_found_page(ui, page, q),
             4 => draw_flags_page(ui, page, q, st),
             5 => draw_candidates_page(ui, page, q, st),
+            6 => draw_keeper_page(ui, page, q, st),
+            7 => draw_commits_page(ui, page, q, st),
             3 => {
                 if let Some(i) = draw_net(ui, page, m) {
                     st.zoom = Some(i);
@@ -1108,6 +1191,227 @@ fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
         let mx = area.x + when_w + head_w + state_w;
         ui.label_in(mx, y, area.right() - mx, moved, &F8X13, if cur { t.ink } else { t.dim });
         y += lh;
+    }
+}
+
+/// A check's level as a number, worst highest: ok 0, warn 1, bad 2.
+fn level(l: &str) -> u8 {
+    match l {
+        "bad" => 2,
+        "warn" => 1,
+        _ => 0,
+    }
+}
+
+/// The Settings' sentence: all is well, or how many checks want a look.
+fn settings_headline(q: &Queue) -> String {
+    let look: Vec<&str> = q.health.iter().filter(|c| level(&c.0) > 0).map(|c| c.1.as_str()).collect();
+    match look.len() {
+        0 if q.health.is_empty() => "The keeper has not answered yet".into(),
+        0 => "Everything runs as it should".into(),
+        1 => format!("One thing wants a look: {}", look[0]),
+        n => format!("{} things want a look: {}", n, look.join(", ")),
+    }
+}
+
+/// `text` in lines no wider than `w`, broken at spaces.
+fn wrap(text: &str, w: i32) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut line = String::new();
+    for word in text.split(' ') {
+        let next = if line.is_empty() { word.to_string() } else { format!("{} {}", line, word) };
+        if !line.is_empty() && F8X13.measure(&next) as i32 > w {
+            out.push(std::mem::replace(&mut line, word.to_string()));
+        } else {
+            line = next;
+        }
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
+}
+
+/// The Keeper page: each check a lamp and a sentence, and on the right the
+/// buttons for what the keeper does not do by itself.
+///
+/// WHAT IT DOES BY ITSELF IS NOT A BUTTON. It plans for a lane idle with
+/// nothing it can start, and restarts on new code when that throws away
+/// under ten minutes; the buttons are for doing either sooner, and for the
+/// restart that costs a long job, which asks twice and says what it costs.
+fn draw_keeper_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
+    let t = ui.t;
+    let lh = F8X13.height as i32 + 3;
+    let side = if st.operator { 300 } else { 0 };
+    let name_w = F8X13.measure("heartbeat  ") as i32 + 18;
+    let tw = at.w - side - name_w - 20;
+    let mut y = at.y;
+    for (lv, name, text) in &q.health {
+        if y + lh > at.bottom() {
+            break;
+        }
+        let c = match level(lv) {
+            2 => t.alarm,
+            1 => t.warn,
+            _ => t.up,
+        };
+        ui.c.disc(at.x + 6, y + lh / 2 - 1, 5, c);
+        ui.label(at.x + 18, y, name, &F8X13, t.ink);
+        for l in wrap(text, tw) {
+            ui.label_in(at.x + name_w, y, tw, &l, &F8X13, if level(lv) > 0 { t.ink } else { t.dim });
+            y += lh;
+        }
+        y += 4;
+    }
+    if q.health.is_empty() {
+        ui.label(at.x, y, "no checks yet: the queue's status has not said", &F8X13, t.dim);
+        y += lh;
+    }
+    if !q.keeper.is_empty() {
+        ui.label_in(at.x, y + 8, at.w - side - 10, &q.keeper, &F8X13, t.dim);
+    }
+    if !st.operator {
+        return;
+    }
+    // The buttons, absent rather than greyed where they cannot apply.
+    let bx = at.right() - side + 10;
+    let bw = side - 10;
+    let running = q.state != "stopped" && q.state != "shut down";
+    let mut by = at.y;
+    let mut note = |ui: &mut Ui, by: &mut i32, text: &str| {
+        for l in wrap(text, bw) {
+            ui.label_in(bx, *by, bw, &l, &F8X13, t.dim);
+            *by += lh;
+        }
+        *by += 10;
+    };
+    if !running {
+        if ui.button(rect(bx, by, bw, 26), "Start the queue", true) {
+            st.ctl = Some("ensure".into());
+        }
+        by += 32;
+        note(ui, &mut by, "No keeper runs: nothing is planned or started.");
+        return;
+    }
+    if ui.button(rect(bx, by, bw, 26), "Plan now", true) {
+        st.ctl = Some("plan-now".into());
+    }
+    by += 32;
+    note(ui, &mut by, "Ask the planner for work at the keeper's next beat. It asks by itself every five minutes, and each minute a lane sits idle with nothing it can start.");
+    if ui.button(rect(bx, by, bw, 26), "Sync now", true) {
+        st.ctl = Some("sync".into());
+    }
+    by += 32;
+    note(ui, &mut by, "Gather every machine's record now (it does by itself each half hour).");
+    let (jobs, oldest) = &q.restart;
+    let label = if st.arm_restart { format!("Press again: restart, {} jobs run again", jobs) } else { "Restart the keeper".into() };
+    if ui.button(rect(bx, by, bw, 26), &label, true) {
+        if st.arm_restart {
+            st.ctl = Some("restart".into());
+            st.arm_restart = false;
+        } else {
+            st.arm_restart = true;
+        }
+    }
+    by += 32;
+    let cost = if oldest.is_empty() { String::new() } else { format!(" The oldest is {}.", oldest) };
+    note(ui, &mut by, &format!("Restart on the code on disk: the jobs running go back on the queue and run again.{} On new code it restarts by itself once nothing running is older than ten minutes.", cost));
+}
+
+/// The Commits page: the line the fleet builds, newest first -- when, which,
+/// what it says, whether the fleet built it -- and under each the defaults
+/// it changed, old to new, on as many lines as they take (a promotion moves
+/// seven; clipped to one line it showed five). A commit opens on GitHub.
+fn draw_commits_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
+    let t = ui.t;
+    let lh = F8X13.height as i32 + 3;
+    let mut y = at.y;
+    let head = if q.commits_from.is_empty() { "not read yet: the planner writes it each time it plans".to_string() } else { q.commits_from.clone() };
+    ui.label_in(at.x, y, at.w, &head, &F8X13, t.dim);
+    y += lh + 4;
+    let when_w = F8X13.measure("10-28 00:00  ") as i32;
+    let sha_w = F8X13.measure("0000000  ") as i32;
+    let indent = when_w + sha_w + 4;
+    let vw = at.w - indent - 24;
+    // The page as lines: (commit, line within it, text); line 0 the head.
+    let num = |v: f64| format!("{}", v);
+    let mut lines: Vec<(usize, usize, String)> = Vec::new();
+    for (i, c) in q.commits.iter().enumerate() {
+        lines.push((i, 0, String::new()));
+        let moved: Vec<String> = c
+            .values
+            .iter()
+            .map(|(k, a, b)| match (a, b) {
+                (Some(a), Some(b)) => format!("{} {} -> {}", k, num(*a), num(*b)),
+                (None, Some(b)) => format!("{} (new) {}", k, num(*b)),
+                (Some(a), None) => format!("{} {} (gone)", k, num(*a)),
+                (None, None) => k.clone(),
+            })
+            .collect();
+        // Broken between values, never inside one ("5 ->" / "2.5").
+        let mut body: Vec<String> = Vec::new();
+        for m in &moved {
+            match body.last_mut() {
+                Some(l) if F8X13.measure(&format!("{};  {}", l, m)) as i32 <= vw => *l = format!("{};  {}", l, m),
+                _ => body.push(m.clone()),
+            }
+        }
+        if body.is_empty() {
+            body.push(format!("no defaults changed  ({})", c.who));
+        }
+        for (j, l) in body.into_iter().enumerate() {
+            lines.push((i, j + 1, l));
+        }
+    }
+    let box_ = rect(at.x, y, at.w, at.bottom() - y);
+    let mut off = st.commit_off;
+    let (area, first, fit) = ui.scroll_list(box_, lines.len(), lh, &mut off);
+    st.commit_off = off;
+    // The commit under the pointer lights all its lines.
+    let hot_commit = {
+        let (px, py) = ui.pointer();
+        if area.contains((px, py)) {
+            lines.get(first + ((py - area.y) / lh) as usize).map(|l| l.0)
+        } else {
+            None
+        }
+    };
+    let mut y = area.y;
+    for (i, j, text) in lines.iter().skip(first).take(fit) {
+        let c = &q.commits[*i];
+        let r = rect(area.x, y, area.w, lh);
+        let hot = hot_commit == Some(*i) && !c.url.is_empty();
+        if hot {
+            ui.panel(r, t.tile);
+        }
+        let changed = !c.values.is_empty();
+        if *j == 0 {
+            let w = if c.when.len() >= 16 { format!("{} {}", &c.when[5..10], &c.when[11..16]) } else { c.when.clone() };
+            ui.label(r.x + 4, y + 1, &w, &F8X13, t.dim);
+            ui.label(r.x + 4 + when_w, y + 1, &c.short, &F8X13, if changed { t.up } else { t.ink });
+            let tag = match (c.local, c.built.len() >= 16) {
+                (true, _) => "  local line: not on GitHub".to_string(),
+                (false, true) => format!("  built by the fleet {} {}", &c.built[5..10], &c.built[11..16]),
+                _ => String::new(),
+            };
+            let tag_w = F8X13.measure(&tag) as i32;
+            let sx = r.x + indent;
+            ui.label_in(sx, y + 1, r.right() - sx - tag_w - 8, &c.subject, &F8X13, t.ink);
+            ui.label_right(r.right() - 4, y + 1, &tag, &F8X13, t.dim);
+        } else {
+            ui.label_in(r.x + indent, y + 1, vw, text, &F8X13, if changed { t.up } else { t.dim });
+        }
+        // The gap after a commit's last line.
+        if lines.get(first + ((y - area.y) / lh) as usize + 1).map(|l| l.1 == 0).unwrap_or(false) {
+            ui.hrule(r.x + indent, y + lh - 1, r.w - indent - 4);
+        }
+        if hot && ui.button_hit(r) {
+            st.open = Some(c.url.clone());
+        }
+        y += lh;
+    }
+    if q.commits.is_empty() {
+        ui.label(area.x, area.y, "no commits yet", &F8X13, t.dim);
     }
 }
 
@@ -1892,5 +2196,44 @@ mod tests {
     fn no_command_and_bad_output_each_say_why() {
         assert!(Model::parse("", "").why.contains("--training-cmd"));
         assert!(Model::parse("nope", "x").why.contains("did not print JSON"));
+    }
+
+    const SETTINGS: &str = r#"{"queue":{"state":"running, adding",
+      "health":[{"level":"ok","name":"keeper","text":"pid 1 since 12:28"},
+                {"level":"warn","name":"code","text":"it runs older code"},
+                {"level":"bad","name":"jobs","text":"1 queued that no machine can take"}],
+      "restart":{"jobs":6,"oldest":"whitewolf's school r0022, 6 h 02 m in"},
+      "commits":{"head":"f381a92aa","branch":"origin/main","checked":"2026-10-28T21:30:35","commits":[
+        {"short":"dc3df01","when":"2026-10-28T14:20:54","who":"Paul","subject":"promote grove/w0034",
+         "values":[["kite_in",9.0,4.5],["focus_blend",null,0.5]],"built":"2026-10-28T14:28:03","local":false,
+         "url":"https://github.com/treadcore/treadcore/commit/dc3df01"},
+        {"short":"abc1234","when":"2026-10-28T22:00:00","who":"orrery","subject":"self-modified","values":[],
+         "built":null,"local":true,"url":""}]}}}"#;
+
+    #[test]
+    fn the_keepers_checks_and_the_commits_read_whole() {
+        let q = Model::parse(SETTINGS, "test").queue.unwrap();
+        assert_eq!(q.health.len(), 3);
+        assert_eq!(q.restart, (6, "whitewolf's school r0022, 6 h 02 m in".to_string()));
+        assert_eq!(q.commits[0].values[0], ("kite_in".to_string(), Some(9.0), Some(4.5)));
+        assert_eq!(q.commits[0].values[1].1, None, "a default the table did not have is not a zero");
+        assert!(q.commits[1].local && q.commits[1].url.is_empty(), "the local line has no page on GitHub");
+        assert_eq!(q.commits_from, "origin/main at f381a92, read 2026-10-28 21:30:35");
+    }
+
+    #[test]
+    fn the_settings_sentence_names_what_wants_a_look() {
+        let mut q = Model::parse(SETTINGS, "test").queue.unwrap();
+        assert_eq!(settings_headline(&q), "2 things want a look: code, jobs");
+        q.health.retain(|c| c.0 == "ok");
+        assert_eq!(settings_headline(&q), "Everything runs as it should");
+    }
+
+    #[test]
+    fn a_wrapped_line_breaks_at_spaces_and_fits() {
+        let w = F8X13.measure("the keeper restarts") as i32;
+        let l = wrap("the keeper restarts itself once nothing running is older", w);
+        assert!(l.len() > 1 && l.iter().all(|x| F8X13.measure(x) as i32 <= w), "{:?}", l);
+        assert_eq!(l.join(" "), "the keeper restarts itself once nothing running is older");
     }
 }
