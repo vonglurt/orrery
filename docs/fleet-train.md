@@ -242,6 +242,30 @@ in place (same pid, same caffeinate) once nothing running is older than
 `restart_lose_s` (600). The jobs it cuts short go back on the queue. It does
 not throw away a six-hour job just because its own code changed.
 
+**Busy lanes are not a search that finds.** After w0034 became the defaults
+(28 October, 14:20), trials ran ten times faster than before, and none of
+the next 1,000 held out. Three causes, all fixed in the planner:
+- **The fit read yesterday's censuses as today's.** 182 rows scored against
+  the old defaults went into the fit, each near +2. The fit's "best" chased
+  them and was read 309 times, at −0.3. The planner's own rows now pass the
+  same `same_defaults` test as the history rows.
+- **The same trial was asked for again and again.** suggest.py sees only what
+  has been read, so each generation asked again for what was still queued:
+  721 trials, 310 of them different, one read 77 times. The planner keeps
+  what it has asked on these defaults (`state["search"]`; a promotion starts
+  it anew). Each trial is asked once and a read again once more. The fit's
+  best is asked again only after 20 new reads.
+- **It never looked far.** Past `STALL` (150) trials since the last find (a
+  trial past both its held-out reads), the search widens by itself. The
+  fit's bound goes from 2 to 4, and half of each generation is wide trials:
+  three weights at a time, each a quarter to four times its default, the
+  ones the fit is least sure of the likelier. A find narrows it again.
+
+The planner writes `plan/search.json`, which is the **search** check in
+health. It turns amber once the search has been widened for 450 trials
+with nothing found. By then the next gain needs a change to the brain
+itself, not to its numbers.
+
 **The window's sixth chapter, Settings:**
 - **Keeper:** each check as a lamp and a sentence: the keeper, its heartbeat,
   its code against the file, planning, sync, caffeinate, the machines, idle

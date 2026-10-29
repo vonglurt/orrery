@@ -60,6 +60,7 @@ import math
 import random
 import shlex
 import glob
+import hashlib
 import json
 import os
 import re
@@ -363,6 +364,15 @@ class Plan:
         shutil.rmtree(root, ignore_errors=True)
         os.makedirs(root)
         for d in self.census_dirs():
+            # Today's defaults only, as the history rows are: a census read
+            # against the defaults before a promotion says nothing of a trial
+            # against today's. suggest.py puts every row on today's log
+            # scale, so the 182 rows read before w0034 was promoted (each
+            # near +2, against the old defaults) went in as gains of the
+            # weights that moved, and the fit's "best" chased them: read 309
+            # times since, at -0.3 (29 October).
+            if not self.same_defaults(self.census_commit(d)):
+                continue
             # The stamp, and the job: two hosts can finish in the same second.
             jid = d.rstrip("/").split(os.sep)[-2]
             os.symlink(d, os.path.join(root, "%s-%s" % (os.path.basename(d.rstrip("/")), jid)))
@@ -467,16 +477,56 @@ class Plan:
         # Then new trials from the fit.
         want = n - len(jobs)
         if want > 0:
+            s = self.search(defaults)
             g = self.state["gen"]
             out = os.path.join(self.pd, "gen%d" % g)
             shutil.rmtree(out, ignore_errors=True)
+            # Four times what is wanted: the trials already read are dropped
+            # below, and the rest must still fill the generation.
             r = run([sys.executable, "-I", os.path.join(self.tc, "scripts", "suggest.py"), self.ledger(), defaults, out,
-                     "--n", str(want), "--seed", str(g)])
+                     "--n", str(max(12, 4 * want)), "--seed", str(g), "--bound", str(s["bound"])])
             if r.returncode != 0:
                 raise SystemExit("suggest.py: " + r.stderr[-400:])
             self.state["gen"] += 1
-            for f in sorted(glob.glob(os.path.join(out, "*.weights")))[:want]:
+            # A stalled search gives half the generation to wide trials.
+            wide = self.wide_trials(want // 2 or 1, out, g, defaults) if s["stalled"] else []
+            fit = []
+            try:
+                fit = [os.path.join(out, l.split("\t")[0] + ".weights") for l in open(os.path.join(out, "plan.tsv")).read().splitlines()[1:]]
+            except OSError:
+                pass
+            picked, now = [], set()
+            for f in wide + fit:
+                if len(picked) >= want:
+                    break
                 text = open(f).read()
+                key = self.trial_key(text)
+                # Once a generation whatever it is: suggest.py cuts a read
+                # again's name at 60 letters, and two of them can be one file.
+                if key in now:
+                    continue
+                now.add(key)
+                # A trial once on today's defaults, and a read again (successive
+                # halving's) once more. suggest.py sees only what has been read, so
+                # each generation, five minutes apart, asked again for what was
+                # still queued: since w0300, 721 trials and 310 different ones,
+                # one of them read 77 times (29 October).
+                # The fit's best, which moves by a hair a generation: again
+                # once there are 20 new reads to have moved it.
+                name = os.path.basename(f)
+                again = name.startswith("again-")
+                if (s["tried"].get(key) and not again) or (again and key in s["agains"]) or (
+                        name.startswith("best") and s["reads"] < s.get("best_at", -99) + 20):
+                    s["repeats"] = s.get("repeats", 0) + 1
+                    continue
+                s["tried"][key] = s["tried"].get(key, 0) + 1
+                if again:
+                    s["agains"].append(key)
+                picked.append((f, text))
+            if any(os.path.basename(f).startswith("best") for f, _ in picked):
+                s["best_at"] = s["reads"]
+            self.search_note(s)
+            for f, text in picked:
                 jid = "w%04d" % self.state["weights_n"]
                 seed0 = w["seed0"] + 10000 * self.state["weights_n"]
                 self.state["weights_n"] += 1
@@ -486,6 +536,101 @@ class Plan:
                              "needs": "cpu", "after_host": self.after_host(), "cmd": self.census_cmd(text, w["seeds"], seed0, jid),
                              "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 6 * 3600})
         return jobs
+
+    # ---- the search's own memory -------------------------------------------------------
+    # Trials on today's defaults past the last find (a trial past both its
+    # held-out reads): the search widens. After w0034 was promoted the fit's
+    # trials stayed at its tops, near what was read, and in 1,000 of them
+    # none held out (29 October).
+    STALL = 150
+
+    @staticmethod
+    def trial_key(text):
+        """A trial's weights, three figures each: the fit's top moves by a
+        hair as rows come in, and a hair is the same trial."""
+        canon = ";".join("%s=%.3g" % kv for kv in sorted(parse_weights(text).items()))
+        return hashlib.sha1(canon.encode()).hexdigest()[:12]
+
+    def search(self, defaults):
+        """{defaults, tried {key: times planned}, reads, last_find, since_find,
+        stalled, bound}: what the search has asked on these defaults (a
+        promotion starts it anew), seeded from every trial read, running or
+        queued when they are first seen."""
+        fp = hashlib.sha1(open(defaults, "rb").read()).hexdigest()[:12]
+        s = self.state.get("search")
+        trials = [(d, d.rstrip("/").split(os.sep)[-2]) for d in self.census_dirs()]
+        trials = [(d, jid) for d, jid in trials if re.match(r"w\d+$", jid) and self.same_defaults(self.census_commit(d))]
+        if not s or s.get("defaults") != fp:
+            s = {"defaults": fp, "tried": {}, "agains": [], "repeats": 0}
+            texts = [open(os.path.join(d, "trial.weights")).read() for d, _ in trials if os.path.exists(os.path.join(d, "trial.weights"))]
+            for f in glob.glob(os.path.join(self.q, "queue", "w*.json")) + glob.glob(os.path.join(self.q, "running", "*", "w*.json")):
+                m = re.search(r"echo (\S+) \| base64 -d", load(f, {}).get("cmd", ""))
+                if m:
+                    texts.append(base64.b64decode(m.group(1)).decode())
+            for t in texts:
+                k = self.trial_key(t)
+                s["tried"][k] = s["tried"].get(k, 0) + 1
+            self.state["search"] = s
+        found = [int(jid[1:]) for jid, ds in self.held_pairs().items()
+                 if len(ds) == 2 and all(self.passes(d) and self.same_defaults(self.census_commit(d)) for d in ds)]
+        last = max(found) if found else None
+        since = len([1 for _, jid in trials if last is None or int(jid[1:]) > last])
+        s.update({"reads": len(trials), "last_find": "w%04d" % last if last is not None else None,
+                  "since_find": since, "stalled": since >= self.STALL})
+        s["bound"] = 4 if s["stalled"] else 2
+        # Where the widening began, so health can tell widened and still dry.
+        if s["stalled"]:
+            s.setdefault("widened_at", len(trials))
+        else:
+            s.pop("widened_at", None)
+        return s
+
+    def search_note(self, s):
+        """plan/search.json, for fleet-queue.py health and the Settings page."""
+        note = {k: v for k, v in s.items() if k not in ("tried", "agains")}
+        note.update({"distinct": len(s["tried"]), "stall": self.STALL, "checked": time.strftime("%Y-%m-%dT%H:%M:%S")})
+        save(os.path.join(self.pd, "search.json"), note)
+
+    def unit_weights(self):
+        """suggest.py's UNIT: weights from 0 to 1, which stop halfway to 1."""
+        try:
+            m = re.search(r"UNIT = set\('([^']*)'", open(os.path.join(self.tc, "scripts", "suggest.py")).read())
+        except OSError:
+            m = None
+        return set(m.group(1).split()) if m else set()
+
+    def wide_trials(self, n, out, g, defaults):
+        """Trials past the fit's bound: three weights at a time, each a
+        quarter to four times its default (at least 1.4 times either way),
+        the weights the fit is least sure of the likelier. The fit's own
+        trials sit at its curves' tops, within what has been read; when they
+        stop finding, the room left is outside it."""
+        dflt = parse_weights(open(defaults).read())
+        try:
+            rows = list(csv.DictReader(open(os.path.join(out, "curves.tsv")), delimiter="\t"))
+        except OSError:
+            return []
+        pool = {r["weight"]: float(r["gain_se"]) + 0.1 for r in rows if dflt.get(r["weight"], 0) > 0}
+        unit, rnd, files = self.unit_weights(), random.Random(1000003 * g + 7), []
+        names = sorted(pool)
+        for i in range(n):
+            pick = set()
+            while len(pick) < min(3, len(names)):
+                pick.add(rnd.choices(names, weights=[pool[x] for x in names])[0])
+            lines = []
+            for w in sorted(pick):
+                d = dflt[w]
+                y = d * 2 ** (rnd.choice((-1, 1)) * rnd.uniform(0.5, 2.0))
+                if w in unit and y > d:
+                    y = min(y, d + (1 - d) / 2) if d < 1 else d
+                if abs(y - d) > 1e-9:
+                    lines.append("%s = %.6g" % (w, y))
+            if lines:
+                f = os.path.join(out, "wide-%d.weights" % i)
+                with open(f, "w") as fh:
+                    fh.write("# orrery: wide, past the fit's bound (the search stalled)\n" + "\n".join(lines) + "\n")
+                files.append(f)
+        return files
 
     # ---- the families ------------------------------------------------------------------
     @staticmethod

@@ -953,6 +953,28 @@ def health(q):
         check("warn", "jobs", "waiting for one machine, busy over an hour: " + "; ".join(waits))
     elif not nobody:
         check("ok", "jobs", "every queued job has a machine it can run on")
+    # The search, as the planner last saw it (plan/search.json): busy lanes
+    # are not finding. Widening is the planner's own; a search still dry at
+    # three times the stall wants what a planner cannot do, a change to the
+    # brain.
+    s = {}
+    try:
+        s = json.load(open(q.p("plan", "search.json")))
+    except (OSError, ValueError):
+        pass
+    if s:
+        last = ("the last find %s, %d trials ago" % (s["last_find"], s["since_find"]) if s.get("last_find")
+                else "nothing found in %d" % s["since_find"])
+        said = "%d trials on today's defaults, %d different (%d repeats not asked); %s" % (
+            s.get("reads", 0), s.get("distinct", 0), s.get("repeats", 0), last)
+        stall = s.get("stall", 150)
+        if s.get("stalled") and s.get("reads", 0) - s.get("widened_at", s.get("reads", 0)) >= 3 * stall:
+            check("warn", "search", said + ": dry %d trials since it widened, the next gain wants a change to the brain itself"
+                  % (s["reads"] - s["widened_at"]))
+        elif s.get("stalled"):
+            check("ok", "search", said + ": widened (bound %s, half of each generation wide trials)" % s.get("bound"))
+        else:
+            check("ok", "search", said)
     return out
 
 
