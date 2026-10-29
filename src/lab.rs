@@ -486,7 +486,7 @@ impl Lab {
 
 // ---------------------------------------------------------------------- layout ---
 
-const HEADER_H: i32 = 32;
+const HEADER_H: i32 = nav::HEADER_H;
 const RAIL_W: i32 = 138;
 const BAR_H: i32 = 32;
 const STATUS_H: i32 = 22;
@@ -553,7 +553,13 @@ pub fn draw(ui: &mut Ui, m: &Model, lab: &mut Lab) -> Option<Action> {
     let t = ui.t;
     let mut action = None;
 
-    ui.panel(rect(0, 0, w, h), t.base);
+    if t.metal {
+        // Steel round everything, the room of machines a black well in it.
+        ui.panel(rect(0, 0, w, h), t.panel);
+        ui.c.well(l.lab.x + 4, l.lab.y, l.lab.w - 10, l.lab.h - 4, t.base, 8);
+    } else {
+        ui.panel(rect(0, 0, w, h), t.base);
+    }
 
     if !m.error.is_empty() {
         // Unreadable JSON is itself a picture the operator should get, rather
@@ -587,27 +593,38 @@ pub fn draw(ui: &mut Ui, m: &Model, lab: &mut Lab) -> Option<Action> {
 
 fn draw_header(ui: &mut Ui, l: &Layout, m: &Model) -> Option<nav::View> {
     let t = ui.t;
-    ui.panel(l.header, t.panel);
-    ui.hrule(l.header.x, l.header.bottom() - 1, l.header.w);
+    if !t.metal {
+        ui.panel(l.header, t.panel);
+        ui.hrule(l.header.x, l.header.bottom() - 1, l.header.w);
+    }
 
     let ty = l.header.y + (HEADER_H - F10X20.height as i32) / 2;
     let mut x = PAD;
-    x += ui.label(x, ty, "orrery", &F10X20, t.ink);
+    x += ui.label(x, ty, "orrery", &F10X20, if t.metal { t.engrave } else { t.ink });
     x += 14;
 
     // The navigation strip, in the same place on every view -- see nav.rs.
-    let nav_at = rect(x, l.header.y, nav::width(), HEADER_H);
+    let nav_at = rect(x, l.header.y, nav::width_for(t.metal), HEADER_H);
     let mut go = nav::strip(ui, nav_at, nav::View::Lab);
     if let Some(v) = nav::chord(ui) {
         go = Some(v);
     }
-    x += nav::width() + 14;
+    x += nav::width_for(t.metal) + 14;
+    let sy = l.header.y + (HEADER_H - F8X13.height as i32) / 2;
+    if t.metal {
+        ui.label(x, ty, &m.fleet, &F10X20, t.engrave);
+        let word = if m.live { "live".to_string() } else if m.why.is_empty() { "polled, not live".to_string() } else { m.why.clone() };
+        let right = format!("{}   {} declared  {} up  {} bus", word, m.declared, m.announced, m.on_bus);
+        let pad_left = x + F10X20.measure(&m.fleet) as i32 + 16 - (PAD + F10X20.measure("orrery") as i32 + 14 + nav::width_for(t.metal) + 16);
+        let header = rect(l.header.x + pad_left.max(0), l.header.y, l.header.w - pad_left.max(0), l.header.h);
+        nav::header_right(ui, header, PAD, sy, &right);
+        return go;
+    }
     ui.label(x, ty, &m.fleet, &F10X20, t.accent);
 
     // THE PICTURE AND ITS REASON ALWAYS TRAVEL TOGETHER. A fallback that is
     // labelled but not explained is still a quiet fallback -- the degradation
     // run of 2026-09-08 found exactly that.
-    let sy = l.header.y + (HEADER_H - F8X13.height as i32) / 2;
     let counts = format!(
         "{} declared  {} up  {} bus",
         m.declared, m.announced, m.on_bus
@@ -635,8 +652,10 @@ fn draw_header(ui: &mut Ui, l: &Layout, m: &Model) -> Option<nav::View> {
 
 fn draw_rail(ui: &mut Ui, l: &Layout, m: &Model, lab: &mut Lab) {
     let t = ui.t;
-    ui.panel(l.rail, t.panel);
-    ui.vrule(l.rail.right() - 1, l.rail.y, l.rail.h);
+    if !t.metal {
+        ui.panel(l.rail, t.panel);
+        ui.vrule(l.rail.right() - 1, l.rail.y, l.rail.h);
+    }
 
     let mut y = l.rail.y + 8;
     let head = |ui: &mut Ui, y: i32, s: &str| {
@@ -836,8 +855,10 @@ fn draw_results(ui: &mut Ui, l: &Layout, lab: &Lab) -> bool {
 
 fn draw_bar(ui: &mut Ui, l: &Layout, lab: &mut Lab) -> Option<Action> {
     let t = ui.t;
-    ui.panel(l.bar, t.panel);
-    ui.hrule(l.bar.x, l.bar.y, l.bar.w);
+    if !t.metal {
+        ui.panel(l.bar, t.panel);
+        ui.hrule(l.bar.x, l.bar.y, l.bar.w);
+    }
 
     // THE BAR BECOMES THE PROMPT. Not a dialog over the lab: the question is
     // "what shall I run on those nodes", and those nodes are the thing the
@@ -906,8 +927,12 @@ fn draw_bar(ui: &mut Ui, l: &Layout, lab: &mut Lab) -> Option<Action> {
 
 fn draw_status(ui: &mut Ui, l: &Layout, m: &Model, lab: &Lab) {
     let t = ui.t;
-    ui.panel(l.status, t.base);
-    ui.hrule(l.status.x, l.status.y, l.status.w);
+    if t.metal {
+        ui.c.well(l.status.x + 6, l.status.y, l.status.w - 12, l.status.h - 3, t.base, 5);
+    } else {
+        ui.panel(l.status, t.base);
+        ui.hrule(l.status.x, l.status.y, l.status.w);
+    }
     let y = l.status.y + 4;
 
     let left = match lab.selection.len() {

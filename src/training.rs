@@ -26,7 +26,6 @@ use crate::nav;
 use crate::surface::Sym;
 use crate::ui::{rect, Light, Rect, Ui};
 
-const HEADER_H: i32 = 32;
 const PAD: i32 = 10;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -497,27 +496,14 @@ fn bar(ui: &mut Ui, r: Rect, frac: f64, c: Rgb) {
 }
 
 pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
-    let (w, h) = (ui.c.w as i32, ui.c.h as i32);
     let t = ui.t;
-    ui.panel(rect(0, 0, w, h), t.base);
-    let (header, rest) = rect(0, 0, w, h).cut_top(HEADER_H);
-
-    // ---- header -----------------------------------------------------------
-    ui.panel(header, t.panel);
-    ui.hrule(header.x, header.bottom() - 1, header.w);
-    let ty = header.y + (HEADER_H - F10X20.height as i32) / 2;
-    ui.label(PAD, ty, "orrery", &F10X20, t.ink);
-    let nav_at = rect(PAD + F10X20.measure("orrery") as i32 + 14, header.y, nav::width(), HEADER_H);
-    let mut go = nav::strip(ui, nav_at, nav::View::Training);
-    if let Some(v) = nav::chord(ui) {
-        go = Some(v);
-    }
-    let sy = header.y + (HEADER_H - F8X13.height as i32) / 2;
-    if !m.fleet.is_empty() {
+    let right = if m.fleet.is_empty() {
+        String::new()
+    } else {
         let up = m.machines.iter().filter(|x| x.up).count();
-        let right = format!("fleet {}  {} of {} machines answering", m.fleet, up, m.machines.len());
-        nav::header_right(ui, header, PAD, sy, &right);
-    }
+        format!("fleet {}  {} of {} machines answering", m.fleet, up, m.machines.len())
+    };
+    let (rest, go) = nav::header(ui, nav::View::Training, true, &right);
 
     let body = rest.inset(PAD);
     if !m.why.is_empty() {
@@ -636,9 +622,24 @@ fn draw_pages(ui: &mut Ui, at: Rect, st: &mut State, flags: usize, found: usize)
         } else {
             name.to_string()
         };
-        let w = F8X13.measure(&shown) as i32 + 24;
+        let w = F8X13.measure(&shown) as i32 + if t.metal { 36 } else { 24 };
         let tab = rect(x, at.y, w, at.h);
         let on = st.page == i;
+        if t.metal {
+            // A key: pressed in for the page shown, its lamp green for
+            // candidates, red for flags, lit for the page shown.
+            let f = if on { crate::draw::Finish::Pressed } else { crate::draw::Finish::Button };
+            ui.c.metal(tab.x, tab.y, tab.w, tab.h, f, 7);
+            let lamp = if alarm { t.alarm } else if good { t.up } else if on { t.accent } else { 0x3a3e40 };
+            ui.c.disc(tab.x + 11, tab.y + tab.h / 2, 4, lamp);
+            let ty = tab.y + (at.h - F8X13.height as i32) / 2 + if on { 1 } else { 0 };
+            ui.label(tab.x + 21, ty, &shown, &F8X13, t.engrave);
+            if ui.button_hit(tab) {
+                st.page = i;
+            }
+            x += w + 4;
+            continue;
+        }
         ui.panel(tab, if on { t.tile } else { t.panel });
         ui.outline(tab, if alarm { t.alarm } else { t.line });
         if on {

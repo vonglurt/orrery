@@ -23,12 +23,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::font::{F10X20, F6X10, F8X13};
+use crate::font::{F6X10, F8X13};
 use crate::nav;
 use crate::surface::Sym;
 use crate::ui::{rect, Rect, Ui};
 
-const HEADER_H: i32 = 32;
 const PAD: i32 = 10;
 const TITLE_H: i32 = 18;
 const SESSION: &str = "orrery";
@@ -357,25 +356,12 @@ fn key_name(sym: Sym, ctrl: bool) -> Option<(&'static str, Option<char>)> {
 /// Draw the grid (or one tile enlarged) and pass the keyboard to the focused
 /// tile. Returns a view to move to, if one was asked for.
 pub fn draw(ui: &mut Ui, s: &mut Sessions) -> Option<nav::View> {
-    let (w, h) = (ui.c.w as i32, ui.c.h as i32);
     let t = ui.t;
-    ui.panel(rect(0, 0, w, h), t.base);
-    let (header, rest) = rect(0, 0, w, h).cut_top(HEADER_H);
-    ui.panel(header, t.panel);
-    ui.hrule(header.x, header.bottom() - 1, header.w);
-    let ty = header.y + (HEADER_H - F10X20.height as i32) / 2;
-    ui.label(PAD, ty, "orrery", &F10X20, t.ink);
-    let nav_at = rect(PAD + F10X20.measure("orrery") as i32 + 14, header.y, nav::width(), HEADER_H);
-    let mut go = nav::strip(ui, nav_at, nav::View::Sessions);
-    if let Some(v) = nav::chord(ui) {
-        go = Some(v);
-    }
-    let sy = header.y + (HEADER_H - F8X13.height as i32) / 2;
     let hint = match s.focus {
         Some(i) => format!("typing into {} -- click outside the tiles to stop", s.tiles[i].name),
         None => "click a tile to type into it; each is a tmux session that outlives orrery".to_string(),
     };
-    nav::header_right(ui, header, PAD, sy, &hint);
+    let (rest, go) = nav::header(ui, nav::View::Sessions, true, &hint);
 
     let body = rest.inset(6);
     let n = s.tiles.len().max(1) as i32;
@@ -408,14 +394,14 @@ pub fn draw(ui: &mut Ui, s: &mut Sessions) -> Option<nav::View> {
         ui.panel(title, t.panel);
         let status = tile.status.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let label = if tile.target == "-" { "this Mac".to_string() } else { tile.name.clone() };
-        let lx = ui.label_in(title.x + 6, title.y + 3, title.w / 3, &label, &F8X13, if focused { t.ink } else { t.dim });
+        let lx = ui.label_in(title.x + 6, title.y + 3, title.w / 3, &label, &F8X13, if t.metal { t.engrave } else if focused { t.ink } else { t.dim });
         let bw = 70;
         let br = rect(title.right() - bw - 2, title.y + 1, bw, TITLE_H - 2);
         if ui.button(br, if s.big == Some(i) { "Grid" } else { "Enlarge" }, true) {
             toggle_big = Some(i);
         }
         let sx = lx.max(title.x + 6) + 16;
-        ui.label_in(sx, title.y + 3, br.x - sx - 8, &status, &F8X13, t.dim);
+        ui.label_in(sx, title.y + 3, br.x - sx - 8, &status, &F8X13, if t.metal { 0x3c4044 } else { t.dim });
 
         // The characters the tile can show; the session is told, so a program
         // in it lays itself out to fit.

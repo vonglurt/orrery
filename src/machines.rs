@@ -21,7 +21,6 @@ use crate::json;
 use crate::nav;
 use crate::ui::{rect, Field, Ui};
 
-const HEADER_H: i32 = 32;
 const PAD: i32 = 10;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -165,23 +164,9 @@ impl State {
 }
 
 pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
-    let (w, h) = (ui.c.w as i32, ui.c.h as i32);
     let t = ui.t;
-    ui.panel(rect(0, 0, w, h), t.base);
-    let (header, rest) = rect(0, 0, w, h).cut_top(HEADER_H);
-    ui.panel(header, t.panel);
-    ui.hrule(header.x, header.bottom() - 1, header.w);
-    let ty = header.y + (HEADER_H - F10X20.height as i32) / 2;
-    ui.label(PAD, ty, "orrery", &F10X20, t.ink);
-    let nav_at = rect(PAD + F10X20.measure("orrery") as i32 + 14, header.y, nav::width(), HEADER_H);
-    let mut go = nav::strip(ui, nav_at, nav::View::Machines);
-    if st.confirm.is_none() {
-        if let Some(v) = nav::chord(ui) {
-            go = Some(v);
-        }
-    }
-    let sy = header.y + (HEADER_H - F8X13.height as i32) / 2;
-    nav::header_right(ui, header, PAD, sy, "a fresh install to a fleet node: probe, apply, join");
+    let chords = st.confirm.is_none();
+    let (rest, go) = nav::header(ui, nav::View::Machines, chords, "a fresh install to a fleet node: probe, apply, join");
 
     let body = rest.inset(PAD);
     if !m.why.is_empty() {

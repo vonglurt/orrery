@@ -291,8 +291,23 @@ impl<'c, 'p> Ui<'c, 'p> {
 
     // ------------------------------------------------------------ drawing ---
 
+    /// A filled area. In the metal theme the panel colour is a brushed
+    /// plate, as treadcore's columns are.
     pub fn panel(&mut self, r: Rect, fill: Rgb) {
-        self.c.rect(r.x, r.y, r.w, r.h, fill);
+        if self.t.metal && fill == self.t.panel {
+            self.c.metal(r.x, r.y, r.w, r.h, crate::draw::Finish::Plate, 0);
+        } else {
+            self.c.rect(r.x, r.y, r.w, r.h, fill);
+        }
+    }
+
+    /// A black readout set into the metal (a plain tile in the flat themes).
+    pub fn well(&mut self, r: Rect) {
+        if self.t.metal {
+            self.c.well(r.x, r.y, r.w, r.h, self.t.base, 7);
+        } else {
+            self.c.rect(r.x, r.y, r.w, r.h, self.t.base);
+        }
     }
 
     pub fn outline(&mut self, r: Rect, c: Rgb) {
@@ -343,6 +358,19 @@ impl<'c, 'p> Ui<'c, 'p> {
         let hot = enabled && self.is_hot(r);
         let held = enabled && self.s.active == Some(id) && self.s.down;
 
+        if self.t.metal {
+            let f = if held { crate::draw::Finish::Pressed } else { crate::draw::Finish::Button };
+            self.c.metal(r.x, r.y, r.w, r.h, f, (r.h / 2 - 2).clamp(3, 9));
+            if hot && !held {
+                self.c.frame(r.x + 3, r.y + r.h - 3, r.w - 6, 1, self.t.accent);
+            }
+            let tw = F8X13.measure(label) as i32;
+            let tx = r.x + (r.w - tw).max(0) / 2;
+            let ty = r.y + (r.h - F8X13.height as i32) / 2 + if held { 1 } else { 0 };
+            let fg = if enabled { self.t.engrave } else { 0x5c6064 };
+            self.label_in(tx, ty, r.w - 6, label, &F8X13, fg);
+            return clicked;
+        }
         let (bg, fg) = if !enabled {
             (self.t.panel, self.t.dim)
         } else if held {
@@ -371,17 +399,24 @@ impl<'c, 'p> Ui<'c, 'p> {
         let clicked = self.clickable(r, id, true);
         let hot = self.is_hot(r);
 
-        if on {
+        if self.t.metal {
+            if on {
+                self.c.metal(r.x + 2, r.y + 1, r.w - 4, r.h - 2, crate::draw::Finish::Pressed, 5);
+            } else if hot {
+                self.c.metal(r.x + 2, r.y + 1, r.w - 4, r.h - 2, crate::draw::Finish::Button, 5);
+            }
+        } else if on {
             self.panel(r, self.t.tile);
         } else if hot {
             self.panel(r, self.t.panel);
         }
-        let fg = if on { self.t.ink } else { self.t.dim };
+        let fg = if self.t.metal { if on { self.t.engrave } else { 0x34383c } } else if on { self.t.ink } else { self.t.dim };
         let ty = r.y + (r.h - F8X13.height as i32) / 2;
         let room = if count.is_some() { r.w - 34 } else { r.w - 10 };
         self.label_in(r.x + 6, ty, room, label, &F8X13, fg);
         if let Some(n) = count {
-            self.label_right(r.right() - 6, ty, &n.to_string(), &F8X13, self.t.dim);
+            let c = if self.t.metal { 0x34383c } else { self.t.dim };
+            self.label_right(r.right() - 6, ty, &n.to_string(), &F8X13, c);
         }
         clicked
     }

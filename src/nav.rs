@@ -60,9 +60,20 @@ impl View {
 /// (28 October).
 pub fn header_right(ui: &mut Ui, header: Rect, pad: i32, y: i32, text: &str) {
     let t = ui.t;
-    let left = pad + crate::font::F10X20.measure("orrery") as i32 + 14 + width() + 16;
+    let left = pad + crate::font::F10X20.measure("orrery") as i32 + 14 + width_for(t.metal) + 16;
     let right = header.right() - pad;
     let w = F8X13.measure(text) as i32;
+    if t.metal {
+        // treadcore's top strip: white letters in a black readout.
+        if right - left < 40 {
+            return;
+        }
+        let lw = (w + 20).min(right - left);
+        let well = rect(right - lw, header.y + 7, lw, header.h - 14);
+        ui.c.well(well.x, well.y, well.w, well.h, t.base, 6);
+        ui.label_in(well.x + 10, y, well.w - 16, text, &F8X13, t.ink);
+        return;
+    }
     if right - w >= left {
         ui.label_right(right, y, text, &F8X13, t.dim);
     } else if right > left {
@@ -81,11 +92,33 @@ pub fn strip(ui: &mut Ui, at: Rect, current: View) -> Option<View> {
     let mut x = at.x;
     let mut chosen = None;
 
-    for v in View::ALL {
-        let w = F8X13.measure(v.title()) as i32 + 22;
+    for (i, v) in View::ALL.iter().enumerate() {
+        let w = tab_w(*v, t.metal);
         let tab = rect(x, at.y, w, at.h);
         let on = *v == current;
         let hot = ui.is_hot(tab);
+
+        if t.metal {
+            // A key in treadcore's order column: its digit (Command and it
+            // go there), its word, and the one that is lit pressed in.
+            let key = rect(tab.x + 2, tab.y + 6, tab.w - 4, tab.h - 12);
+            let f = if on { crate::draw::Finish::Pressed } else { crate::draw::Finish::Button };
+            ui.c.metal(key.x, key.y, key.w, key.h, f, 7);
+            let ty = key.y + (key.h - F8X13.height as i32) / 2 + if on { 1 } else { 0 };
+            let lamp = if on { t.up } else { 0x3a3e40 };
+            ui.c.disc(key.x + 11, key.y + key.h / 2, 4, lamp);
+            let digit = char::from_digit(i as u32 + 1, 10).unwrap_or(' ').to_string();
+            let nx = ui.label(key.x + 20, ty, &digit, &F8X13, 0x4a4e52);
+            ui.label_in(nx + 6, ty, key.right() - nx - 8, v.title(), &F8X13, t.engrave);
+            if hot && !on {
+                ui.c.rect(key.x + 8, key.bottom() - 3, key.w - 16, 1, t.accent);
+            }
+            if ui.button_hit(tab) && !on {
+                chosen = Some(*v);
+            }
+            x += w;
+            continue;
+        }
 
         if on {
             ui.panel(tab, t.tile);
@@ -109,12 +142,58 @@ pub fn strip(ui: &mut Ui, at: Rect, current: View) -> Option<View> {
     chosen
 }
 
-/// How wide the strip will be, so a header can lay out around it.
-pub fn width() -> i32 {
-    View::ALL
-        .iter()
-        .map(|v| F8X13.measure(v.title()) as i32 + 22)
-        .sum()
+/// How wide the strip is in a theme, so a header can lay out around it.
+pub fn width_for(metal: bool) -> i32 {
+    View::ALL.iter().map(|v| tab_w(*v, metal)).sum()
+}
+
+/// A tab's width: the word, and in metal a lamp and the digit as well.
+fn tab_w(v: View, metal: bool) -> i32 {
+    F8X13.measure(v.title()) as i32 + if metal { 44 } else { 22 }
+}
+
+/// Every view's header height.
+pub const HEADER_H: i32 = 40;
+
+/// The frame every view shares (28 October, the metal redesign): the
+/// header with the name, the strip and `right` in a readout, and in the
+/// metal theme the window's steel round a black well. Returns the body
+/// under the header and a view chosen by a click or (when `chords`) by
+/// Command and a digit.
+pub fn header(ui: &mut Ui, current: View, chords: bool, right: &str) -> (Rect, Option<View>) {
+    let t = ui.t;
+    let (w, h) = (ui.c.w as i32, ui.c.h as i32);
+    let pad = 10;
+    let head_h = HEADER_H;
+    let (header, rest) = rect(0, 0, w, h).cut_top(head_h);
+    if t.metal {
+        ui.c.metal(0, 0, w, h, crate::draw::Finish::Plate, 0);
+    } else {
+        ui.panel(rect(0, 0, w, h), t.base);
+        ui.panel(header, t.panel);
+        ui.hrule(header.x, header.bottom() - 1, header.w);
+    }
+    let ty = header.y + (head_h - crate::font::F10X20.height as i32) / 2;
+    ui.label(pad, ty, "orrery", &crate::font::F10X20, if t.metal { t.engrave } else { t.ink });
+    let nav_at = rect(pad + crate::font::F10X20.measure("orrery") as i32 + 14, header.y, width_for(t.metal), head_h);
+    let mut go = strip(ui, nav_at, current);
+    if chords {
+        if let Some(v) = chord(ui) {
+            go = Some(v);
+        }
+    }
+    if !right.is_empty() {
+        let sy = header.y + (head_h - F8X13.height as i32) / 2;
+        header_right(ui, header, pad, sy, right);
+    }
+    let body = if t.metal {
+        let b = rect(rest.x + 6, rest.y, rest.w - 12, rest.h - 6);
+        ui.c.well(b.x, b.y, b.w, b.h, t.base, 8);
+        b
+    } else {
+        rest
+    };
+    (body, go)
 }
 
 /// The keyboard's way there: the platform's command modifier and a digit.
@@ -161,15 +240,17 @@ mod tests {
             .iter()
             .map(|v| F8X13.measure(v.title()) as i32 + 22)
             .sum();
-        assert_eq!(width(), sum);
+        assert_eq!(width_for(false), sum);
         // Five views since Machines (28 October): about 370 pixels, still a
-        // strip beside the fleet's name at 960 wide.
-        assert!(width() > 0 && width() < 400, "the strip is not a strip");
+        // strip beside the fleet's name at 960 wide; in metal, with a lamp
+        // and a digit on each key, under 500.
+        assert!(width_for(false) > 0 && width_for(false) < 400, "the strip is not a strip");
+        assert!(width_for(true) < 500, "the metal strip is {}", width_for(true));
     }
 
     #[test]
     fn clicking_the_other_tab_moves_and_clicking_the_current_one_does_not() {
-        let bar = rect(0, 0, width(), 24);
+        let bar = rect(0, 0, width_for(false), 24);
         let mut s = UiState::default();
         // The second tab. Media starts after Lab's width.
         let lab_w = F8X13.measure("Lab") as i32 + 22;
@@ -189,7 +270,7 @@ mod tests {
 
     #[test]
     fn a_click_that_misses_every_tab_changes_nothing() {
-        let bar = rect(0, 0, width(), 24);
+        let bar = rect(0, 0, width_for(false), 24);
         let mut s = UiState::default();
         let got = frame(&mut s, &click(380, 50), |ui| strip(ui, bar, View::Lab));
         assert_eq!(got, None);

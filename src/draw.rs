@@ -40,6 +40,11 @@ pub struct Theme {
     pub up: Rgb,
     pub warn: Rgb,
     pub alarm: Rgb,
+    /// treadcore's brushed metal: `panel` is drawn as a metal plate, a
+    /// button as a metal button, and the body as a black readout well.
+    pub metal: bool,
+    /// Ink cut into metal: dark, where `ink` is for the readouts.
+    pub engrave: Rgb,
 }
 
 pub const LIGHT: Theme = Theme {
@@ -53,6 +58,8 @@ pub const LIGHT: Theme = Theme {
     up: 0x4a7c4e,
     warn: 0xb06a24,
     alarm: 0xff723e,
+    metal: false,
+    engrave: 0x121212,
 };
 
 pub const DARK: Theme = Theme {
@@ -66,7 +73,124 @@ pub const DARK: Theme = Theme {
     up: 0x8fbf7a,
     warn: 0xfccf8a,
     alarm: 0xff723e,
+    metal: false,
+    engrave: 0xd0daed,
 };
+
+/// treadcore's look (Paul, 28 October: "the interface from treadcore . the
+/// styling. thr rows and columns of brushed metal"): brushed steel round
+/// black readouts, light text and coloured lamps in the readouts, dark
+/// letters cut into the steel. The default.
+pub const METAL: Theme = Theme {
+    base: 0x0c0e0d,
+    panel: 0x9a9fa4,
+    tile: 0x171b19,
+    ink: 0xe2e8de,
+    dim: 0x8e998f,
+    line: 0x353b37,
+    accent: 0x92d46c,
+    up: 0x4cc35c,
+    warn: 0xf0b03a,
+    alarm: 0xff5a40,
+    metal: true,
+    engrave: 0x1c1e20,
+};
+
+/// A metal finish, as treadcore-client's `metal.rs` makes its textures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Finish {
+    /// Light chrome, its sheen near the top: frames and columns.
+    Plate,
+    /// A capsule, light above and dark below.
+    Button,
+    /// The button pushed in: the gradient turned over.
+    Pressed,
+}
+
+impl Finish {
+    fn spec(self) -> (&'static [(f32, f32)], f32, bool, u32) {
+        match self {
+            Finish::Plate => (&[(0.0, 196.0), (0.03, 236.0), (0.10, 214.0), (0.45, 186.0), (0.85, 160.0), (1.0, 138.0)], 0.05, true, 7),
+            Finish::Button => (&[(0.0, 122.0), (0.05, 207.0), (0.10, 190.0), (0.90, 112.0), (1.0, 84.0)], 0.04, true, 11),
+            Finish::Pressed => (&[(0.0, 84.0), (0.10, 112.0), (0.90, 176.0), (0.95, 196.0), (1.0, 140.0)], 0.04, false, 11),
+        }
+    }
+}
+
+fn mhash(mut x: u32) -> f32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^= x >> 16;
+    (x & 0xffff) as f32 / 65535.0
+}
+
+fn gradient(stops: &[(f32, f32)], t: f32) -> f32 {
+    let mut prev = stops[0];
+    for &s in stops {
+        if t <= s.0 {
+            let span = (s.0 - prev.0).max(1e-6);
+            let k = ((t - prev.0) / span).clamp(0.0, 1.0);
+            let k = k * k * (3.0 - 2.0 * k);
+            return prev.1 + (s.1 - prev.1) * k;
+        }
+        prev = s;
+    }
+    prev.1
+}
+
+fn rounded(x: f32, y: f32, w: f32, h: f32, r: f32) -> f32 {
+    let qx = (x - w / 2.0).abs() - (w / 2.0 - r);
+    let qy = (y - h / 2.0).abs() - (h / 2.0 - r);
+    let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+    outside + qx.max(qy).min(0.0) - r
+}
+
+/// A finish at a size, as `alpha << 24 | rgb`: treadcore's recipe (a
+/// gradient, horizontal streaks wavering along each row, a rim light on the
+/// lit edge, a dark outline, a breath of blue), drawn at the size asked
+/// rather than sliced, since this canvas has no texture sampler.
+fn finish_pixels(f: Finish, w: i32, h: i32, radius: f32) -> Vec<u32> {
+    let (stops, streak, lit_from_above, seed) = f.spec();
+    let (wf, hf) = (w as f32, h as f32);
+    let mut out = Vec::with_capacity((w * h).max(0) as usize);
+    for y in 0..h as u32 {
+        let row = mhash(y.wrapping_mul(2654435761) ^ seed) * 2.0 - 1.0;
+        let row2 = mhash(y.wrapping_mul(40503) ^ seed.wrapping_mul(97)) * 2.0 - 1.0;
+        let (f1, p1) = (0.02 + 0.05 * mhash(y ^ 0x51ed ^ seed), std::f32::consts::TAU * mhash(y ^ 0xa11 ^ seed));
+        for x in 0..w as u32 {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let d = rounded(px, py, wf, hf, radius);
+            let alpha = (0.5 - d).clamp(0.0, 1.0);
+            let t = py / hf;
+            let mut g = gradient(stops, t) / 255.0;
+            let waver = 0.65 + 0.35 * (px * f1 + p1).sin();
+            let fine = mhash(x.wrapping_mul(73856093) ^ y.wrapping_mul(19349663) ^ seed) * 2.0 - 1.0;
+            g += streak * (0.7 * row * waver + 0.3 * row2) + streak * 0.25 * fine;
+            let rim = ((d + 4.5) / 3.0).clamp(0.0, 1.0) * if d < -1.2 { 1.0 } else { 0.0 };
+            let upper = if lit_from_above { t < 0.5 } else { t >= 0.5 };
+            if upper {
+                g += (1.0 - g) * 0.55 * rim;
+            } else {
+                g *= 1.0 - 0.3 * rim;
+            }
+            let line = ((d + 1.6) / 0.6).clamp(0.0, 1.0);
+            g = (g * (1.0 - line) + 0.17 * line).clamp(0.0, 1.0);
+            let (r, gg, b) = (g * 0.985, g * 0.995, (g * 1.02).min(1.0));
+            let a = (alpha * 255.0) as u32;
+            out.push(a << 24 | ((r * 255.0) as u32) << 16 | ((gg * 255.0) as u32) << 8 | (b * 255.0) as u32);
+        }
+    }
+    out
+}
+
+thread_local! {
+    /// Finishes already drawn, by kind, size and corner: a frame redraws the
+    /// same plates and buttons, and a plate the size of the window is a
+    /// million pixels of arithmetic.
+    static FINISHES: std::cell::RefCell<std::collections::HashMap<(Finish, i32, i32, i32), std::rc::Rc<Vec<u32>>>> = Default::default();
+}
 
 /// Mix `a` toward `b`. `t` is 0..=255.
 ///
@@ -141,6 +265,80 @@ impl<'a> Canvas<'a> {
             let end = (row * self.w + x1) * 4;
             for chunk in self.px[start..end].chunks_exact_mut(4) {
                 chunk.copy_from_slice(&word);
+            }
+        }
+    }
+
+    /// Brushed metal over the rectangle, its corners cut round by `radius`.
+    pub fn metal(&mut self, x: i32, y: i32, w: i32, h: i32, f: Finish, radius: i32) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        let key = (f, w, h, radius);
+        let px = FINISHES.with(|c| {
+            let mut c = c.borrow_mut();
+            // Bounded by pixels, not entries: a window dragged through a
+            // hundred sizes leaves a hundred window-sized plates.
+            let held: usize = c.values().map(|v| v.len()).sum();
+            if !c.contains_key(&key) && held + (w * h) as usize > 12_000_000 {
+                c.clear();
+            }
+            c.entry(key).or_insert_with(|| std::rc::Rc::new(finish_pixels(f, w, h, radius as f32))).clone()
+        });
+        for row in 0..h {
+            let yy = y + row;
+            if yy < 0 || yy as usize >= self.h {
+                continue;
+            }
+            for col in 0..w {
+                let xx = x + col;
+                if xx < 0 || xx as usize >= self.w {
+                    continue;
+                }
+                let v = px[(row * w + col) as usize];
+                let a = (v >> 24) as u8;
+                if a == 0 {
+                    continue;
+                }
+                let c = if a == 255 { v & 0xffffff } else { mix(self.get(xx as usize, yy as usize), v & 0xffffff, a) };
+                self.set(xx, yy, c);
+            }
+        }
+    }
+
+    /// A black readout set into the metal: rounded, a dark rim, and a shade
+    /// along its top edge as if the metal stood over it.
+    pub fn well(&mut self, x: i32, y: i32, w: i32, h: i32, fill: Rgb, radius: i32) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        let r = radius as f32;
+        // The middle is a plain fill; only the band round the edge needs the
+        // rounded-rectangle test.
+        let top = (radius + 2).max(4);
+        let bottom = radius + 2;
+        self.rect(x + 2, y + top, w - 4, h - top - bottom, fill);
+        for row in 0..h {
+            let edge_row = row < top || row >= h - bottom;
+            let cols: Vec<i32> = if edge_row { (0..w).collect() } else { vec![0, 1, w - 2, w - 1] };
+            for col in cols {
+                let d = rounded(col as f32 + 0.5, row as f32 + 0.5, w as f32, h as f32, r);
+                if d > 0.5 {
+                    continue;
+                }
+                let (xx, yy) = (x + col, y + row);
+                if xx < 0 || yy < 0 || xx as usize >= self.w || yy as usize >= self.h {
+                    continue;
+                }
+                let mut c = fill;
+                if d > -1.5 {
+                    c = 0x2a2c2e;
+                } else if row < 4 {
+                    c = mix(0x000000, fill, (row * 60) as u8);
+                }
+                let a = ((0.5 - d).clamp(0.0, 1.0) * 255.0) as u8;
+                let c = if a == 255 { c } else { mix(self.get(xx as usize, yy as usize), c, a) };
+                self.set(xx, yy, c);
             }
         }
     }

@@ -615,36 +615,16 @@ impl Media {
 
 // ------------------------------------------------------------------ drawing ---
 
-const HEADER_H: i32 = 32;
 const PAD: i32 = 10;
 const ROW_H: i32 = 20;
 const FOOT_H: i32 = 88;
 
 /// Draw the pane. Returns a view to move to, if the operator asked.
 pub fn draw(ui: &mut Ui, m: &mut Media) -> Option<nav::View> {
-    let (w, h) = (ui.c.w as i32, ui.c.h as i32);
+    let w = ui.c.w as i32;
     let t = ui.t;
-    ui.panel(rect(0, 0, w, h), t.base);
-
-    let all = rect(0, 0, w, h);
-    let (header, rest) = all.cut_top(HEADER_H);
-
-    // ---- header, with the navigation strip -----------------------------
-    ui.panel(header, t.panel);
-    ui.hrule(header.x, header.bottom() - 1, header.w);
-    let ty = header.y + (HEADER_H - F10X20.height as i32) / 2;
-    ui.label(PAD, ty, "orrery", &F10X20, t.ink);
-    let nav_at = rect(PAD + F10X20.measure("orrery") as i32 + 14, header.y, nav::width(), HEADER_H);
-    let mut go = nav::strip(ui, nav_at, nav::View::Media);
-    if let Some(v) = nav::chord(ui) {
-        go = Some(v);
-    }
-
-    let sy = header.y + (HEADER_H - F8X13.height as i32) / 2;
-    if !m.fleet.is_empty() {
-        let right = format!("{}  {} cards", m.fleet, m.size);
-        nav::header_right(ui, header, PAD, sy, &right);
-    }
+    let right = if m.fleet.is_empty() { String::new() } else { format!("{}  {} cards", m.fleet, m.size) };
+    let (rest, go) = nav::header(ui, nav::View::Media, true, &right);
 
     // A job replaces the table, the way the results pane replaces the lab.
     if m.job.is_some() {

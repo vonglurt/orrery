@@ -116,6 +116,7 @@ fn main() {
     let mut gui = false;
     let mut frame_to = String::new();
     let mut dark = false;
+    let mut light = false;
     let mut copal = String::new();
     let mut ssh_user = String::from("copal");
     let mut zoom = 0usize;
@@ -207,6 +208,7 @@ fn main() {
                 i += 2
             }
             "--dark" => { dark = true; i += 1 }
+            "--light" => { light = true; i += 1 }
             "--thin" => { draw::BOLD.store(false, std::sync::atomic::Ordering::Relaxed); i += 1 }
             "--copal" => { copal = need(i, "--copal"); i += 2 }
             // The account on the node -- `copal-prep.sh`'s PI_USER. It is a
@@ -278,7 +280,7 @@ fn main() {
     // which makes it the way to look at the drawing on a machine that has
     // none -- a headless node, a container, a developer's Mac.
     if !frame_to.is_empty() {
-        let theme = if dark { draw::DARK } else { draw::LIGHT };
+        let theme = if dark { draw::DARK } else if light { draw::LIGHT } else { draw::METAL };
         let what = if specimen_frame {
             Frame::Specimen
         } else if frame_view == "files" {
@@ -359,7 +361,7 @@ fn main() {
     // closable. The wall and the seat move into it in later phases; what this
     // proves is that the Wayland client underneath works at all.
     if gui {
-        let theme = if dark { draw::DARK } else { draw::LIGHT };
+        let theme = if dark { draw::DARK } else if light { draw::LIGHT } else { draw::METAL };
         let posture = if operator.is_empty() {
             lab::Posture::Gallery
         } else {
@@ -1609,7 +1611,8 @@ fn usage() {
     --frame PATH         render one frame to a PPM and exit. Needs no
                          compositor, so it works on a headless node.
     --frame-view V       lab, media or files -- which face to render.
-    --dark               the night palette, for either of those.
+    --dark               the night palette, flat.
+    --light              the day palette, flat (the default is treadcore's brushed metal).
     --user NAME          the account on a node; copal-prep.sh's PI_USER.
 
   the seat, continued
