@@ -299,26 +299,34 @@ passed one read and were lost. A trial no better reaches z 3 one time in
 candidate still has its families and the tests to pass before it promotes.
 
 **A difficulty, like a block's.** Every bar is lowered by one *ease*, in
-errors, so that a promotion comes about every 2.5 hours (plan.json
-`weights.promote_every_min`, 150). If no promotion comes in that time, the
-ease rises by 1 for each further 2.5 hours, up to its floor of 2 (held-out
-z 1.0). A promotion that comes early raises the bars again, by half a step
-for each halving of its time. The aim comes from a simulation using the
-measured trials: their true gains spread as N(−0.45, 0.3) a seat, a seed
-swings by 4.9, and the fleet reads 5,400 seeds an hour.
+errors, so that a promotion comes about every 4 hours (plan.json
+`weights.promote_every_min`, 240). If no promotion comes in that time, the
+ease rises by 1 for each further 4 hours, up to its floor of 1.5
+(held-out z 1.5). A promotion that comes early raises the bars again, by
+half a step for each halving of its time. `tools/plans/difficulty-sim.py`
+reads what each ease buys, using the planner's own stages and bars. Here
+it is with the trials as the fleet's record allows: a bulk truly
+N(−0.35, 0.24) a seat, plus 0.3% real finds at +0.6. A seed swings by 4.9,
+and the fleet reads 5,250 seeds an hour.
 
 | Ease | One promotion every | True gain of each | Truly worse | Gain a day |
 |---|---|---|---|---|
-| 0 | 30 h | +0.50 | 0% | +0.4 |
-| 1 | 6.8 h | +0.37 | 1% | +1.4 |
-| 2 (the floor) | 2.5 h | +0.20 | 9% | +2.0 |
-| 3 | 80 min | +0.06 | 38% | +1.1 |
-| 4 | 50 min | −0.06 | 66% | −1.7 |
+| 0 | 16 h | +0.57 | 0% | +0.9 |
+| 1 | 5.1 h | +0.41 | 3% | +2.0 |
+| 1.5 (the floor) | 3.9 h | +0.29 | 7% | +1.8 |
+| 2 | 2.3 h | +0.18 | 18% | +1.9 |
+| 3 | 68 min | +0.02 | 51% | +0.3 |
+| 4 | 36 min | −0.09 | 72% | −3.7 |
 
 A promotion every 20 minutes is past what the trials hold: there the
-brain gets worse every day. That is why the floor is 2.
+brain gets worse every day. The floor is 1.5 because it stays near the
+best gain under every spread the data leaves open (0.24 with or without
+the finds, or 0.30), and lets one promotion in ten or fewer be truly
+worse. The first floor, 2, came from a spread of 0.30 alone; under the
+measured spread it let one in five through. The lab report has the
+measurement: `docs/difficulty-lab-report.md`.
 
-**The anchor reads catch the one in ten.** Once a promotion is built on
+**The anchor reads catch the truly worse.** Once a promotion is built on
 its machines, the defaults from three promotions back are queued as a
 trial, with its census and two held-out reads. If today's defaults are
 better, the trial fails. If not, it passes like any other trial and

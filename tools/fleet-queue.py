@@ -985,13 +985,13 @@ def health(q):
     # trials hold no more at any bar a promotion should pass.
     d = s.get("difficulty") or {}
     if d.get("since"):
-        every = d.get("every_min", 150)
+        every = d.get("every_min", 240)
         ago = (now() - d["since"]) / 60
         said = "bars lowered %.1f errors (held-out z %.1f), %s since %s, aiming at one each %s" % (
             d.get("ease", 0), d.get("held_z", 3), took(ago * 60),
             "the last promotion (%s)" % d["last_promotion"] if d.get("last_promotion") == d.get("seen") and d.get("last_gap_min") else "it began",
             took(every * 60))
-        if d.get("ease", 0) >= 2.0 and ago > 2 * every + 300:
+        if d.get("ease", 0) >= d.get("floor", 1.5) and ago > 2 * every + 300:
             check("warn", "difficulty", said + ": at its floor and no promotion")
         else:
             check("ok", "difficulty", said)

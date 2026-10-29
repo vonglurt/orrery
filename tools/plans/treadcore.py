@@ -668,20 +668,28 @@ class Plan:
     # Paul, 29 October: "something like a block height difficulty ... a
     # promotion every 20 minutes at average." Every bar (each stage's read
     # on and pass, the held-out reads' HELD_Z) is lowered by one ease, in
-    # errors. Simulated with the measured trials (true gains N(-0.45, 0.3) a
-    # seat, a seed's swing 4.9, 5,400 seeds an hour): at ease 0 a promotion
-    # a day, each truly +0.5, +0.4 a day; at 2 one in 2.5 hours, each +0.2
-    # and one in ten truly worse, +2.0 a day, the most; at 3 one in 80
-    # minutes, four in ten worse, +1.0; at 4 one in 47 minutes and two in
-    # three worse, the brain 2 a day poorer. One in 20 minutes is past
-    # what the trials hold, so the aim is the peak and EASE_MAX its floor.
+    # errors. difficulty-sim.py reads what each ease buys. The trials are a
+    # bulk truly N(-0.35, 0.24) a seat and a few real finds (0.3% at +0.6):
+    # the spread the held-out reads allow (first reads near z 2.3 held out
+    # at -0.10 on average) and the finds the fleet made (two in a day at
+    # ease 0). There, 5,250 seeds an hour: ease 0 a promotion each 16 hours,
+    # +0.9 a day; 1 each 5 hours, 3% truly worse, +2.0; 1.5 each 4 hours, 7%
+    # worse, +1.8; 2 each 2.3 hours, 18% worse, +1.9; 3 each 68 minutes,
+    # half worse, +0.3; 4 each 36 minutes, the brain 3.7 a day poorer. One
+    # in 20 minutes is past what the trials hold. The floor, 1.5, is the
+    # one ease within a few tenths of the most gain under each spread the
+    # data leaves open (0.24 with or without the finds, 0.30), and keeps the
+    # truly worse to one in ten or fewer; 2, first chosen from a spread of
+    # 0.30 alone, let one in five through under the measured one.
     # Like a block's difficulty: no promotion in its time and the ease
     # rises a step each PROMOTE_EVERY more; a promotion sooner than its
     # time lowers it by half a step for each halving (one quick promotion
-    # is as much luck as a sign). The anchor reads catch the one in ten
-    # (anchor_trial).
-    PROMOTE_EVERY = 150
-    EASE_MAX = 2.0
+    # is as much luck as a sign). The anchor reads catch the worse
+    # (anchor_trial). PROMOTE_EVERY is the floor's own pace, so the ease
+    # rests below the floor rather than pinned to it; a faster fleet
+    # promotes sooner at the same ease.
+    PROMOTE_EVERY = 240
+    EASE_MAX = 1.5
     EASE_STEP = 1.0
     HARDEN = 0.5
 
@@ -714,7 +722,8 @@ class Plan:
                       "since": last[0], "seen": last[1], "last_gap_min": round(gap / 60)})
         over = (now - d["since"]) / every - 1
         self._ease = min(self.EASE_MAX, d["base"] + self.EASE_STEP * max(0.0, over))
-        d.update({"ease": round(self._ease, 3), "every_min": round(every / 60), "held_z": round(self.HELD_Z - self._ease, 3)})
+        d.update({"ease": round(self._ease, 3), "every_min": round(every / 60), "held_z": round(self.HELD_Z - self._ease, 3),
+                  "floor": self.EASE_MAX})
         return self._ease
 
     ANCHOR = 3
@@ -1339,8 +1348,11 @@ class Plan:
                 return
         # Two failed in a row: something every candidate trips on (a test, a
         # family). Auto mode waits for a person rather than trying them all.
-        last = [self.rstate(r["id"]).get("status") for r in autos[-2:]]
-        if len(last) == 2 and all(x == "failed" for x in last):
+        # Two that failed different tests failed on their own numbers (29
+        # October: w1198 the square law, w1266 the capped castle), and two
+        # that failed before main last moved may pass on it now: neither waits.
+        last = [self.rstate(r["id"]) for r in autos[-2:]]
+        if len(last) == 2 and all(x.get("status") == "failed" for x in last) and self.same_failure([x.get("job") for x in last]):
             self.flag("auto", "auto promotion paused: %s and %s failed in a row; see their logs, then ask for a promotion by hand"
                       % (autos[-2]["id"], autos[-1]["id"]), key="paused:%s" % autos[-1]["id"])
             return
@@ -1976,7 +1988,10 @@ class Plan:
                 "grep 'test result' $O/tests.txt\n"
                 "cargo test -q -p treadcore-brain --release -- --ignored every_family_holds_its_floor --nocapture > $O/families-full.txt 2>&1 || { grep -E '^family|panicked|under' $O/families-full.txt; echo 'a family fell under its floor: not committed'; exit 1; }\n"
                 "grep -E '^family' $O/families-full.txt > $O/families.txt; cat $O/families.txt\n"
-                "git add source/treadcore-brain/src/weights.rs && echo %s | base64 -d > $O/msg.txt && git commit -q -F $O/msg.txt\n"
+                # Both files set-defaults.py writes: weights.rs alone left
+                # Tactics::default() behind, and main failed its tests from
+                # dc3df01 until d7e8c09 (29 October).
+                "git add source/treadcore-brain/src/weights.rs source/treadcore-brain/src/tactics.rs && echo %s | base64 -d > $O/msg.txt && git commit -q -F $O/msg.txt\n"
                 "%s\n"
                 "git rev-parse HEAD > $O/commit.txt; echo \"prepared $(cat $O/commit.txt) on $B\"\n"
             ) % (self.home, rid, branch, out, base, b1, b2,
@@ -2018,6 +2033,31 @@ class Plan:
         self.rsave(rid, st)
         return []
 
+    def same_failure(self, jobs):
+        """True when two failed promotions failed alike, on today's main:
+        their tests share a failure (or neither failed at the tests), and
+        main has no commit since the later."""
+        logs = []
+        for jid in jobs:
+            try:
+                f = os.path.join(self.q, "logs", jid + ".log")
+                logs.append((open(f).read(), os.path.getmtime(f)))
+            except (OSError, TypeError):
+                return True
+        tests = [self.failed_tests(l) for l, _ in logs]
+        if all(tests) and not (tests[0] & tests[1]):
+            return False
+        r = run(["git", "-C", self.tc, "log", "-1", "--format=%ct", "origin/main"])
+        try:
+            return int(r.stdout.strip()) < max(m for _, m in logs)
+        except ValueError:
+            return True
+
+    @staticmethod
+    def failed_tests(log):
+        """The tests cargo names under its last "failures:", a set."""
+        return {n.strip() for b in re.findall(r"^failures:\n((?:    \S+\n)+)", log, re.M) for n in b.splitlines()}
+
     def promote_failure(self, jid):
         """Which step of a promotion failed, read from its log: the brain's
         tests (and the first that failed), a family under its floor, or the
@@ -2027,8 +2067,8 @@ class Plan:
         except OSError:
             log = ""
         if "the tests failed" in log:
-            m = re.search(r"^(\S+) --- FAILED", log, re.M)
-            return "the brain's tests failed%s: see logs/%s.log" % (" (%s)" % m.group(1) if m else "", jid)
+            names = sorted(self.failed_tests(log))
+            return "the brain's tests failed%s: see logs/%s.log" % (" (%s)" % ", ".join(names) if names else "", jid)
         if "a family" in log and "under" in log:
             m = re.search(r"^family (\S+).*under", log, re.M)
             return "a family fell under its floor%s: see logs/%s.log" % (" (%s)" % m.group(1) if m else "", jid)
