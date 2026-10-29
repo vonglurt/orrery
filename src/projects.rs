@@ -1,0 +1,262 @@
+//! The Projects chapter: what the fleet works on, and which machine runs
+//! which (Paul, 28 October: "incorporate orrery and crucible into its second
+//! job. we want to complement and use our fleet").
+//!
+//! Two projects share grove:
+//! - **treadcore**, the tank game's brain, measured by census on the CPUs:
+//!   its queue, its candidates, auto mode;
+//! - **crucible**, a self-learning loop that runs entirely on a GPU
+//!   (`~/code/crucible`): its runs, read from its `runs/` folder.
+//!
+//! Then a row per machine: its cores and card, and what each project has on
+//! it. NOTHING HERE IS INVENTED: treadcore's lines are the queue's status, and
+//! crucible's are its run files. crucible is not in the queue yet, and the
+//! page says so rather than drawing a lamp it has not earned.
+
+use crate::font::{F10X20, F8X13};
+use crate::nav;
+use crate::training::Model;
+use crate::ui::{rect, Light, Rect, Ui};
+use std::time::{Duration, Instant};
+
+/// One crucible run, from its TSV: one line a generation.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CrucibleRun {
+    pub name: String,
+    pub gens: usize,
+    /// The champion's last read against the yardstick: (generation, wins).
+    pub yard: Option<(usize, f64)>,
+    /// Tank-steps a second, the run's best generation, millions.
+    pub msteps: f64,
+}
+
+/// crucible as its folder says, read again every 15 s.
+#[derive(Debug, Clone, Default)]
+pub struct Crucible {
+    pub dir: String,
+    pub found: bool,
+    pub runs: Vec<CrucibleRun>,
+    pub read_at: Option<Instant>,
+}
+
+impl Crucible {
+    pub fn new() -> Crucible {
+        let dir = std::env::var("ORRERY_CRUCIBLE").unwrap_or_else(|_| format!("{}/code/crucible", std::env::var("HOME").unwrap_or_default()));
+        Crucible { dir, ..Default::default() }
+    }
+
+    pub fn refresh(&mut self) {
+        if self.read_at.map(|t| t.elapsed() < Duration::from_secs(15)).unwrap_or(false) {
+            return;
+        }
+        self.read_at = Some(Instant::now());
+        self.found = std::path::Path::new(&format!("{}/src/crucible.cu", self.dir)).exists();
+        let mut runs = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(format!("{}/runs", self.dir)) {
+            let mut paths: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().map(|x| x == "tsv").unwrap_or(false)).collect();
+            paths.sort();
+            for p in paths {
+                let Ok(text) = std::fs::read_to_string(&p) else { continue };
+                let name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                runs.push(parse_run(&name, &text));
+            }
+        }
+        self.runs = runs;
+    }
+}
+
+/// A run's TSV: gen, best, mean, play_s, steps_per_s, net_gflops, hall,
+/// yard_win, yard_draw, yard_loss; a yardstick of -1 means not read.
+pub fn parse_run(name: &str, text: &str) -> CrucibleRun {
+    let mut r = CrucibleRun { name: name.to_string(), ..Default::default() };
+    for line in text.lines().skip(1) {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 8 {
+            continue;
+        }
+        let g: usize = f[0].parse().unwrap_or(0);
+        r.gens = r.gens.max(g + 1);
+        let sps: f64 = f[4].parse().unwrap_or(0.0);
+        r.msteps = r.msteps.max(sps / 1e6);
+        if let Ok(y) = f[7].parse::<f64>() {
+            if y >= 0.0 {
+                r.yard = Some((g + 1, y));
+            }
+        }
+    }
+    r
+}
+
+pub fn draw(ui: &mut Ui, m: &Model, c: &mut Crucible) -> Option<nav::View> {
+    let t = ui.t;
+    c.refresh();
+    let gpus = m.machines.iter().filter(|x| x.gpu.is_some()).count();
+    let right = format!("{} machines, {} with a GPU", m.machines.len(), gpus);
+    let (rest, go, _) = nav::header(ui, nav::View::Projects, true, &right, None);
+    let body = rest.inset(10);
+    let mut y = body.y;
+    ui.label_in(body.x, y, body.w, "Two projects share the fleet: treadcore on the CPUs, crucible on the GPUs.", &F10X20, t.ink);
+    y += F10X20.height as i32 + 10;
+
+    let card_h = 150;
+    let half = (body.w - 10) / 2;
+    draw_treadcore(ui, rect(body.x, y, half, card_h), m);
+    draw_crucible(ui, rect(body.x + half + 10, y, body.w - half - 10, card_h), m, c);
+    y += card_h + 14;
+
+    draw_matrix(ui, rect(body.x, y, body.w, body.bottom() - y), m, c);
+    go
+}
+
+fn card(ui: &mut Ui, at: Rect, name: &str, lamp: (Light, crate::draw::Rgb, &str)) -> i32 {
+    let t = ui.t;
+    ui.panel(at, t.tile);
+    ui.outline(at, t.line);
+    let x = at.x + 10;
+    let nx = ui.label(x, at.y + 8, name, &F10X20, t.ink);
+    ui.light(nx + 14, at.y + 8 + F10X20.height as i32 / 2, 4, lamp.0, lamp.1);
+    ui.label_in(nx + 24, at.y + 12, at.right() - nx - 30, lamp.2, &F8X13, lamp.1);
+    at.y + 8 + F10X20.height as i32 + 6
+}
+
+fn lines(ui: &mut Ui, at: Rect, mut y: i32, rows: &[(String, crate::draw::Rgb)]) {
+    for (s, c) in rows {
+        if y + F8X13.height as i32 > at.bottom() - 4 {
+            break;
+        }
+        ui.label_in(at.x + 10, y, at.w - 20, s, &F8X13, *c);
+        y += F8X13.height as i32 + 3;
+    }
+}
+
+fn draw_treadcore(ui: &mut Ui, at: Rect, m: &Model) {
+    let t = ui.t;
+    let Some(q) = &m.queue else {
+        let y = card(ui, at, "treadcore", (Light::Hollow, t.warn, "no queue: start orrery with --queue"));
+        lines(ui, at, y, &[("the tank game's brain, measured by census on the CPUs".into(), t.dim)]);
+        return;
+    };
+    let mut tot = [0i64; 5];
+    for (_, k) in &q.counts {
+        for i in 0..5 {
+            tot[i] += k[i];
+        }
+    }
+    let found = q.progress.iter().filter(|p| p.1 == "candidate").count();
+    let current = q.current.iter().filter(|c| c.1).count();
+    let state = format!("in queue {}: {}", q.name, if q.adding { "adding work" } else { "not adding" });
+    let y = card(ui, at, "treadcore", (Light::Full, t.up, &state));
+    let cpus = m.machines.len();
+    lines(
+        ui,
+        at,
+        y,
+        &[
+            ("the tank game's brain, measured by census on the CPUs".into(), t.dim),
+            (format!("{} queued, {} running, {} done, {} failed", tot[0], tot[1], tot[2], tot[3]), t.ink),
+            (format!("auto mode {}, rotation {}", if q.auto { "on" } else { "off" }, if q.rotation { "on" } else { "off" }), t.ink),
+            (format!("{} candidates, {} on today's defaults", found, current), if found > 0 { t.up } else { t.ink }),
+            (format!("runs on all {} machines (every one has CPUs)", cpus), t.dim),
+        ],
+    );
+}
+
+fn draw_crucible(ui: &mut Ui, at: Rect, m: &Model, c: &Crucible) {
+    let t = ui.t;
+    if !c.found {
+        let y = card(ui, at, "crucible", (Light::Hollow, t.warn, "not found"));
+        lines(ui, at, y, &[(format!("expected at {} (or ORRERY_CRUCIBLE)", c.dir), t.dim)]);
+        return;
+    }
+    let y = card(ui, at, "crucible", (Light::Hollow, t.warn, "built; not in the queue yet"));
+    let mut rows: Vec<(String, crate::draw::Rgb)> = vec![("a self-learning loop entirely on the GPU".into(), t.dim)];
+    let best = c.runs.iter().map(|r| r.msteps).fold(0.0, f64::max);
+    for r in c.runs.iter().rev().take(3) {
+        let yard = r.yard.map(|(g, w)| format!(", yardstick {:.0}% at {}", w * 100.0, g)).unwrap_or_default();
+        rows.push((format!("{}: {} generations{}", r.name, r.gens, yard), t.ink));
+    }
+    if best > 0.0 {
+        rows.push((format!("fastest: {:.0} M tank-steps a second", best), t.ink));
+    }
+    let cards: Vec<String> = m.machines.iter().filter_map(|x| x.gpu.as_ref().map(|g| format!("{} ({})", x.name, short_gpu(&g.name)))).collect();
+    rows.push((format!("for the GPUs: {}", if cards.is_empty() { "none answering".to_string() } else { cards.join(", ") }), t.dim));
+    lines(ui, at, y, &rows);
+}
+
+/// "NVIDIA GeForce GTX 1080 Ti" -> "1080 Ti".
+fn short_gpu(name: &str) -> String {
+    name.rsplit("GTX ").next().or_else(|| name.rsplit("RTX ").next()).unwrap_or(name).trim().to_string()
+}
+
+/// A row per machine: what it has, and each project's work on it.
+fn draw_matrix(ui: &mut Ui, at: Rect, m: &Model, c: &Crucible) {
+    let t = ui.t;
+    let lh = F8X13.height as i32;
+    let x_name = at.x + 10;
+    let x_cpu = at.x + 150;
+    let x_gpu = at.x + 260;
+    let x_tc = at.x + 380;
+    let x_cr = at.x + (at.w * 2 / 3).max(700.min(at.w - 260));
+    ui.label(at.x, at.y, "Which machine runs which", &F8X13, t.accent);
+    let hy = at.y + lh + 6;
+    for (x, s) in [(x_name, "machine"), (x_cpu, "CPU"), (x_gpu, "GPU"), (x_tc, "treadcore"), (x_cr, "crucible")] {
+        ui.label(x, hy, s, &F8X13, t.dim);
+    }
+    let mut y = hy + lh + 6;
+    let lanes = m.queue.as_ref().map(|q| &q.lanes[..]).unwrap_or(&[]);
+    for mc in &m.machines {
+        if y + lh + 8 > at.bottom() {
+            break;
+        }
+        let row = rect(at.x, y - 3, at.w, lh + 8);
+        ui.panel(row, t.tile);
+        ui.outline(row, t.line);
+        ui.label_in(x_name, y + 1, x_cpu - x_name - 8, &mc.name, &F8X13, t.ink);
+        ui.label(x_cpu, y + 1, &format!("{} cores", mc.cores), &F8X13, t.ink);
+        let gpu = mc.gpu.as_ref().map(|g| short_gpu(&g.name)).unwrap_or_else(|| "-".to_string());
+        ui.label(x_gpu, y + 1, &gpu, &F8X13, if mc.gpu.is_some() { t.ink } else { t.dim });
+        // treadcore: the machine's lane in the queue.
+        let lane = lanes.iter().find(|l| l.host == mc.name || (mc.name == "this Mac" && l.host == "mac"));
+        let (lamp, col, word) = match lane {
+            Some(l) if l.state == "running" => (Light::Full, t.up, format!("{}: {}", l.kind, l.title)),
+            Some(l) => (Light::Hollow, t.dim, l.state.clone()),
+            None => (Light::Hollow, t.dim, "no lane".to_string()),
+        };
+        ui.light(x_tc + 4, y + lh / 2 + 1, 4, lamp, col);
+        ui.label_in(x_tc + 14, y + 1, x_cr - x_tc - 24, &word, &F8X13, col);
+        // crucible: a card is ready for it; the queue does not run it yet.
+        let (lamp, col, word) = if mc.gpu.is_none() {
+            (Light::Hollow, t.line, "-".to_string())
+        } else if c.found {
+            (Light::Half, t.warn, "ready, not queued".to_string())
+        } else {
+            (Light::Hollow, t.dim, "crucible not found".to_string())
+        };
+        ui.light(x_cr + 4, y + lh / 2 + 1, 4, lamp, col);
+        ui.label_in(x_cr + 14, y + 1, at.right() - x_cr - 20, &word, &F8X13, col);
+        y += lh + 12;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_run_file_gives_its_length_its_last_yardstick_and_its_speed() {
+        let tsv = "gen\tbest\tmean\tplay_s\tsteps_per_s\tnet_gflops\thall\tyard_win\tyard_draw\tyard_loss\n\
+                   0\t3.9\t0.1\t0.6\t236700000\t1015\t1\t-1.0000\t-1.0000\t-1.0000\n\
+                   9\t5.0\t1.1\t0.6\t266100000\t1141\t3\t0.0100\t0.0200\t0.9700\n\
+                   10\t5.0\t1.1\t0.6\t250000000\t1100\t3\t-1.0000\t-1.0000\t-1.0000\n";
+        let r = parse_run("whitewolf-spar", tsv);
+        assert_eq!(r.gens, 11);
+        assert_eq!(r.yard, Some((10, 0.01)));
+        assert!((r.msteps - 266.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_card_is_named_short() {
+        assert_eq!(short_gpu("NVIDIA GeForce GTX 1080 Ti"), "1080 Ti");
+        assert_eq!(short_gpu("NVIDIA GeForce GTX 1070 Ti"), "1070 Ti");
+    }
+}

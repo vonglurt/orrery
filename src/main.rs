@@ -54,6 +54,7 @@ mod nav;
 mod mac;
 mod paint;
 mod profile;
+mod projects;
 mod pty;
 #[allow(dead_code)]
 mod rdp;
@@ -302,7 +303,7 @@ fn main() {
                 jobs_answer(&format!("{} status", machines_cmd(&queue_ctl)))
             };
             Frame::Machines { doc, select: frame_select.clone() }
-        } else if frame_view == "training" || frame_view == "jobs" {
+        } else if ["training", "jobs", "queue", "results", "projects"].contains(&frame_view.as_str()) {
             // A saved document, or the training command's answer.
             let doc = if !frame_state.is_empty() {
                 std::fs::read_to_string(&frame_state).unwrap_or_else(|e| {
@@ -314,7 +315,12 @@ fn main() {
             } else {
                 String::new()
             };
-            Frame::Training { doc }
+            let view = match frame_view.as_str() {
+                "results" => nav::View::Results,
+                "projects" => nav::View::Projects,
+                _ => nav::View::Queue,
+            };
+            Frame::Training { doc, view }
         } else {
             // The document comes from a file, from the fixture, or from the
             // CLI -- in that order, so that a review frame can be pinned to a
@@ -508,8 +514,9 @@ enum Frame {
     /// reason `--demo` exists at all: the drawing has to be reviewable without
     /// eight Raspberry Pis on the bench.
     Files { nodes: Vec<String> },
-    /// What the fleet is training, against a document (training.rs).
-    Training { doc: String },
+    /// The queue, its results or the projects, against a document
+    /// (training.rs, projects.rs).
+    Training { doc: String, view: nav::View },
     /// The machines, from a fresh install to a node (machines.rs).
     Machines { doc: String, select: Vec<String> },
     /// The machines' sessions, live: joined, then drawn after a wait
@@ -680,7 +687,7 @@ fn write_frame(
                 let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
                 media::draw(&mut u, &mut m);
             }
-            Frame::Training { ref doc } => {
+            Frame::Training { ref doc, view } => {
                 let m = training::Model::parse(doc, "");
                 // ORRERY_FRAME_ZOOM=N draws matrix N enlarged, the only way to
                 // review a picture that exists after a click.
@@ -695,7 +702,11 @@ fn write_frame(
                 let mut ui_state = ui::UiState::default();
                 ui_state.pointer = (-1, -1);
                 let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
-                training::draw(&mut u, &m, &mut st);
+                if view == nav::View::Projects {
+                    projects::draw(&mut u, &m, &mut projects::Crucible::new());
+                } else {
+                    training::draw(&mut u, &m, &mut st, view);
+                }
             }
             Frame::Machines { ref doc, ref select } => {
                 let m = machines::Model::parse(doc);
@@ -912,6 +923,7 @@ fn gui_loop<S: surface::Surface>(
     let mut ui_state = ui::UiState::default();
     let mut lab_state = lab::Lab::new(posture);
     let mut view = nav::View::default();
+    let mut crucible = projects::Crucible::new();
     // The card pane reads files rather than the fleet, so it is opened once
     // and reloaded after anything that writes one.
     let mut media = if demo_fixture {
@@ -937,7 +949,7 @@ fn gui_loop<S: surface::Surface>(
                     }
                 }
                 Cmd::Page(p) => {
-                    view = nav::View::Training;
+                    view = if p <= 1 { nav::View::Queue } else { nav::View::Results };
                     training_state.page = p;
                 }
                 Cmd::Grid => {
@@ -954,19 +966,19 @@ fn gui_loop<S: surface::Surface>(
                     injected.push(surface::Input::Key { scancode: 0, sym: surface::Sym::Char(c), down: false, mods });
                 }
                 Cmd::Queue(v) | Cmd::Run(v) => {
-                    view = nav::View::Training;
+                    view = nav::View::Queue;
                     training_state.page = if matches!(cmd, Cmd::Run(_)) { 1 } else { 0 };
                     if training_state.operator {
                         training_state.ctl = Some(v.to_string());
                     }
                 }
                 Cmd::ArmStop => {
-                    view = nav::View::Training;
+                    view = nav::View::Queue;
                     training_state.page = 0;
                     training_state.arm_stop = true;
                 }
                 Cmd::ArmShutdown => {
-                    view = nav::View::Training;
+                    view = nav::View::Queue;
                     training_state.page = 0;
                     training_state.arm_shutdown = true;
                 }
@@ -1116,10 +1128,16 @@ fn gui_loop<S: surface::Surface>(
                     }
                 }
                 (None, nav::View::Lab) => action = lab::draw(&mut u, &model, &mut lab_state),
-                (None, nav::View::Training) => {
+                (None, nav::View::Projects) => {
+                    let text = jobs_doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    if let Some(v) = projects::draw(&mut u, &training::Model::parse(&text, &jobs_source), &mut crucible) {
+                        action = Some(lab::Action::Go(v));
+                    }
+                }
+                (None, v @ (nav::View::Queue | nav::View::Results)) => {
                     let text = jobs_doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     training_state.said = queue_said.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                    let go = training::draw(&mut u, &training::Model::parse(&text, &jobs_source), &mut training_state);
+                    let go = training::draw(&mut u, &training::Model::parse(&text, &jobs_source), &mut training_state, v);
                     // A control runs on a thread: the queue's commands return at
                     // once, but a window that waits on a process stops drawing.
                     if let Some(verb) = training_state.ctl.take() {

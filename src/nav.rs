@@ -6,52 +6,178 @@
 //!
 //! ONE STRIP, IN THE HEADER, ALWAYS VISIBLE. Not a menu, which hides where you
 //! are until you open it; not a hamburger, which hides that there is anywhere
-//! else at all. Two or three words, the current one lit, in the same place on
-//! every view. The whole of the navigation is legible without clicking
-//! anything, which at eight tiles and three views is the correct amount of
-//! navigation to build.
+//! else at all. The current one lit, in the same place on every view.
+//!
+//! THE STRIP TELLS A STORY (Paul, 28 October: "rethink about the interface
+//! progression. tell a story"; he chose Build, Run, Result). Five chapters,
+//! in the order the work goes: a computer is added (Machines), given work
+//! (Projects), the work is queued and runs (Queue), what it found is read and
+//! promoted (Results), and anything can be watched or touched (Watch). Each
+//! chapter's pages are keys in the steel column on the left.
 
 use crate::font::F8X13;
 use crate::surface::Sym;
 use crate::ui::{rect, Rect, Ui};
 
-/// A face of the console.
+/// A face of the console: one page of a chapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
-    /// The room of machines.
-    Lab,
-    /// The cards, images and machines that room was made from.
-    Media,
     /// A fresh install to a fleet node: probe, the setup recipes, join
     /// (machines.rs).
     Machines,
-    /// What the fleet is training, and which machines are doing it
+    /// The cards, images and machines that room was made from.
+    Media,
+    /// What the fleet works on -- treadcore, crucible -- and which machine
+    /// runs which (projects.rs).
+    Projects,
+    /// The queue: each machine and its job, and the runs (training.rs).
+    Queue,
+    /// What the queue found: candidates, improvements, the net, flags
     /// (training.rs).
-    Training,
+    Results,
+    /// The room of machines.
+    Lab,
     /// The machines' terminals in a grid, each a resumable tmux session
     /// (sessions.rs).
     Sessions,
 }
 
 impl Default for View {
+    /// The queue: what is happening now, which is what a person opening the
+    /// window most often wants.
     fn default() -> View {
-        View::Lab
+        View::Queue
     }
 }
 
 impl View {
     pub fn title(&self) -> &'static str {
         match self {
-            View::Lab => "Lab",
-            View::Media => "Media",
             View::Machines => "Machines",
-            View::Training => "Training",
+            View::Media => "Media",
+            View::Projects => "Projects",
+            View::Queue => "Queue",
+            View::Results => "Results",
+            View::Lab => "Lab",
             View::Sessions => "Sessions",
         }
     }
 
-    /// Every view, in the order the strip draws them.
-    pub const ALL: &'static [View] = &[View::Lab, View::Media, View::Machines, View::Training, View::Sessions];
+    /// Every view, chapter by chapter.
+    pub const ALL: &'static [View] = &[View::Machines, View::Media, View::Projects, View::Queue, View::Results, View::Lab, View::Sessions];
+
+    pub fn chapter(&self) -> Chapter {
+        match self {
+            View::Machines | View::Media => Chapter::Machines,
+            View::Projects => Chapter::Projects,
+            View::Queue => Chapter::Queue,
+            View::Results => Chapter::Results,
+            View::Lab | View::Sessions => Chapter::Watch,
+        }
+    }
+}
+
+/// A chapter of the story: a key in the strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chapter {
+    Machines,
+    Projects,
+    Queue,
+    Results,
+    Watch,
+}
+
+impl Chapter {
+    pub const ALL: &'static [Chapter] = &[Chapter::Machines, Chapter::Projects, Chapter::Queue, Chapter::Results, Chapter::Watch];
+
+    pub fn title(&self) -> &'static str {
+        match self {
+            Chapter::Machines => "Machines",
+            Chapter::Projects => "Projects",
+            Chapter::Queue => "Queue",
+            Chapter::Results => "Results",
+            Chapter::Watch => "Watch",
+        }
+    }
+
+    /// Its views, the first where the strip goes.
+    pub fn views(&self) -> &'static [View] {
+        match self {
+            Chapter::Machines => &[View::Machines, View::Media],
+            Chapter::Projects => &[View::Projects],
+            Chapter::Queue => &[View::Queue],
+            Chapter::Results => &[View::Results],
+            Chapter::Watch => &[View::Lab, View::Sessions],
+        }
+    }
+
+    /// The chapter in a few words, cut into the foot of the column.
+    pub fn story(&self) -> &'static [&'static str] {
+        match self {
+            Chapter::Machines => &["1. Add a", "computer: probe", "it, set it up,", "join it."],
+            Chapter::Projects => &["2. Give it work:", "treadcore on the", "CPUs, crucible", "on the GPUs."],
+            Chapter::Queue => &["3. The work runs:", "each machine's", "job, and the", "runs asked for."],
+            Chapter::Results => &["4. What it found:", "candidates", "promote", "themselves."],
+            Chapter::Watch => &["5. Look in: the", "room, and every", "terminal."],
+        }
+    }
+}
+
+/// The steel column's width, left of every view's body.
+pub const COLUMN_W: i32 = 150;
+
+/// A page key in the column: its word, whether it is the one shown, and its
+/// lamp's colour when lit (None: dark).
+pub struct Key {
+    pub label: String,
+    pub on: bool,
+    pub lamp: Option<crate::draw::Rgb>,
+}
+
+/// The column's keys, top down, and the chapter's story at its foot.
+/// Returns the key clicked.
+pub fn column(ui: &mut Ui, at: Rect, keys: &[Key], chapter: Chapter) -> Option<usize> {
+    let t = ui.t;
+    if !t.metal {
+        ui.panel(at, t.panel);
+        ui.vrule(at.right() - 1, at.y, at.h);
+    }
+    let mut clicked = None;
+    let mut y = at.y + 4;
+    for (i, k) in keys.iter().enumerate() {
+        let r = rect(at.x + 6, y, at.w - 12, 26);
+        if t.metal {
+            let f = if k.on { crate::draw::Finish::Pressed } else { crate::draw::Finish::Button };
+            ui.c.metal(r.x, r.y, r.w, r.h, f, 7);
+            let lamp = if k.on { k.lamp.unwrap_or(t.up) } else { k.lamp.unwrap_or(0x3a3e40) };
+            ui.c.disc(r.x + 11, r.y + r.h / 2, 4, lamp);
+            let ty = r.y + (r.h - F8X13.height as i32) / 2 + if k.on { 1 } else { 0 };
+            ui.label_in(r.x + 21, ty, r.w - 25, &k.label, &F8X13, t.engrave);
+        } else {
+            if k.on {
+                ui.panel(r, t.tile);
+                ui.c.rect(r.x, r.y, 2, r.h, t.accent);
+            }
+            let ty = r.y + (r.h - F8X13.height as i32) / 2;
+            ui.label_in(r.x + 8, ty, r.w - 12, &k.label, &F8X13, if k.on { t.ink } else { k.lamp.unwrap_or(t.dim) });
+        }
+        if ui.button_hit(r) && !k.on {
+            clicked = Some(i);
+        }
+        y += 30;
+    }
+    let lines = chapter.story();
+    let mut sy = at.bottom() - 8 - lines.len() as i32 * (F8X13.height as i32 + 2);
+    for l in lines {
+        ui.label_in(at.x + 8, sy, at.w - 12, l, &F8X13, if t.metal { 0x3a3e42 } else { t.dim });
+        sy += F8X13.height as i32 + 2;
+    }
+    clicked
+}
+
+/// The chapter's views as column keys, the current one on.
+pub fn view_keys(current: View) -> Vec<Key> {
+    current.chapter().views().iter().map(|v| Key { label: v.title().to_string(), on: *v == current, lamp: None }).collect()
 }
 
 /// A header's text on the right, in the room the strip leaves: right-aligned
@@ -91,11 +217,12 @@ pub fn strip(ui: &mut Ui, at: Rect, current: View) -> Option<View> {
     let t = ui.t;
     let mut x = at.x;
     let mut chosen = None;
+    let here = current.chapter();
 
-    for (i, v) in View::ALL.iter().enumerate() {
-        let w = tab_w(*v, t.metal);
+    for (i, c) in Chapter::ALL.iter().enumerate() {
+        let w = tab_w(*c, t.metal);
         let tab = rect(x, at.y, w, at.h);
-        let on = *v == current;
+        let on = *c == here;
         let hot = ui.is_hot(tab);
 
         if t.metal {
@@ -109,33 +236,24 @@ pub fn strip(ui: &mut Ui, at: Rect, current: View) -> Option<View> {
             ui.c.disc(key.x + 11, key.y + key.h / 2, 4, lamp);
             let digit = char::from_digit(i as u32 + 1, 10).unwrap_or(' ').to_string();
             let nx = ui.label(key.x + 20, ty, &digit, &F8X13, 0x4a4e52);
-            ui.label_in(nx + 6, ty, key.right() - nx - 8, v.title(), &F8X13, t.engrave);
+            ui.label_in(nx + 6, ty, key.right() - nx - 8, c.title(), &F8X13, t.engrave);
             if hot && !on {
                 ui.c.rect(key.x + 8, key.bottom() - 3, key.w - 16, 1, t.accent);
             }
-            if ui.button_hit(tab) && !on {
-                chosen = Some(*v);
+        } else {
+            if on {
+                ui.panel(tab, t.tile);
+                // A lit underline rather than a filled box: a filled tab in
+                // the header reads as a button that does something.
+                ui.c.rect(tab.x, tab.bottom() - 2, tab.w, 2, t.accent);
+            } else if hot {
+                ui.panel(tab, t.panel);
             }
-            x += w;
-            continue;
+            let ty = tab.y + (tab.h - F8X13.height as i32) / 2;
+            ui.label_in(tab.x + 11, ty, w - 16, c.title(), &F8X13, if on { t.ink } else { t.dim });
         }
-
-        if on {
-            ui.panel(tab, t.tile);
-            // A lit underline rather than a filled box: the strip sits in the
-            // header beside the fleet's name, and a filled tab there reads as
-            // a button that does something to the fleet.
-            ui.c.rect(tab.x, tab.bottom() - 2, tab.w, 2, t.accent);
-        } else if hot {
-            ui.panel(tab, t.panel);
-        }
-
-        let ty = tab.y + (tab.h - F8X13.height as i32) / 2;
-        let fg = if on { t.ink } else { t.dim };
-        ui.label_in(tab.x + 11, ty, w - 16, v.title(), &F8X13, fg);
-
         if ui.button_hit(tab) && !on {
-            chosen = Some(*v);
+            chosen = Some(c.views()[0]);
         }
         x += w;
     }
@@ -144,23 +262,24 @@ pub fn strip(ui: &mut Ui, at: Rect, current: View) -> Option<View> {
 
 /// How wide the strip is in a theme, so a header can lay out around it.
 pub fn width_for(metal: bool) -> i32 {
-    View::ALL.iter().map(|v| tab_w(*v, metal)).sum()
+    Chapter::ALL.iter().map(|c| tab_w(*c, metal)).sum()
 }
 
 /// A tab's width: the word, and in metal a lamp and the digit as well.
-fn tab_w(v: View, metal: bool) -> i32 {
-    F8X13.measure(v.title()) as i32 + if metal { 44 } else { 22 }
+fn tab_w(c: Chapter, metal: bool) -> i32 {
+    F8X13.measure(c.title()) as i32 + if metal { 44 } else { 22 }
 }
 
 /// Every view's header height.
 pub const HEADER_H: i32 = 40;
 
 /// The frame every view shares (28 October, the metal redesign): the
-/// header with the name, the strip and `right` in a readout, and in the
-/// metal theme the window's steel round a black well. Returns the body
-/// under the header and a view chosen by a click or (when `chords`) by
-/// Command and a digit.
-pub fn header(ui: &mut Ui, current: View, chords: bool, right: &str) -> (Rect, Option<View>) {
+/// header with the name, the chapters and `right` in a readout; the steel
+/// column with the chapter's page keys (`keys`, or its views when None); and
+/// in the metal theme the window's steel round a black well. Returns the
+/// body, a view chosen (a chapter, a view key, or Command and a digit when
+/// `chords`), and a page key clicked when `keys` were given.
+pub fn header(ui: &mut Ui, current: View, chords: bool, right: &str, keys: Option<&[Key]>) -> (Rect, Option<View>, Option<usize>) {
     let t = ui.t;
     let (w, h) = (ui.c.w as i32, ui.c.h as i32);
     let pad = 10;
@@ -186,14 +305,25 @@ pub fn header(ui: &mut Ui, current: View, chords: bool, right: &str) -> (Rect, O
         let sy = header.y + (head_h - F8X13.height as i32) / 2;
         header_right(ui, header, pad, sy, right);
     }
+    let (col, rest) = rest.cut_left(COLUMN_W);
+    let mut page = None;
+    match keys {
+        Some(k) => page = column(ui, col, k, current.chapter()),
+        None => {
+            let k = view_keys(current);
+            if let Some(i) = column(ui, col, &k, current.chapter()) {
+                go = Some(current.chapter().views()[i]);
+            }
+        }
+    }
     let body = if t.metal {
-        let b = rect(rest.x + 6, rest.y, rest.w - 12, rest.h - 6);
+        let b = rect(rest.x, rest.y, rest.w - 6, rest.h - 6);
         ui.c.well(b.x, b.y, b.w, b.h, t.base, 8);
         b
     } else {
         rest
     };
-    (body, go)
+    (body, go, page)
 }
 
 /// The keyboard's way there: the platform's command modifier and a digit.
@@ -202,10 +332,10 @@ pub fn header(ui: &mut Ui, current: View, chords: bool, right: &str) -> (Rect, O
 /// gesture spelled two ways, which is why the interface asks for the gesture
 /// rather than for a key.
 pub fn chord(ui: &Ui) -> Option<View> {
-    for (i, v) in View::ALL.iter().enumerate() {
+    for (i, c) in Chapter::ALL.iter().enumerate() {
         let digit = char::from_digit(i as u32 + 1, 10)?;
         if ui.f.chord(Sym::Char(digit)) {
-            return Some(*v);
+            return Some(c.views()[0]);
         }
     }
     None
@@ -236,9 +366,9 @@ mod tests {
     fn the_strip_is_as_wide_as_the_tabs_it_draws() {
         // A header lays out around this, so it has to be true before anything
         // is drawn rather than discovered after.
-        let sum: i32 = View::ALL
+        let sum: i32 = Chapter::ALL
             .iter()
-            .map(|v| F8X13.measure(v.title()) as i32 + 22)
+            .map(|c| F8X13.measure(c.title()) as i32 + 22)
             .sum();
         assert_eq!(width_for(false), sum);
         // Five views since Machines (28 October): about 370 pixels, still a
@@ -252,20 +382,20 @@ mod tests {
     fn clicking_the_other_tab_moves_and_clicking_the_current_one_does_not() {
         let bar = rect(0, 0, width_for(false), 24);
         let mut s = UiState::default();
-        // The second tab. Media starts after Lab's width.
-        let lab_w = F8X13.measure("Lab") as i32 + 22;
+        // The second chapter, Projects, starts after Machines' width.
+        let first_w = F8X13.measure("Machines") as i32 + 22;
 
-        let got = frame(&mut s, &click(lab_w + 10, 12), |ui| {
+        let got = frame(&mut s, &click(first_w + 10, 12), |ui| {
             strip(ui, bar, View::Lab)
         });
-        assert_eq!(got, Some(View::Media));
+        assert_eq!(got, Some(View::Projects));
 
         // Re-entering the view you are already in must not report a change --
         // a caller that reloaded on every click would throw away a half-typed
         // field every time somebody clicked the tab they were on.
         let mut s = UiState::default();
-        let got = frame(&mut s, &click(10, 12), |ui| strip(ui, bar, View::Lab));
-        assert_eq!(got, None);
+        let got = frame(&mut s, &click(10, 12), |ui| strip(ui, bar, View::Media));
+        assert_eq!(got, None, "Media is in the Machines chapter, the one clicked");
     }
 
     #[test]
@@ -277,8 +407,9 @@ mod tests {
     }
 
     #[test]
-    fn the_command_chord_reaches_each_view_by_its_position() {
-        for (i, want) in View::ALL.iter().enumerate() {
+    fn the_command_chord_reaches_each_chapter_by_its_position() {
+        for (i, c) in Chapter::ALL.iter().enumerate() {
+            let want = &c.views()[0];
             let digit = char::from_digit(i as u32 + 1, 10).unwrap();
             let ev = [Input::Key {
                 scancode: 0,
@@ -314,7 +445,28 @@ mod tests {
                 assert_ne!(v, other);
             }
         }
-        // The chord is a digit, so more than nine views needs another idea.
-        assert!(View::ALL.len() <= 9, "the command-digit chords have run out");
+        // The chord is a digit, so more than nine chapters needs another idea.
+        assert!(Chapter::ALL.len() <= 9, "the command-digit chords have run out");
+    }
+
+    #[test]
+    fn a_chapter_story_fits_its_column() {
+        let room = (COLUMN_W - 12) as usize / F8X13.width as usize;
+        for c in Chapter::ALL {
+            for l in c.story() {
+                assert!(l.chars().count() <= room, "{:?}: {:?} is wider than {} letters", c, l, room);
+            }
+        }
+    }
+
+    #[test]
+    fn every_view_is_in_exactly_one_chapter_and_the_chapters_are_the_story() {
+        for v in View::ALL {
+            let n = Chapter::ALL.iter().filter(|c| c.views().contains(v)).count();
+            assert_eq!(n, 1, "{:?} is in {} chapters", v, n);
+            assert!(v.chapter().views().contains(v));
+        }
+        let titles: Vec<&str> = Chapter::ALL.iter().map(|c| c.title()).collect();
+        assert_eq!(titles, ["Machines", "Projects", "Queue", "Results", "Watch"]);
     }
 }

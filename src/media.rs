@@ -624,7 +624,7 @@ pub fn draw(ui: &mut Ui, m: &mut Media) -> Option<nav::View> {
     let w = ui.c.w as i32;
     let t = ui.t;
     let right = if m.fleet.is_empty() { String::new() } else { format!("{}  {} cards", m.fleet, m.size) };
-    let (rest, go) = nav::header(ui, nav::View::Media, true, &right);
+    let (rest, go, _) = nav::header(ui, nav::View::Media, true, &right, None);
 
     // A job replaces the table, the way the results pane replaces the lab.
     if m.job.is_some() {

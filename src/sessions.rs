@@ -361,7 +361,7 @@ pub fn draw(ui: &mut Ui, s: &mut Sessions) -> Option<nav::View> {
         Some(i) => format!("typing into {} -- click outside the tiles to stop", s.tiles[i].name),
         None => "click a tile to type into it; each is a tmux session that outlives orrery".to_string(),
     };
-    let (rest, go) = nav::header(ui, nav::View::Sessions, true, &hint);
+    let (rest, go, _) = nav::header(ui, nav::View::Sessions, true, &hint, None);
 
     let body = rest.inset(6);
     let n = s.tiles.len().max(1) as i32;

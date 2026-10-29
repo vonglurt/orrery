@@ -487,7 +487,9 @@ impl Lab {
 // ---------------------------------------------------------------------- layout ---
 
 const HEADER_H: i32 = nav::HEADER_H;
-const RAIL_W: i32 = 138;
+const RAIL_W: i32 = nav::COLUMN_W;
+/// The rail's top, where the chapter's keys are.
+const RAIL_KEYS_H: i32 = 64;
 const BAR_H: i32 = 32;
 const STATUS_H: i32 = 22;
 const PAD: i32 = 10;
@@ -572,7 +574,9 @@ pub fn draw(ui: &mut Ui, m: &Model, lab: &mut Lab) -> Option<Action> {
     if let Some(v) = draw_header(ui, &l, m) {
         action = Some(Action::Go(v));
     }
-    draw_rail(ui, &l, m, lab);
+    if let Some(v) = draw_rail(ui, &l, m, lab) {
+        action = Some(Action::Go(v));
+    }
     if lab.results.is_some() {
         if draw_results(ui, &l, lab) {
             lab.results = None;
@@ -650,16 +654,17 @@ fn draw_header(ui: &mut Ui, l: &Layout, m: &Model) -> Option<nav::View> {
     go
 }
 
-fn draw_rail(ui: &mut Ui, l: &Layout, m: &Model, lab: &mut Lab) {
+/// The rail: the Watch chapter's keys (Lab, Sessions) at its top, as every
+/// view's column has them, then scenes, tags and strangers. Returns a view
+/// chosen by a key.
+fn draw_rail(ui: &mut Ui, l: &Layout, m: &Model, lab: &mut Lab) -> Option<nav::View> {
     let t = ui.t;
-    if !t.metal {
-        ui.panel(l.rail, t.panel);
-        ui.vrule(l.rail.right() - 1, l.rail.y, l.rail.h);
-    }
+    let keys = nav::view_keys(nav::View::Lab);
+    let go = nav::column(ui, l.rail, &keys, nav::Chapter::Watch).map(|i| nav::Chapter::Watch.views()[i]);
 
-    let mut y = l.rail.y + 8;
+    let mut y = l.rail.y + RAIL_KEYS_H + 8;
     let head = |ui: &mut Ui, y: i32, s: &str| {
-        ui.label(l.rail.x + 6, y, s, &F8X13, ui.t.accent);
+        ui.label(l.rail.x + 8, y, s, &F8X13, if ui.t.metal { ui.t.engrave } else { ui.t.accent });
     };
 
     head(ui, y, "SCENES");
@@ -712,6 +717,7 @@ fn draw_rail(ui: &mut Ui, l: &Layout, m: &Model, lab: &mut Lab) {
         y += 13;
         ui.label_in(l.rail.x + 6, y, RAIL_W - 12, "contacted", &F8X13, t.dim);
     }
+    go
 }
 
 fn draw_lab(ui: &mut Ui, l: &Layout, m: &Model, lab: &mut Lab) {
@@ -1300,7 +1306,7 @@ mod tests {
         let mut lab = Lab::new(Posture::Operator);
         // The rail's first scene row. Scenes are ordered by the document's map.
         let first = m.scenes[0].clone();
-        let y = layout(960, 600).rail.y + 8 + 18;
+        let y = layout(960, 600).rail.y + RAIL_KEYS_H + 8 + 18;
         run(&mut lab, &m, &click(40, y + 4, Mods::default()), |ui, m, lab| draw(ui, m, lab));
         assert_eq!(lab.selection.len(), first.1.len());
         assert_eq!(lab.selection, first.1);

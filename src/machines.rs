@@ -166,7 +166,7 @@ impl State {
 pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
     let t = ui.t;
     let chords = st.confirm.is_none();
-    let (rest, go) = nav::header(ui, nav::View::Machines, chords, "a fresh install to a fleet node: probe, apply, join");
+    let (rest, go, _) = nav::header(ui, nav::View::Machines, chords, "a fresh install to a fleet node: probe, apply, join", None);
 
     let body = rest.inset(PAD);
     if !m.why.is_empty() {

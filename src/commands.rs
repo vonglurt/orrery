@@ -8,7 +8,7 @@
 //!
 //! A COMMAND DOES WHAT ITS BUTTON DOES, AND NO MORE. Nothing here goes round
 //! a confirmation: a recipe or a join opens the same typed-name screen its
-//! button opens; stopping or shutting the fleet down goes to Training with
+//! button opens; stopping or shutting the fleet down goes to the Queue with
 //! the button armed, waiting for its second press. A command that needs a
 //! selection (a Lab verb, a machine) acts on what is selected.
 
@@ -18,18 +18,18 @@ use crate::nav::View;
 pub enum Cmd {
     /// Go to a view.
     Go(View),
-    /// The Training view, at a page (training.rs: 0 Fleet, 1 Runs, 2 Found,
-    /// 3 Net, 4 Flags, 5 Candidates).
+    /// A page of the Queue (0 Fleet, 1 Runs) or the Results (2 Found, 3 Net,
+    /// 4 Flags, 5 Candidates) (training.rs).
     Page(usize),
     /// The Sessions grid (no tile enlarged).
     Grid,
     /// A key for the Lab, as if pressed there: its verbs, and Command-A.
     LabKey(char, bool),
-    /// A fleet-queue.py command, run as the Training view's buttons run them.
+    /// A fleet-queue.py command, run as the Queue's buttons run them.
     Queue(&'static str),
-    /// The Training button, armed: Collect results and stop now.
+    /// The Queue's button, armed: Collect results and stop now.
     ArmStop,
-    /// The Training button, armed: Shut the fleet down.
+    /// The Queue's button, armed: Shut the fleet down.
     ArmShutdown,
     /// A run asked for, as the Runs page's buttons ask.
     Run(&'static str),
@@ -51,20 +51,22 @@ pub enum Cmd {
 pub const MENU: &[(&str, &str, &str, Cmd)] = &[
     ("Orrery", "Quit Orrery", "q", Cmd::Quit),
     // ---- the screens
-    ("View", "Lab", "1", Cmd::Go(View::Lab)),
-    ("View", "Media", "2", Cmd::Go(View::Media)),
-    ("View", "Machines", "3", Cmd::Go(View::Machines)),
-    ("View", "Training", "4", Cmd::Go(View::Training)),
-    ("View", "Sessions", "5", Cmd::Go(View::Sessions)),
+    // The chapters, by their Command digit, then their other pages.
+    ("View", "Machines", "1", Cmd::Go(View::Machines)),
+    ("View", "Projects", "2", Cmd::Go(View::Projects)),
+    ("View", "Queue", "3", Cmd::Go(View::Queue)),
+    ("View", "Results", "4", Cmd::Go(View::Results)),
+    ("View", "Watch: Lab", "5", Cmd::Go(View::Lab)),
     ("View", "-", "", Cmd::Separator),
-    ("View", "Training: Fleet", "", Cmd::Page(0)),
-    ("View", "Training: Runs", "", Cmd::Page(1)),
-    ("View", "Training: Found", "", Cmd::Page(2)),
-    ("View", "Training: Candidates", "", Cmd::Page(5)),
-    ("View", "Training: Net", "", Cmd::Page(3)),
-    ("View", "Training: Flags", "", Cmd::Page(4)),
-    ("View", "-", "", Cmd::Separator),
-    ("View", "Sessions: Grid", "", Cmd::Grid),
+    ("View", "Machines: Media", "", Cmd::Go(View::Media)),
+    ("View", "Queue: Fleet", "", Cmd::Page(0)),
+    ("View", "Queue: Runs", "", Cmd::Page(1)),
+    ("View", "Results: Candidates", "", Cmd::Page(5)),
+    ("View", "Results: Found", "", Cmd::Page(2)),
+    ("View", "Results: Net", "", Cmd::Page(3)),
+    ("View", "Results: Flags", "", Cmd::Page(4)),
+    ("View", "Watch: Sessions", "", Cmd::Go(View::Sessions)),
+    ("View", "Watch: Sessions Grid", "", Cmd::Grid),
     // ---- the Lab's verbs, on the selected nodes
     ("Lab", "Select All Nodes", "a", Cmd::LabKey('a', true)),
     ("Lab", "-", "", Cmd::Separator),

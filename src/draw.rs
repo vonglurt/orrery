@@ -169,11 +169,14 @@ fn finish_pixels(f: Finish, w: i32, h: i32, radius: f32) -> Vec<u32> {
             let fine = mhash(x.wrapping_mul(73856093) ^ y.wrapping_mul(19349663) ^ seed) * 2.0 - 1.0;
             g += streak * (0.7 * row * waver + 0.3 * row2) + streak * 0.25 * fine;
             let rim = ((d + 4.5) / 3.0).clamp(0.0, 1.0) * if d < -1.2 { 1.0 } else { 0.0 };
-            let upper = if lit_from_above { t < 0.5 } else { t >= 0.5 };
-            if upper {
-                g += (1.0 - g) * 0.55 * rim;
+            // Light along the lit edge, shade along the other, blended down
+            // the sides: on a plate the height of a window, treadcore's
+            // switch at half height reads as a seam.
+            let k = if lit_from_above { 1.0 - 2.0 * t } else { 2.0 * t - 1.0 };
+            if k > 0.0 {
+                g += (1.0 - g) * 0.55 * rim * k;
             } else {
-                g *= 1.0 - 0.3 * rim;
+                g *= 1.0 + 0.3 * rim * k;
             }
             let line = ((d + 1.6) / 0.6).clamp(0.0, 1.0);
             g = (g * (1.0 - line) + 0.17 * line).clamp(0.0, 1.0);

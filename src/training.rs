@@ -495,7 +495,25 @@ fn bar(ui: &mut Ui, r: Rect, frac: f64, c: Rgb) {
     ui.c.rect(r.x + 1, r.y + 1, w, r.h - 2, c);
 }
 
-pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
+/// The pages of each chapter this file draws: the Queue's (Fleet, Runs) and
+/// the Results' (Candidates, Found, Net, Flags), by page number.
+const QUEUE_PAGES: [usize; 2] = [0, 1];
+const RESULTS_PAGES: [usize; 4] = [5, 2, 3, 4];
+
+/// (page number, name, what it shows). Candidates came after the rest and
+/// keeps the number 5, so ORRERY_FRAME_PAGE and a saved page mean what they
+/// meant.
+const PAGES: [(usize, &str, &str); 6] = [
+    (0, "Fleet", "each machine and its job"),
+    (1, "Runs", "ask for a run, cancel, approve"),
+    (2, "Found", "improvements, by variable and machine"),
+    (5, "Candidates", "trials past both held-out reads: progress, nothing to answer"),
+    (3, "Net", "the learned tank's weights"),
+    (4, "Flags", "what needs attention; acknowledge it"),
+];
+
+/// Draw the Queue or the Results (`view`). Returns a view to move to.
+pub fn draw(ui: &mut Ui, m: &Model, st: &mut State, view: nav::View) -> Option<nav::View> {
     let t = ui.t;
     let right = if m.fleet.is_empty() {
         String::new()
@@ -503,7 +521,33 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
         let up = m.machines.iter().filter(|x| x.up).count();
         format!("fleet {}  {} of {} machines answering", m.fleet, up, m.machines.len())
     };
-    let (rest, go) = nav::header(ui, nav::View::Training, true, &right);
+    let results = view == nav::View::Results;
+    let pages: &[usize] = if results { &RESULTS_PAGES } else { &QUEUE_PAGES };
+    if !pages.contains(&st.page) {
+        st.page = pages[0];
+    }
+    // The Flags key carries its count, its lamp red while any is
+    // unacknowledged; the Candidates key its count, green.
+    let (flags, found) = m.queue.as_ref().map(|q| (q.flags.len(), q.progress.iter().filter(|p| p.1 == "candidate").count())).unwrap_or((0, 0));
+    let keys: Vec<nav::Key> = pages
+        .iter()
+        .map(|&p| {
+            let name = PAGES.iter().find(|x| x.0 == p).map(|x| x.1).unwrap_or("");
+            let (label, lamp) = match name {
+                "Flags" if flags > 0 => (format!("Flags {}", flags), Some(t.alarm)),
+                "Candidates" if found > 0 => (format!("Candidates {}", found), Some(t.up)),
+                _ => (name.to_string(), None),
+            };
+            nav::Key { label, on: st.page == p, lamp }
+        })
+        .collect();
+    let (rest, mut go, clicked) = nav::header(ui, view, true, &right, Some(&keys));
+    if let Some(i) = clicked {
+        st.page = pages[i];
+    }
+    if go == Some(view) {
+        go = None;
+    }
 
     let body = rest.inset(PAD);
     if !m.why.is_empty() {
@@ -524,15 +568,22 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
         st.zoom = None;
     }
     let (sentence, step) = headline(m);
+    let sentence = match (&m.queue, results) {
+        (Some(q), true) => results_headline(q),
+        _ => sentence,
+    };
     ui.label_in(body.x, y, body.w, &sentence, &F10X20, t.ink);
     y += F10X20.height as i32 + 8;
     if let Some(q) = &m.queue {
-        // The queue's view: its band, the newest change in one line, then
-        // one page at a time, so nothing runs past its box.
-        y = draw_queue(ui, rect(body.x, y, body.w, 64), q, st) + 6;
-        y = draw_latest(ui, rect(body.x, y, body.w, 18), q) + 8;
-        let found = q.progress.iter().filter(|p| p.1 == "candidate").count();
-        y = draw_pages(ui, rect(body.x, y, body.w, 24), st, q.flags.len(), found) + 8;
+        // The queue's band (its controls) on the Queue only; the newest
+        // change in one line on both; then the page the column chose.
+        if !results {
+            y = draw_queue(ui, rect(body.x, y, body.w, 64), q, st) + 6;
+        }
+        y = draw_latest(ui, rect(body.x, y, body.w, 18), q) + 6;
+        let what = PAGES.iter().find(|p| p.0 == st.page).map(|p| p.2).unwrap_or("");
+        ui.label_in(body.x, y, body.w, what, &F8X13, t.dim);
+        y += F8X13.height as i32 + 8;
         let page = rect(body.x, y, body.w, body.bottom() - y);
         match st.page {
             1 => draw_runs_page(ui, page, q, st),
@@ -595,66 +646,19 @@ fn draw_latest(ui: &mut Ui, at: Rect, q: &Queue) -> i32 {
     at.bottom()
 }
 
-/// The page tabs under the band.
-fn draw_pages(ui: &mut Ui, at: Rect, st: &mut State, flags: usize, found: usize) -> i32 {
-    let t = ui.t;
-    // (page number, name, what it shows), in the order the tabs are drawn.
-    // Candidates came after the rest and keeps the number 5, so
-    // ORRERY_FRAME_PAGE and a saved page mean what they meant.
-    const PAGES: [(usize, &str, &str); 6] = [
-        (0, "Fleet", "each machine and its job"),
-        (1, "Runs", "ask for a run, cancel, approve"),
-        (2, "Found", "improvements, by variable and machine"),
-        (5, "Candidates", "trials past both held-out reads: progress, nothing to answer"),
-        (3, "Net", "the learned tank's weights"),
-        (4, "Flags", "what needs attention; acknowledge it"),
-    ];
-    let mut x = at.x;
-    for &(i, name, what) in PAGES.iter() {
-        // The Flags tab carries its count, lit while any is unacknowledged;
-        // the Candidates tab its count, in the colour of an improvement.
-        let alarm = name == "Flags" && flags > 0;
-        let good = name == "Candidates" && found > 0;
-        let shown = if alarm {
-            format!("Flags {}", flags)
-        } else if good {
-            format!("Candidates {}", found)
-        } else {
-            name.to_string()
-        };
-        let w = F8X13.measure(&shown) as i32 + if t.metal { 36 } else { 24 };
-        let tab = rect(x, at.y, w, at.h);
-        let on = st.page == i;
-        if t.metal {
-            // A key: pressed in for the page shown, its lamp green for
-            // candidates, red for flags, lit for the page shown.
-            let f = if on { crate::draw::Finish::Pressed } else { crate::draw::Finish::Button };
-            ui.c.metal(tab.x, tab.y, tab.w, tab.h, f, 7);
-            let lamp = if alarm { t.alarm } else if good { t.up } else if on { t.accent } else { 0x3a3e40 };
-            ui.c.disc(tab.x + 11, tab.y + tab.h / 2, 4, lamp);
-            let ty = tab.y + (at.h - F8X13.height as i32) / 2 + if on { 1 } else { 0 };
-            ui.label(tab.x + 21, ty, &shown, &F8X13, t.engrave);
-            if ui.button_hit(tab) {
-                st.page = i;
-            }
-            x += w + 4;
-            continue;
-        }
-        ui.panel(tab, if on { t.tile } else { t.panel });
-        ui.outline(tab, if alarm { t.alarm } else { t.line });
-        if on {
-            ui.c.rect(tab.x, tab.bottom() - 2, tab.w, 2, t.accent);
-        }
-        ui.label(tab.x + 12, tab.y + (at.h - F8X13.height as i32) / 2, &shown, &F8X13, if alarm { t.alarm } else if good { t.up } else if on { t.ink } else { t.dim });
-        if ui.button_hit(tab) {
-            st.page = i;
-        }
-        let _ = what;
-        x += w + 4;
-    }
-    let what = PAGES.iter().find(|p| p.0 == st.page).map(|p| p.2).unwrap_or("");
-    ui.label_in(x + 10, at.y + (at.h - F8X13.height as i32) / 2, at.right() - x - 10, what, &F8X13, t.dim);
-    at.bottom()
+/// The Results' sentence: what the fleet has found, in counts.
+fn results_headline(q: &Queue) -> String {
+    let found = q.progress.iter().filter(|p| p.1 == "candidate").count();
+    let current = q.current.iter().filter(|c| c.1).count();
+    let improvements: i64 = q.lead_vars.iter().map(|v| v.1).sum();
+    format!(
+        "{} found: {} candidates ({} on today's defaults), {} improvements; auto mode {}.",
+        q.name,
+        found,
+        current,
+        improvements,
+        if q.auto { "on" } else { "off" }
+    )
 }
 
 /// The Fleet page: a row a machine, two lines each. CPU is the machine's
