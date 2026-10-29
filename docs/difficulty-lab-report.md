@@ -312,10 +312,17 @@ at the same ease. It does not change which ease is best.
 
 **Still open.**
 
-- `a_capped_castle_fills_then_lines_the_road` rejected the only two
-  candidates found so far. If it pins a constant rather than a behaviour,
-  it will keep rejecting good trials. That is a question for treadcore,
-  not for the planner.
+- *Settled the same day:* `a_capped_castle_fills_then_lines_the_road`
+  pinned a constant. `road_posts` lines only a road longer than twice
+  `post_spacing`, and the test's second depot is the nearest one past 30
+  tiles. So at a spacing of 28 (w1266) or 40 (w1198) there was no road to
+  line, and the test failed on a number it does not test. It now pins
+  `post_spacing` at 10, beside the castle weights it already pinned
+  (treadcore `9032026`). With w1266's values, all 109 tests pass. A
+  candidate whose tests failed is now tried once more when main moves
+  (`retry_after_main`).
+- `the_square_law` still rejects w1198, on its `engage_odds` of 0.175. It
+  has not been looked at.
 - The anchor reads catch a drift only once it is three promotions deep.
 
 ## VII. What to watch

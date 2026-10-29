@@ -1357,6 +1357,7 @@ class Plan:
                       % (autos[-2]["id"], autos[-1]["id"]), key="paused:%s" % autos[-1]["id"])
             return
         tried = self.state.setdefault("auto_tried", [])
+        self.retry_after_main(autos, tried)
         ev = {k: v for k, v in self.evidence().items()
               if v.get("current") and v["families"] == "holds" and v["held_mean"] is not None and k not in tried}
         if not ev:
@@ -2032,6 +2033,38 @@ class Plan:
             st["why"] = self.promote_failure(st["job"])
         self.rsave(rid, st)
         return []
+
+    def retry_after_main(self, autos, tried):
+        """A candidate whose auto promotion failed at the brain's tests is
+        tried once more when main has moved since: the test may have been
+        the fault (29 October: grove/w1266 failed a castle test that pinned
+        post_spacing without saying so, treadcore 9032026). Once a main
+        commit, so a candidate that fails on its own numbers is not tried
+        over and over."""
+        r = run(["git", "-C", self.tc, "log", "-1", "--format=%ct %H", "origin/main"])
+        try:
+            when, sha = r.stdout.split()
+            when = int(when)
+        except ValueError:
+            return
+        done = self.state.setdefault("retried", {})
+        for a in autos:
+            st_ = self.rstate(a["id"])
+            name = st_.get("candidate")
+            if st_.get("status") != "failed" or name not in tried or done.get(name) == sha or "tests failed" not in st_.get("why", ""):
+                continue
+            # Only its newest try counts.
+            if any(self.rstate(b["id"]).get("candidate") == name for b in autos[autos.index(a) + 1:]):
+                continue
+            try:
+                failed = os.path.getmtime(os.path.join(self.q, "logs", st_["job"] + ".log"))
+            except (OSError, KeyError):
+                continue
+            if when > failed:
+                tried.remove(name)
+                done[name] = sha
+                self.flag("auto", "%s is tried again: its tests failed (%s), and main has moved since (%s)" % (name, a["id"], sha[:7]),
+                          key="retry:%s:%s" % (name, sha[:7]), progress=True)
 
     def same_failure(self, jobs):
         """True when two failed promotions failed alike, on today's main:
