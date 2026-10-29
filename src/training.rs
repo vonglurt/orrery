@@ -131,6 +131,23 @@ pub struct Island {
     pub yard: Option<(i64, f64)>,
     pub curve: Vec<f64>,
     pub msteps: f64,
+    /// The last ladder read: (generation, wins less losses against every
+    /// milestone, and against the newest).
+    pub ladder: Option<(i64, f64, f64)>,
+}
+
+/// crucible's milestones: one line of generations, each beating the one
+/// before, whichever island found it (plan/crucible.json "_ladder").
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Ladder {
+    /// (id, island, generation, margin in standard errors, when).
+    pub milestones: Vec<(String, String, i64, f64, String)>,
+    /// The milestones a segment is sent now, oldest first.
+    pub rungs: Vec<String>,
+    /// The newest lineage rows: (job, island, generation, against, margin, result).
+    pub lineage: Vec<(String, String, i64, String, String, String)>,
+    /// Champions kept, every segment's.
+    pub kept: i64,
 }
 
 /// One machine's lane in the queue.
@@ -182,11 +199,13 @@ pub struct Queue {
     pub rotation: bool,
     /// crucible's islands, one a GPU lane (plan/crucible.json).
     pub islands: Vec<Island>,
+    pub ladder: Ladder,
     /// The keeper, in a line: its pid, how long up, the last and next sync,
     /// and whether it holds this Mac awake.
     pub keeper: String,
     /// Push permission to the project's branch: (ok, "url branch", detail).
-    /// Approve is a push, so a template must have it.
+    /// Paul Accepts is a push, so a template must have it to land on main
+    /// (without it a promotion self-modifies onto the local line).
     pub push: Option<(bool, String, String)>,
 }
 
@@ -400,6 +419,7 @@ impl Model {
                 islands: match q.get("crucible") {
                     Some(json::Value::Obj(m)) => m
                         .iter()
+                        .filter(|(k, _)| !k.starts_with('_'))
                         .map(|(k, v)| Island {
                             name: k.clone(),
                             segments: n(v, "segments") as i64,
@@ -409,9 +429,28 @@ impl Model {
                             yard: v.get("yard").and_then(|y| y.as_array()).and_then(|y| Some((y.first()?.as_num()? as i64, y.get(1)?.as_num()?))),
                             curve: arr(v, "yard_curve").iter().filter_map(|y| Some(y.as_array()?.get(1)?.as_num()?)).collect(),
                             msteps: n(v, "msteps"),
+                            ladder: arr(v, "ladder_curve").last().and_then(|y| {
+                                let y = y.as_array()?;
+                                Some((y.first()?.as_num()? as i64, y.get(1)?.as_num()?, y.get(2)?.as_num()?))
+                            }),
                         })
                         .collect(),
                     _ => Vec::new(),
+                },
+                ladder: match q.get("crucible").and_then(|c| c.get("_ladder")) {
+                    Some(l) => Ladder {
+                        milestones: arr(l, "milestones")
+                            .iter()
+                            .map(|m| (s(m, "id"), s(m, "island"), n(m, "gen") as i64, n(m, "margin_se"), s(m, "made")))
+                            .collect(),
+                        rungs: arr(l, "rungs").iter().filter_map(|r| r.as_str().map(String::from)).collect(),
+                        lineage: arr(l, "lineage")
+                            .iter()
+                            .map(|r| (s(r, "job"), s(r, "island"), s(r, "gen").parse().unwrap_or(0), s(r, "against"), s(r, "margin_se"), s(r, "result")))
+                            .collect(),
+                        kept: n(l, "kept") as i64,
+                    },
+                    None => Ladder::default(),
                 },
                 keeper: q
                     .get("keeper")
@@ -543,7 +582,7 @@ const RESULTS_PAGES: [usize; 4] = [5, 2, 3, 4];
 /// meant.
 const PAGES: [(usize, &str, &str); 6] = [
     (0, "Fleet", "each machine and its job"),
-    (1, "Runs", "ask for a run, cancel, approve"),
+    (1, "Runs", "ask for a run, cancel, accept"),
     (2, "Found", "improvements, by variable and machine"),
     (5, "Candidates", "trials past both held-out reads: progress, nothing to answer"),
     (3, "Net", "the learned tank's weights"),
@@ -789,7 +828,7 @@ fn draw_fleet_rows(ui: &mut Ui, at: Rect, m: &Model) {
 }
 
 /// The Runs page: a button a kind of run (operator only), what each does,
-/// and every run asked for, with Cancel and Approve.
+/// and every run asked for, with Cancel, and Accept or To main.
 fn draw_runs_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     let t = ui.t;
     let lh = F8X13.height as i32 + 3;
@@ -851,10 +890,11 @@ fn draw_runs_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     let mut y = top;
     ui.label(rx, y, "Runs (r: the rotation's, a: auto mode's)", &F8X13, t.ink);
     y += lh;
-    // Approve pushes to the project's branch: say whether this machine can.
+    // Whether this machine can push decides how a promotion lands: Paul
+    // Accepts (pushed to main), or it self-modifies (the local line).
     let (pushline, pc) = match &q.push {
-        Some((true, at, _)) => (format!("push: ok to {}", at), t.up),
-        Some((false, at, why)) => (format!("push: NOT PERMITTED to {} ({}); Approve cannot land", at, why), t.alarm),
+        Some((true, at, _)) => (format!("push: ok to {}; with auto mode on, Paul Accepts each promotion", at), t.up),
+        Some((false, at, why)) => (format!("push: not permitted to {} ({}); promotions self-modify until resolved", at, why), t.warn),
         None => ("push: not checked yet (Sync now checks it)".to_string(), t.dim),
     };
     ui.label_in(rx, y, rw, &pushline, &F8X13, pc);
@@ -866,9 +906,11 @@ fn draw_runs_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     let start = q.runs.len().saturating_sub(shown);
     for r in &q.runs[start..] {
         let live = r.status == "running" || r.status == "new";
-        let ready = r.kind == "promote" && r.status == "prepared";
+        // A self-modified promotion waits on nobody, but it can be sent to
+        // main by hand (the local line, pushed).
+        let ready = r.kind == "promote" && (r.status == "prepared" || r.status == "self-modified");
         let cw = if st.operator && (live || ready) { 70 } else { 0 };
-        let colour = if r.status == "failed" { t.alarm } else if ready { t.up } else if live { t.ink } else { t.dim };
+        let colour = if r.status == "failed" { t.alarm } else if r.status == "self-modified" { t.warn } else if ready { t.up } else if live { t.ink } else { t.dim };
         let by = match r.by.as_str() {
             "rotation" => " r",
             "auto" => " a",
@@ -879,7 +921,7 @@ fn draw_runs_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
         if cw > 0 && live && ui.button(rect(at.right() - cw, y - 2, cw, lh), "Cancel", true) {
             st.ctl = Some(format!("cancel {}", r.id));
         }
-        if cw > 0 && ready && ui.button(rect(at.right() - cw, y - 2, cw, lh), "Approve", true) {
+        if cw > 0 && ready && ui.button(rect(at.right() - cw, y - 2, cw, lh), if r.status == "self-modified" { "To main" } else { "Accept" }, true) {
             st.ctl = Some(format!("approve {}", r.id));
         }
         y += lh + 2;
@@ -887,7 +929,7 @@ fn draw_runs_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
 }
 
 /// The Flags page: what the fleet raised for a person to see (a candidate
-/// past both reads, a promotion waiting for Approve, a run done or failed,
+/// past both reads, the local line to resolve, a run done or failed,
 /// a machine lost, the breaker, push permission), newest first; an
 /// operator acknowledges each, or all.
 fn draw_flags_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
@@ -910,7 +952,7 @@ fn draw_flags_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
         }
         let bw = if st.operator { 110 } else { 0 };
         ui.label(at.x, y, if when.len() >= 16 { &when[11..16] } else { when }, &F8X13, t.dim);
-        ui.label(at.x + 52, y, kind, &F8X13, if kind == "breaker" || kind == "push" || kind == "families" { t.alarm } else { t.up });
+        ui.label(at.x + 52, y, kind, &F8X13, if kind == "breaker" || kind == "push" || kind == "families" { t.alarm } else if kind == "resolve" { t.warn } else { t.up });
         ui.label_in(at.x + 52 + kw, y, at.w - 52 - kw - bw - 10, text, &F8X13, t.ink);
         if bw > 0 && ui.button(rect(at.right() - bw, y - 3, bw, lh - 2), "Acknowledge", true) {
             st.ctl = Some(format!("ack {} --by operator", id));
@@ -928,9 +970,9 @@ fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     let mut y = at.y;
     // Auto mode, and its switch.
     let mode = if q.auto {
-        "Auto mode ON: a run's result gets its held-out reads; the strongest current candidate promotes itself; every machine's build is checked for its values."
+        "Auto mode ON: a run's result gets its held-out reads; the strongest current candidate promotes itself; Paul Accepts it when this machine can push, else it self-modifies; every machine's build is checked for its values."
     } else {
-        "Auto mode OFF: candidates wait for a promotion asked for by hand, and for Approve."
+        "Auto mode OFF: a promotion is asked for by hand; prepared, it self-modifies (the local line) until it is sent to main."
     };
     let bw = if st.operator { 150 } else { 0 };
     ui.label_in(at.x, y, at.w - bw - 10, mode, &F8X13, if q.auto { t.up } else { t.dim });
@@ -952,6 +994,7 @@ fn draw_candidates_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
             let superseded = r.status == "failed" && last_ok.as_ref().map(|ok| ok.as_str() > r.id.as_str()).unwrap_or(false);
             let c = match r.status.as_str() {
                 "approved" => t.up,
+                "self-modified" => t.warn,
                 "failed" if superseded => t.dim,
                 "failed" => t.alarm,
                 _ => t.warn,
@@ -1825,6 +1868,24 @@ mod tests {
         let l = Lane { state: "sending".into(), job: "9001716".into(), age_s: Some(4), ..Lane::default() };
         assert_eq!(doing(&l, false), "Sending matches 9001716 to the GPU machine, for 4 s");
         assert_eq!(doing(&l, true), "Filing matches 9001716 and checking them, for 4 s");
+    }
+
+    #[test]
+    fn crucible_s_ladder_is_read_and_is_not_an_island() {
+        let doc = r#"{"queue":{"state":"running","crucible":{
+            "calber-cuda":{"segments":3,"generations":1500,"running":"x-calber-cuda-0003","failures":0,
+                           "yard":[1500,0.98],"yard_curve":[[1500,0.98]],"ladder_curve":[[1490,0.1,-0.2],[1500,0.25,0.12]],"msteps":529},
+            "_ladder":{"milestones":[{"id":"M0001-calber-cuda-g1000","island":"calber-cuda","gen":1000,"margin_se":0,"made":"t"}],
+                       "rungs":["M0001-calber-cuda-g1000"],"kept":4,
+                       "lineage":[{"job":"x-calber-cuda-0003","island":"calber-cuda","gen":"1500","against":"M0001-calber-cuda-g1000",
+                                   "margin_se":"5.1","result":"milestone M0002"}]}}}}"#;
+        let m = Model::parse(doc, "test");
+        let q = m.queue.as_ref().expect("a queue");
+        assert_eq!(q.islands.len(), 1, "_ladder is not an island");
+        assert_eq!(q.islands[0].ladder, Some((1500, 0.25, 0.12)));
+        assert_eq!(q.ladder.milestones[0].0, "M0001-calber-cuda-g1000");
+        assert_eq!(q.ladder.kept, 4);
+        assert_eq!(q.ladder.lineage[0].2, 1500);
     }
 
     #[test]

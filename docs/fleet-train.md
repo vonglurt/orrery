@@ -158,9 +158,16 @@ $F ensure; $F status; $F stop-adding; $F resume-adding; $F stop-now; $F sync; $F
 
 ### Push permission: what a template must have
 
-A promotion reaches the project only by a push. A prepared promotion becomes
-the project's branch when Approve pushes it, as a fast-forward. So a template
-must say where it lands, and the coordinator must be able to push there:
+A promotion reaches the project's main only by a push. With auto mode on
+and push permitted, **Paul Accepts** a prepared promotion (his standing
+word, 28 October) and it is pushed, as a fast-forward. Without permission,
+or with auto mode off, it **self-modifies**: it goes onto the local line
+`orrery/accepted` (main with the promotions not on it), every machine
+builds that line from a git bundle sent with its build, and a `resolve`
+flag asks Paul to commit the weights and nets (`git push origin
+orrery/accepted:main`, or `$F resolve`). When main holds the line, the line
+ends; when credentials come back, auto mode pushes it itself. Nothing
+waits for a person. A template says where promotions land:
 
 ```json
 "push": {"remote": "origin", "branch": "main"}
@@ -193,7 +200,8 @@ keeper, so the Mac stays awake exactly while the queue runs. Set
 **Flags.** When something needs a person, the keeper and the plan raise a
 **flag**:
 - a candidate under a family's floor;
-- a promotion prepared and waiting for Approve;
+- the local line to resolve (promotions self-modified, not on main), with
+  the nets not committed;
 - a run finished or failed;
 - a machine lost;
 - the breaker;
@@ -283,8 +291,11 @@ mode. We should be in auto mode." The cycle, with no one asked:
    (current: its census and both reads ran on today's defaults, by each
    census's `COMMIT`) gets a promotion run. One at a time; each candidate
    tried once; two failures in a row pause auto mode with a flag.
-6. **Approve.** The promotion's tests and full families pass on a branch;
-   auto mode then pushes it to main (a fast-forward).
+6. **Paul Accepts.** The promotion's tests and full families pass on a
+   branch; with push permitted, auto mode pushes it to main (a
+   fast-forward) and tags it `brain-RID`. Without permission it
+   self-modifies onto the local line, which the fleet builds, and a
+   `resolve` flag stays up until main has it.
 7. **Propagate.** Every machine's next top-up builds the new main and
    brings back the defaults it compiled. The promotion is **confirmed**
    machine by machine (Candidates page: `ok` confirmed, `..` building,
@@ -293,8 +304,8 @@ mode. We should be in auto mode." The cycle, with no one asked:
 8. **Again.** The search's history counts only censuses on the new
    defaults, and the search goes on from them.
 
-With auto mode off, step 5 waits for a promotion asked by hand and step 6
-for Approve.
+With auto mode off, step 5 waits for a promotion asked by hand, and step 6
+self-modifies (the Runs page's **To main** button pushes the local line).
 
 **The rotation** (config `"rotation"`, on unless `false`;
 `fleet-queue.py $Q rotation on|off`, or the button on the Runs page) is

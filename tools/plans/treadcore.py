@@ -236,6 +236,11 @@ class Plan:
         if r.returncode != 0:
             raise SystemExit("cannot resolve %s in %s: %s" % (ref, self.tc, r.stderr.strip()))
         self._sha = r.stdout.strip()
+        # Self-modified promotions not yet on main: the fleet builds the
+        # local line, main with them on top.
+        line = self.local_line(self._sha) if ref == "origin/main" else None
+        if line:
+            self._sha = line
         c = self.state["commits"]
         if self._sha not in c:
             # Censuses read with the same weights.rs share one set of
@@ -270,13 +275,18 @@ class Plan:
                 "  git merge -q --ff-only origin/main && echo \"checkout: main at $(git rev-parse --short HEAD)\" || echo 'checkout: not a fast-forward, left as it is'\n"
                 "else echo \"checkout: $(git rev-parse --abbrev-ref HEAD), with changes or not main: left as it is\"; fi\n"
                 "git worktree remove --force $C/wt 2>/dev/null || true; git worktree prune\n"
+                # The local line's commits, when the commit is not on main yet.
+                "[ -f $C/accepted.bundle ] && git fetch -q $C/accepted.bundle %s\n"
                 "git worktree add -q --detach $C/wt %s\n"
                 "cd $C/wt && export CARGO_TARGET_DIR=$HOME/fleet/target && . scripts/common.sh && census_bin $C >/dev/null\n"
                 "CENSUS_DUMP=$C/defaults.toml CENSUS_SEEDS=0 $C/census-bin --ignored brain_census >/dev/null 2>&1\n"
                 "echo \"census binary %s: $( (sha256sum $C/census-bin 2>/dev/null || shasum -a 256 $C/census-bin) | cut -c1-16)\"\n"
-            ) % (self.cdir(), sha, short)
+            ) % (self.cdir(), self.LINE, sha, short)
             job = {"id": jid, "kind": "prepare", "title": "build %s on %s" % (short, h["name"]),
                    "needs": "host:" + h["name"], "cmd": cmd, "timeout_s": 3600}
+            if self.state.get("local_line"):
+                job["send"] = [{"src": os.path.join(self.pd, "accepted.bundle"), "dst": "%s/accepted.bundle" % self.cdir()}]
+                job["title"] += " (the local line: %d promotion(s) not on main)" % len(self.state["local_line"]["promotions"])
             if "gpu" in h.get("caps", []):
                 # The GPU machine also builds the trainer at the commit.
                 job["cmd"] += (
@@ -769,11 +779,12 @@ class Plan:
         status = st.get("status")
         if status in ("done", "failed", "prepared"):
             text = {"done": "run %s finished" % rid, "failed": "run %s failed: %s" % (rid, st.get("why", "")),
-                    "prepared": "promotion %s is prepared on %s: read it, then Approve (a push to main)" % (rid, st.get("branch"))}[status]
+                    "prepared": "promotion %s is prepared on %s: Paul Accepts it when auto mode is on and this machine can push; "
+                                "otherwise it self-modifies (the local line)" % (rid, st.get("branch"))}[status]
             # News is progress (Paul, 28 October: "I'm going to always accept
-            # them"); a failure asks for a person, and so does a prepared
-            # promotion when auto mode is off.
-            asks = status == "failed" or (status == "prepared" and not self.auto())
+            # them"); only a failure asks for a person. A prepared promotion
+            # never waits: it is accepted or it self-modifies.
+            asks = status == "failed"
             self.flag("run" if status != "prepared" else "approve", text, key="run:%s:%s" % (rid, status), progress=not asks)
 
     # ---- auto mode: the cycle closes itself ---------------------------------------------
@@ -967,7 +978,7 @@ class Plan:
         # A promoted candidate is the defaults: read again it would be
         # measured against itself.
         promoted = {self.rstate(r["id"]).get("candidate") for r in self.runs()
-                    if r["kind"] == "promote" and self.rstate(r["id"]).get("status") == "approved"}
+                    if r["kind"] == "promote" and self.rstate(r["id"]).get("status") in ("approved", "self-modified")}
         older = sorted(((k, v) for k, v in ev.items() if k.startswith(self.name + "/") and not v.get("current")
                         and k not in promoted and v["held_mean"] is not None and done.get(k) != blob),
                        key=lambda kv: -kv[1]["held_mean"])[:self.REREAD]
@@ -1009,7 +1020,7 @@ class Plan:
             if r["kind"] != "promote":
                 continue
             st = self.rstate(rid)
-            if st.get("status") != "approved" or st.get("confirmed"):
+            if st.get("status") not in ("approved", "self-modified") or st.get("confirmed"):
                 continue
             want = {k: v["value"] for k, v in changed_vars(st.get("changed", [])).items()}
             # Every commit main has been at since the promotion (each carries
@@ -1136,7 +1147,7 @@ class Plan:
             first = len(jobs)
             rid, kind, p = r["id"], r["kind"], r.get("params", {})
             st = self.rstate(rid)
-            if st["status"] in ("done", "failed", "stopped", "approved", "rejected"):
+            if st["status"] in ("done", "failed", "stopped", "approved", "self-modified", "rejected"):
                 continue
             if kind in self.CENSUS_KINDS:
                 jobs += self.census_run(rid, kind, p, st)
@@ -1431,7 +1442,26 @@ class Plan:
             self.flag("push", "no push permission to %s %s: %s" % (url or remote, branch, detail), key="push:%s" % time.strftime("%Y-%m-%d"))
         return st
 
-    # ---- promotion: a candidate prepared for treadcore, approved by Paul ---------
+    # ---- promotion: a candidate prepared for treadcore, then accepted -----------
+    # Paul, 28 October: "The process needs to be scripted without
+    # intervention ... reword them to say Paul Accepts when auto promote is
+    # on, and ssh credentials allow. Else they self modify, and have a flag
+    # for please resolve this by commiting the weights and nets."
+    #
+    # A prepared promotion (its tests and families passed on a branch) is
+    #   accepted:      auto mode on and this coordinator can push: Paul
+    #                  Accepts, by his standing word; it is pushed to main and
+    #                  tagged brain-RID;
+    #   self-modified: otherwise: it goes onto the local line, a branch
+    #                  orrery/accepted in this checkout (main and the
+    #                  promotions not on it). The fleet builds the local line
+    #                  (a git bundle sent with each build), so the work goes on
+    #                  with the new values, and a flag asks Paul to resolve it:
+    #                  commit the weights and nets to main. When main holds the
+    #                  local line (Paul pushed it, or the credentials came back
+    #                  and auto mode pushed it), the line ends.
+    # Nothing waits for a person.
+    LINE = "orrery/accepted"
     def evidence(self):
         """Every candidate with its weights and evidence: the census, the two
         held-out reads, and its families. {name: {...}}."""
@@ -1483,15 +1513,12 @@ class Plan:
         return max(ev.items(), key=lambda kv: kv[1]["held_mean"]) if ev else (None, None)
 
     def promote_run(self, rid, p, st):
-        if st["status"] in ("prepared", "approved", "rejected"):
+        if st["status"] in ("prepared", "approved", "self-modified", "rejected"):
             return []
         if st["status"] == "new":
-            # Approve pushes the branch to the project's remote: without
-            # push permission a promotion could never land, so none starts.
-            ps = self.push_check()
-            if not ps["ok"]:
-                self.rsave(rid, {"status": "failed", "why": "no push permission to %s %s (%s): give this coordinator a key that can push, then ask again" % (ps["url"] or ps["remote"], ps["branch"], ps["detail"])})
-                return []
+            # Without push permission the promotion still runs: it is
+            # prepared here and self-modifies (the local line).
+            can_push = self.push_check()["ok"]
             name = p.get("candidate", "@strongest")
             if name == "@strongest":
                 name, ev = self.strongest()
@@ -1518,19 +1545,24 @@ class Plan:
                    "%s\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n") % (
                 name, "; ".join(changed) or "no change", fmt(ev.get("census")), " and ".join(fmt(h) for h in ev.get("held", [])) or "?",
                 ev.get("families"), self.name, rid,
-                "approved by orrery's auto mode (Paul, 28 October)" if self.auto() else "on main only when Paul approves")
+                "Paul Accepts: orrery's auto mode, with push permission (Paul, 28 October)" if self.auto() and can_push
+                else "self-modified: on orrery's local line %s until it is committed to main" % self.LINE)
             jid = "%s-promote" % rid
             branch = "promote/%s-%s" % (self.name, rid)
             b1 = base64.b64encode(ev["weights"].encode()).decode()
             b2 = base64.b64encode(msg.encode()).decode()
-            host = p.get("host", "mac")
+            # Without push permission the commit must be made where the
+            # local line is: here.
+            host = p.get("host", "mac") if can_push else "mac"
+            # It is tested on what the fleet runs: the local line, if there is one.
+            base = self.LINE if self.state.get("local_line") else "origin/main"
             out = "~/%s/out/%s" % (self.home, jid)
             cmd = (
                 "set -e -o pipefail; [ -f ~/.cargo/env ] && . ~/.cargo/env; export PATH=$HOME/.cargo/bin:/opt/homebrew/bin:$PATH\n"
                 "T=~/code/treadcore; W=~/%s/promote/%s; B=%s; O=%s; mkdir -p $O\n"
                 "cd $T && git fetch -q origin\n"
                 "git worktree remove --force $W 2>/dev/null || true; git worktree prune; git branch -D $B 2>/dev/null || true\n"
-                "git worktree add -q -b $B $W origin/main\n"
+                "git worktree add -q -b $B $W %s\n"
                 "cd $W && echo %s | base64 -d > $O/promote.weights && python3 -I scripts/set-defaults.py $O/promote.weights | tee $O/changed.txt\n"
                 # Its own target folder: two worktrees in one share the test
                 # binary's file name, and cargo can call another's fresh (LR 117).
@@ -1540,10 +1572,12 @@ class Plan:
                 "cargo test -q -p treadcore-brain --release -- --ignored every_family_holds_its_floor --nocapture > $O/families-full.txt 2>&1 || { grep -E '^family|panicked|under' $O/families-full.txt; echo 'a family fell under its floor: not committed'; exit 1; }\n"
                 "grep -E '^family' $O/families-full.txt > $O/families.txt; cat $O/families.txt\n"
                 "git add source/treadcore-brain/src/weights.rs && echo %s | base64 -d > $O/msg.txt && git commit -q -F $O/msg.txt\n"
-                "git push -q %s $B\n"
+                "%s\n"
                 "git rev-parse HEAD > $O/commit.txt; echo \"prepared $(cat $O/commit.txt) on $B\"\n"
-            ) % (self.home, rid, branch, out, b1, b2, self.push_target()[0])
-            st = {"status": "running", "job": jid, "candidate": name, "branch": branch, "changed": changed, "evidence": {k: ev.get(k) for k in ("census", "held", "families")}}
+            ) % (self.home, rid, branch, out, base, b1, b2,
+                 "git push -q %s $B" % self.push_target()[0] if can_push else "echo 'the branch is kept here: no push permission'")
+            st = {"status": "running", "job": jid, "candidate": name, "branch": branch, "changed": changed, "can_push": can_push,
+                  "evidence": {k: ev.get(k) for k in ("census", "held", "families")}}
             self.rsave(rid, st)
             return [{"id": jid, "kind": "promote", "title": "promote %s: tests and families on a branch" % name, "needs": "host:" + host,
                      "cmd": cmd, "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 4 * 3600}]
@@ -1552,14 +1586,25 @@ class Plan:
             c = glob.glob(os.path.join(self.q, "results", st["job"], self.home, "out", st["job"], "commit.txt"))
             st["commit"] = open(c[0]).read().strip() if c else ""
             st["status"] = "prepared"
-            st["detail"] = "%s: ready for Paul's approval (%s)" % (st["branch"], st["commit"][:7])
-            if self.auto():
-                self.rsave(rid, st)
-                try:
+            st["detail"] = "%s: prepared (%s)" % (st["branch"], st["commit"][:7])
+            self.rsave(rid, st)
+            accept = self.auto() and self.push_check()["ok"]
+            try:
+                if accept:
                     self._approve(rid)
-                except SystemExit as e:
+                else:
+                    self.self_modify(rid)
+                st = self.rstate(rid)
+            except SystemExit as e:
+                # main moved under it, or the replay failed: the local line
+                # takes it instead, so the values are not lost.
+                why = str(e).splitlines()[0]
+                try:
+                    self.self_modify(rid, because="Paul Accepts failed (%s)" % why)
+                    st = self.rstate(rid)
+                except SystemExit as e2:
                     st["status"] = "failed"
-                    st["why"] = "auto approval: %s" % str(e).splitlines()[0]
+                    st["why"] = "accepting: %s; self-modifying: %s" % (why, str(e2).splitlines()[0])
             self.tick({"kind": "promote", "run": rid, "host": "mac", "improved": True, "d": None, "se": None,
                        "vars": changed_vars(st["changed"])})
         elif st["job"] in self.ids("failed", "stopped"):
@@ -1585,14 +1630,18 @@ class Plan:
         return "the promotion job failed: see logs/%s.log" % jid
 
     def approve(self, rid):
-        """Paul's word: the prepared branch becomes main (a fast-forward), so
-        the fleet trains on it at its next top-up."""
+        """Paul's word, by hand: a prepared or self-modified promotion is
+        pushed to main, so the fleet trains on it at its next top-up."""
         st = self._approve(rid)
         self.keep()
         print("%s approved: main is %s; the fleet builds it at its next top-up" % (rid, st["commit"][:7]))
 
     def _approve(self, rid):
         st = self.rstate(rid)
+        if st.get("status") == "self-modified":
+            # By hand: the local line goes to main, this one with it.
+            self.resolve()
+            return self.rstate(rid)
         if st.get("status") != "prepared" or not st.get("commit"):
             raise SystemExit("%s is not a prepared promotion (%s)" % (rid, st.get("status")))
         remote, branch = self.push_target()
@@ -1623,7 +1672,8 @@ class Plan:
         run(["git", "-C", self.tc, "fetch", "-q", remote])
         self.push_check()
         st["status"] = "approved"
-        st["detail"] = "on main at %s" % st["commit"][:7]
+        st["accepted"] = "Paul Accepts (auto mode)" if self.auto() else "Paul approved"
+        st["detail"] = "%s: on main at %s" % (st["accepted"], st["commit"][:7])
         st["approved"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         # A micro version (Paul, 28 October: "essentially creating micro
         # versions of this git submission. its part of the program"): an
@@ -1639,9 +1689,163 @@ class Plan:
         # commit is read anew, so this pass's prep jobs build it everywhere.
         self.state["families_queued"] = []
         self._sha = None
-        self.flag("promote", "promotion %s approved%s: %s is main at %s; every machine builds it next" % (
-            rid, " by auto mode" if self.auto() else "", st.get("candidate"), st["commit"][:7]), key="approved:%s" % rid, progress=True)
+        self.flag("promote", "promotion %s: %s: %s is main at %s; every machine builds it next" % (
+            rid, st["accepted"], st.get("candidate"), st["commit"][:7]), key="approved:%s" % rid, progress=True)
         return st
+
+    def self_modify(self, rid, because=None):
+        """A prepared promotion onto the local line (LINE): main and the
+        promotions not on it. The fleet builds it; a flag asks Paul to
+        commit the weights and nets."""
+        st = self.rstate(rid)
+        remote, branch = self.push_target()
+        run(["git", "-C", self.tc, "fetch", "-q", remote], timeout=120)
+        tip = "%s/%s" % (remote, branch)
+        line = self.state.get("local_line")
+        base = self.LINE if line else tip
+        w = os.path.join(self.rdir(rid), "line")
+        run(["git", "-C", self.tc, "worktree", "remove", "--force", w])
+        run(["git", "-C", self.tc, "worktree", "prune"])
+        r = run(["git", "-C", self.tc, "worktree", "add", "-q", "--detach", w, base])
+        # The prepared commit was made on what the fleet ran then; on the
+        # line as it is now, it is replayed (cherry-picked) when needed.
+        same = run(["git", "-C", self.tc, "merge-base", "--is-ancestor", base, st["commit"]]).returncode == 0
+        r = r if r.returncode else run(["git", "-C", w, "merge", "-q", "--ff-only", st["commit"]] if same
+                                        else ["git", "-C", w, "cherry-pick", "--allow-empty", st["commit"]])
+        new = run(["git", "-C", w, "rev-parse", "HEAD"]).stdout.strip() if r.returncode == 0 else ""
+        run(["git", "-C", self.tc, "worktree", "remove", "--force", w])
+        if not new:
+            raise SystemExit("the promotion does not apply on the local line: " + (r.stderr or r.stdout)[-300:])
+        run(["git", "-C", self.tc, "branch", "-f", self.LINE, new])
+        line = line or {"promotions": []}
+        line["promotions"].append(rid)
+        line["commit"] = new
+        line["since"] = line.get("since") or time.strftime("%Y-%m-%dT%H:%M:%S")
+        self.state["local_line"] = line
+        self.bundle()
+        st["status"] = "self-modified"
+        st["tested"] = st["commit"]
+        st["commit"] = new
+        st["approved"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        why = because or ("auto mode is off" if not self.auto() else "no push permission (%s)" % self.push_check()["detail"])
+        st["detail"] = "self-modified onto %s at %s (%s): the fleet builds it; main does not have it yet" % (self.LINE, new[:7], why)
+        self.rsave(rid, st)
+        self.state["families_queued"] = []
+        self._sha = None
+        self.resolve_flag()
+        return st
+
+    def local_line(self, main_sha, by="committed to main by Paul"):
+        """The local line's head while main lacks it, else None. When main
+        holds every promotion on it, the line ends; when main moved on
+        without it, the line is replayed on main."""
+        line = self.state.get("local_line")
+        if not line:
+            return None
+        head = line.get("commit", "")
+        if run(["git", "-C", self.tc, "merge-base", "--is-ancestor", head, main_sha]).returncode == 0:
+            # Resolved: Paul committed the weights (or pushed the line).
+            for rid in line["promotions"]:
+                st = self.rstate(rid)
+                if st.get("status") == "self-modified":
+                    st["status"] = "approved"
+                    st["accepted"] = by
+                    st["self_modified_at"] = st.get("commit", "")
+                    st["commit"] = head
+                    st["detail"] = "%s: on main at %s (self-modified at %s before)" % (by, head[:7], st["self_modified_at"][:7])
+                    self.rsave(rid, st)
+            self.state.pop("local_line", None)
+            self.flag("resolve", "the local line is on main (%s): resolved" % main_sha[:7], key="resolved:%s" % head[:12], progress=True)
+            return None
+        if run(["git", "-C", self.tc, "merge-base", "--is-ancestor", main_sha, head]).returncode == 0:
+            return head
+        # main moved on: the line's own commits again, on top of it.
+        w = os.path.join(self.pd, "line-replay")
+        run(["git", "-C", self.tc, "worktree", "remove", "--force", w])
+        run(["git", "-C", self.tc, "worktree", "prune"])
+        own = run(["git", "-C", self.tc, "rev-list", "--reverse", "%s..%s" % (main_sha, head)]).stdout.split()
+        r = run(["git", "-C", self.tc, "worktree", "add", "-q", "--detach", w, main_sha])
+        for c in own:
+            if r.returncode:
+                break
+            r = run(["git", "-C", w, "cherry-pick", "--allow-empty", c])
+        new = run(["git", "-C", w, "rev-parse", "HEAD"]).stdout.strip() if r.returncode == 0 else ""
+        if r.returncode:
+            run(["git", "-C", w, "cherry-pick", "--abort"])
+        run(["git", "-C", self.tc, "worktree", "remove", "--force", w])
+        if not new:
+            self.flag("resolve", "main moved and the local line %s does not replay on it: please resolve this by committing the weights and nets by hand"
+                      % head[:7], key="replay:%s:%s" % (head[:12], main_sha[:12]))
+            return head
+        run(["git", "-C", self.tc, "branch", "-f", self.LINE, new])
+        line["commit"] = new
+        self.state["local_line"] = line
+        self.bundle()
+        return new
+
+    def bundle(self):
+        """The local line's own commits as a git bundle (plan/accepted.bundle),
+        sent with each build so every machine has them without GitHub."""
+        remote, branch = self.push_target()
+        f = os.path.join(self.pd, "accepted.bundle")
+        r = run(["git", "-C", self.tc, "bundle", "create", f + ".part", self.LINE, "^%s/%s" % (remote, branch)])
+        if r.returncode == 0:
+            os.replace(f + ".part", f)
+
+    def pending_nets(self):
+        """Nets not committed: files in the checkout's nets/ git does not
+        track, and the net rounds' best when it is a new one."""
+        out = []
+        r = run(["git", "-C", self.tc, "ls-files", "--others", "--exclude-standard", "nets"])
+        out += [l.strip() for l in r.stdout.splitlines() if l.strip().endswith(".bin")]
+        best = load(os.path.join(self.pd, "best.json"), {}) or {}
+        if best.get("round"):
+            out.append("plan/best.bin (%s)" % best.get("name"))
+        return out
+
+    def resolve_flag(self):
+        """Paul, 28 October: "have a flag for please resovle this by
+        commiting the weights and nets". Raised while the local line lacks
+        main, naming what to commit."""
+        line = self.state.get("local_line")
+        if not line:
+            return
+        nets = self.pending_nets()
+        remote, branch = self.push_target()
+        self.flag("resolve", "please resolve this by committing the weights and nets: %d promotion(s) (%s) are on %s at %s, not on %s/%s%s. "
+                  "From a machine that can push: git push %s %s:%s, or fleet-queue.py %s resolve" % (
+                      len(line["promotions"]), ", ".join(line["promotions"]), self.LINE, line["commit"][:7], remote, branch,
+                      "; nets not committed: " + ", ".join(nets) if nets else "", remote, self.LINE, branch, self.q),
+                  key="resolve:%s" % line["commit"][:12])
+
+    def resolve(self):
+        """The local line to main, when this coordinator can push."""
+        line = self.state.get("local_line")
+        if not line:
+            print("no local line: main has every promotion")
+            return
+        ps = self.push_check()
+        if not ps["ok"]:
+            raise SystemExit("no push permission (%s): push %s from a machine that can" % (ps["detail"], self.LINE))
+        remote, branch = self.push_target()
+        main = run(["git", "-C", self.tc, "rev-parse", "%s/%s" % (remote, branch)]).stdout.strip()
+        head = self.local_line(main)
+        if not head:
+            return
+        r = run(["git", "-C", self.tc, "push", remote, "%s:refs/heads/%s" % (head, branch)])
+        if r.returncode != 0:
+            raise SystemExit("the push failed: " + r.stderr[-300:])
+        run(["git", "-C", self.tc, "fetch", "-q", remote])
+        self.local_line(head, by="Paul Accepts (auto mode)" if self.auto() else "Paul approved")
+        for rid in line["promotions"]:
+            st = self.rstate(rid)
+            tag = self.micro_tag(rid, st)
+            if tag:
+                st["tag"] = tag
+                st["detail"] += ", tagged %s" % tag
+                self.rsave(rid, st)
+        self._sha = None
+        print("the local line is main at %s" % head[:7])
 
     def micro_tag(self, rid, st):
         tag = "brain-%s" % rid
@@ -1736,6 +1940,136 @@ class Plan:
     # generations, and takes the other islands' newest champions into its
     # hall of fame. The source is sent with every segment and built when it
     # changed, so the islands run what this Mac has.
+    #
+    # The ladder (Paul, 28 October: "islands' own past champions ...
+    # battling known milestones in the past is a good idea"; "when they find
+    # good values at the same time, how do we keep consistent generations
+    # with keeping data"). Every segment's champion is kept
+    # (crucible/champions/, a line in crucible/lineage.tsv). A champion
+    # becomes the fleet's next milestone, M(n+1), only when its exam was
+    # against M(n), the newest one, and it beat M(n) by more than two
+    # standard errors (wins less losses), without losing to the ladder on
+    # balance. When two islands qualify in the same pass, the larger margin
+    # (in standard errors) becomes M(n+1); the other is kept, and meets
+    # M(n+1) in its next segment. So the milestones are one line of
+    # generations, each beating the one before, whichever card found it, and
+    # nothing a card found is lost. The ladder and the imports are slot
+    # files the keeper reads when it dispatches a segment, so a segment
+    # queued six ahead still meets the newest milestones.
+    LADDER_SLOTS = 8
+
+    def crucible_dir(self, *a):
+        return os.path.join(self.q, "crucible", *a)
+
+    def ladder_rungs(self, ms):
+        """At most LADDER_SLOTS milestones, oldest first: the newest half,
+        and the older ones spread evenly."""
+        n = self.LADDER_SLOTS
+        if len(ms) <= n:
+            return list(ms)
+        new = ms[-(n // 2):]
+        old = ms[:-(n // 2)]
+        k = n - len(new)
+        return [old[round(i * (len(old) - 1) / max(1, k - 1))] for i in range(k)] + new
+
+    def ladder_write(self):
+        """The slot files and ladder.txt (slot, milestone) the segments are sent."""
+        lad = self.state.setdefault("crucible_ladder", {"milestones": []})
+        d = self.crucible_dir("ladder")
+        os.makedirs(d, exist_ok=True)
+        rungs = self.ladder_rungs(lad["milestones"])
+        lines = []
+        for i in range(self.LADDER_SLOTS):
+            dst = os.path.join(d, "slot-%d.bin" % i)
+            if i < len(rungs):
+                shutil.copyfile(self.crucible_dir("milestones", rungs[i]["id"] + ".bin"), dst + ".part")
+                lines.append("slot-%d.bin\t%s" % (i, rungs[i]["id"]))
+            else:
+                open(dst + ".part", "wb").close()
+            os.replace(dst + ".part", dst)
+        with open(os.path.join(d, "ladder.txt.part"), "w") as f:
+            f.write("".join(l + "\n" for l in lines))
+        os.replace(os.path.join(d, "ladder.txt.part"), os.path.join(d, "ladder.txt"))
+
+    def crucible_exam(self, name, jid):
+        """A finished segment's champion kept, its exam read: a row for the lineage."""
+        out = os.path.join(self.q, "results", jid, self.home, "out", jid)
+        champ = os.path.join(out, "champ.bin")
+        if not os.path.exists(champ):
+            return None
+        os.makedirs(self.crucible_dir("champions"), exist_ok=True)
+        os.makedirs(self.crucible_dir("latest"), exist_ok=True)
+        shutil.copyfile(champ, self.crucible_dir("champions", jid + ".bin"))
+        shutil.copyfile(champ, self.crucible_dir("latest", name + ".bin.part"))
+        os.replace(self.crucible_dir("latest", name + ".bin.part"), self.crucible_dir("latest", name + ".bin"))
+        gen, last_yard = 0, None
+        try:
+            rows = open(os.path.join(out, "gens.tsv")).read().splitlines()[1:]
+            gen = int(rows[-1].split("\t")[0]) + 1 if rows else 0
+            ys = [float(r.split("\t")[7]) for r in rows if len(r.split("\t")) > 9 and float(r.split("\t")[7]) >= 0]
+            last_yard = ys[-1] if ys else None
+        except (OSError, ValueError):
+            pass
+        exam = []
+        try:
+            for line in open(os.path.join(out, "exam.tsv")).read().splitlines()[1:]:
+                o, w, d, l, n = line.split("\t")
+                exam.append((o, float(w), float(d), float(l), int(n)))
+        except (OSError, ValueError):
+            pass
+        row = {"job": jid, "island": name, "gen": gen, "yard": None, "against": None, "w": None, "d": None, "l": None,
+               "margin_se": None, "ladder_mean": None, "result": "kept"}
+        rungs = [e for e in exam if e[0] != "yardstick"]
+        # A segment from before the exam: its last yardstick read instead.
+        row["yard"] = last_yard
+        for e in exam:
+            if e[0] == "yardstick":
+                row["yard"] = e[1]
+        if rungs:
+            o, w, d, l, n = rungs[-1]
+            se = math.sqrt(max(1e-9, (w + l - (w - l) ** 2) / n))
+            row.update({"against": o, "w": w, "d": d, "l": l, "margin_se": (w - l) / se,
+                        "ladder_mean": sum(r[1] - r[3] for r in rungs) / len(rungs)})
+        return row
+
+    def crucible_ladder(self, fresh):
+        """Finished segments, all islands at once: each kept, and the
+        milestone rule applied in order of margin."""
+        lad = self.state.setdefault("crucible_ladder", {"milestones": []})
+        rows = [r for r in (self.crucible_exam(n, j) for n, j in fresh) if r]
+        top = lad["milestones"][-1]["id"] if lad["milestones"] else None
+        # Strongest first: the margin over the newest milestone; with no
+        # milestone yet, the yardstick's wins.
+        rows.sort(key=lambda r: (-(r["margin_se"] if r["margin_se"] is not None else -1e9), -(r["yard"] or 0), r["island"]))
+        os.makedirs(self.crucible_dir("milestones"), exist_ok=True)
+        for r in rows:
+            if top is None:
+                ok = r is rows[0]
+                why = "the first milestone (yardstick %.3f)" % (r["yard"] or 0)
+            elif r["against"] != top:
+                ok, why = False, "%s, not the newest %s: meets it next segment" % (
+                    "examined against %s" % r["against"] if r["against"] else "no exam against the ladder", top)
+            else:
+                ok = r["margin_se"] > 2 and r["ladder_mean"] >= 0
+                why = "beat %s by %.1f se, ladder %+.3f" % (top, r["margin_se"], r["ladder_mean"])
+            if ok:
+                mid = "M%04d-%s-g%d" % (len(lad["milestones"]) + 1, r["island"], r["gen"])
+                shutil.copyfile(self.crucible_dir("champions", r["job"] + ".bin"), self.crucible_dir("milestones", mid + ".bin"))
+                lad["milestones"].append({"id": mid, "job": r["job"], "island": r["island"], "gen": r["gen"],
+                                          "after": top, "margin_se": r["margin_se"], "made": time.strftime("%Y-%m-%dT%H:%M:%S")})
+                r["result"] = "milestone %s: %s" % (mid, why)
+                top = mid
+                self.flag("crucible", "crucible: %s is milestone %s (%s)" % (r["job"], mid, why), key="milestone:%s" % mid, progress=True)
+            else:
+                r["result"] = "kept: %s" % why
+            new = not os.path.exists(self.crucible_dir("lineage.tsv"))
+            with open(self.crucible_dir("lineage.tsv"), "a") as f:
+                if new:
+                    f.write("time\tjob\tisland\tgen\tyard_win\tagainst\twin\tdraw\tloss\tmargin_se\tladder_mean\tresult\n")
+                fm = lambda x: "-" if x is None else ("%.4f" % x if isinstance(x, float) else str(x))
+                f.write("\t".join([time.strftime("%Y-%m-%dT%H:%M:%S"), r["job"], r["island"], str(r["gen"])] +
+                                  [fm(r[k]) for k in ("yard", "against", "w", "d", "l", "margin_se", "ladder_mean")] + [r["result"]]) + "\n")
+        self.ladder_write()
     def crucible_src(self):
         return os.path.expanduser(self.cfg.get("crucible", {}).get("source", "~/code/crucible"))
 
@@ -1743,12 +2077,15 @@ class Plan:
         src = self.crucible_src()
         if not self.cuda or not os.path.exists(os.path.join(src, "src", "crucible.cu")):
             return []
-        opt = dict({"gens": 50, "pop": 2048, "eps": 128, "yard": 10, "ahead": 6}, **self.cfg.get("crucible", {}))
+        opt = dict({"gens": 50, "pop": 2048, "eps": 128, "yard": 10, "ahead": 6, "lad": 0.2}, **self.cfg.get("crucible", {}))
+        if not os.path.exists(self.crucible_dir("ladder", "ladder.txt")):
+            self.ladder_write()
         cr = self.state.setdefault("crucible", {})
         done, bad = self.ids("done"), self.ids("failed", "stopped")
         # Each island keeps `ahead` segments queued, each after the one
         # before (its state file is the last one's), so the GPU lane is not
         # left idle between the keeper's plans.
+        fresh = []
         for h in self.cuda:
             isl = cr.setdefault(h["name"], {"seg": 0, "last": None, "failures": 0, "gens": 0})
             isl.setdefault("queued", [isl["job"]] if isl.get("job") else [])
@@ -1758,6 +2095,7 @@ class Plan:
             for j in isl["queued"]:
                 if j in done:
                     isl.update({"seg": isl["seg"] + 1, "last": j, "failures": 0, "gens": isl["gens"] + opt["gens"]})
+                    fresh.append((h["name"], j))
                 elif j in bad:
                     isl["failures"] += 1
                 else:
@@ -1765,6 +2103,7 @@ class Plan:
             isl["queued"] = live
             if isl["failures"] >= 3:
                 self.flag("crucible", "crucible on %s failed three segments in a row: see its logs" % h["name"], key="crucible:%s:%d" % (h["name"], isl["seg"]))
+        self.crucible_ladder(fresh)
         jobs = []
         for h in self.cuda:
             name, isl = h["name"], cr[h["name"]]
@@ -1775,22 +2114,28 @@ class Plan:
                 isl["next"] += 1
                 home = "%s/crucible" % self.home
                 send = [{"src": os.path.join(src, f), "dst": "~/%s/%s" % (home, f)} for f in ("src/crucible.cu", "Makefile")]
+                # Read when the keeper dispatches it: the other islands'
+                # newest champions, and the ladder as it is then.
                 imports = []
-                for o, oi in cr.items():
-                    if o != name and oi.get("last"):
-                        champ = os.path.join(self.q, "results", oi["last"], self.home, "out", oi["last"], "champ.bin")
-                        if os.path.exists(champ):
-                            send.append({"src": champ, "dst": "~/%s/in/%s.bin" % (home, o)})
-                            imports.append("$H/in/%s.bin" % o)
+                for o in cr:
+                    champ = self.crucible_dir("latest", o + ".bin")
+                    if o != name and os.path.exists(champ):
+                        send.append({"src": champ, "dst": "~/%s/in/%s.bin" % (home, o)})
+                        imports.append("$H/in/%s.bin" % o)
+                send += [{"src": self.crucible_dir("ladder", f), "dst": "~/%s/ladder/%s" % (home, f)}
+                         for f in ["slot-%d.bin" % i for i in range(self.LADDER_SLOTS)] + ["ladder.txt"]]
                 seed = 1000 + 97 * (sum(map(ord, name)) % 1000)
                 cmd = (
                     "set -e; H=~/%s; O=~/%s/out/%s; mkdir -p $O $H/in\n"
                     "cd $H && make -s NVCC=${NVCC:-/usr/local/cuda/bin/nvcc} >/dev/null 2>&1 || make NVCC=${NVCC:-/usr/local/cuda/bin/nvcc}\n"
                     "L=''; [ -f $H/island.state ] && L=\"--load $H/island.state\"\n"
                     "I='%s'\n"
-                    "./crucible --pop %d --eps %d --gens %d --yard %d --seed %d $L ${I:+--import $I} "
-                    "--save $H/island.state --export $O/champ.bin --out $O/gens.tsv 2>&1 | tee $O/console.txt | grep '^#'\n"
-                ) % (home, self.home, jid, ",".join(imports), opt["pop"], opt["eps"], opt["gens"], opt["yard"], seed)
+                    # The milestones by name, oldest first, from their slots.
+                    "rm -rf $H/rungs; mkdir -p $H/rungs; R=''\n"
+                    "while IFS=\"$(printf '\\t')\" read -r s m; do if [ -n \"$m\" ]; then cp $H/ladder/$s $H/rungs/$m.bin; R=\"$R${R:+,}$H/rungs/$m.bin\"; fi; done < $H/ladder/ladder.txt\n"
+                    "./crucible --pop %d --eps %d --gens %d --yard %d --seed %d --lad %s $L ${I:+--import $I} ${R:+--ladder $R} "
+                    "--save $H/island.state --export $O/champ.bin --out $O/gens.tsv --exam $O/exam.tsv 2>&1 | tee $O/console.txt | grep '^#'\n"
+                ) % (home, self.home, jid, ",".join(imports), opt["pop"], opt["eps"], opt["gens"], opt["yard"], seed, opt["lad"])
                 job = {"id": jid, "kind": "crucible", "title": "crucible island %s, segment %d" % (name, isl["next"] - 1),
                        "needs": "host:" + name, "cmd": cmd, "send": send, "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 4 * 3600}
                 if isl["queued"]:
@@ -1815,14 +2160,34 @@ class Plan:
                 except OSError:
                     pass
             yard = [(int(r[0]) + 1, float(r[7])) for r in rows if len(r) > 9 and float(r[7]) >= 0]
+            ladder = [(int(r[0]) + 1, float(r[10]), float(r[11])) for r in rows if len(r) > 11 and float(r[10]) > -1.5 and not (r[10] == r[11] == "-1.0000")]
             out[name] = {"segments": isl["seg"], "running": (isl.get("queued") or [""])[0], "failures": isl["failures"],
                          "generations": max([int(r[0]) + 1 for r in rows] or [0]),
-                         "yard": yard[-1] if yard else None, "yard_curve": yard[-40:],
+                         "yard": yard[-1] if yard else None, "yard_curve": yard[-40:], "ladder_curve": ladder[-40:],
                          "msteps": max([float(r[4]) / 1e6 for r in rows] or [0])}
+        lad = self.state.get("crucible_ladder", {}).get("milestones", [])
+        lineage = []
+        try:
+            lines = open(self.crucible_dir("lineage.tsv")).read().splitlines()
+            head = lines[0].split("\t")
+            lineage = [dict(zip(head, l.split("\t"))) for l in lines[1:]][-30:]
+        except (OSError, IndexError):
+            pass
+        out["_ladder"] = {"milestones": lad, "rungs": [m["id"] for m in self.ladder_rungs(lad)], "lineage": lineage,
+                          "kept": len(glob.glob(self.crucible_dir("champions", "*.bin")))}
         save(os.path.join(self.pd, "crucible.json"), out)
 
     def plan(self, n):
         self.raise_found()
+        # The local line: to main when auto mode is on and the credentials
+        # allow (Paul Accepts); else its flag stays up.
+        if self.state.get("local_line"):
+            try:
+                if self.auto() and self.push_check()["ok"]:
+                    self.resolve()
+            except SystemExit as e:
+                print("resolve: %s" % e)
+            self.resolve_flag()
         # Auto mode: results adopted, the strongest candidate promoted, a
         # prepared promotion approved (inside run_jobs). A promotion moves
         # main, so the builds are asked for after it.
@@ -1837,12 +2202,22 @@ class Plan:
         jobs = self.prepare_jobs() + jobs
         self.propagation()
         jobs += self.adopt_jobs()
+        self.ticker_scan()
+        # The CPU lanes' share: three queued jobs a CPU machine (the keeper
+        # running since 12:28 plans at its half-hourly sync, and a census
+        # takes 15 minutes: two a lane between syncs, and one spare). The
+        # keeper asks only when its queue is low, and crucible's segments
+        # (queued six ahead) and builds waiting behind a long job keep it
+        # from looking low: counted against treadcore's share, they left
+        # three CPU lanes idle (28 October, 20:40). So the GPU lanes' jobs
+        # take none of it, and the share is topped up whatever n says.
+        cpu_queued = len([j for j in self.ids("queue") if not j.startswith("x-")])
+        want = max(n, 3 * len(self.hosts) - cpu_queued)
+        # The families first, a share of the queue: a candidate waits on them.
+        jobs += self.family_jobs(max(0, (want - len(jobs) + 1) // 2))
+        jobs += self.weight_jobs(max(0, want - len(jobs)))
         # The GPU lanes' own work: it takes no treadcore lane.
         jobs += self.crucible_jobs()
-        self.ticker_scan()
-        # The families first, a share of the queue: a candidate waits on them.
-        jobs += self.family_jobs(max(0, (n - len(jobs) + 1) // 2))
-        jobs += self.weight_jobs(max(0, n - len(jobs)))
         self.keep()
         print(json.dumps(jobs))
 
@@ -1899,6 +2274,10 @@ if __name__ == "__main__":
             p.rsave(sys.argv[3], st)
             p.keep()
         print(st.get("why", st.get("status")))
+    elif cmd == "resolve":
+        # resolve: the local line (self-modified promotions) pushed to main.
+        p.resolve()
+        p.keep()
     elif cmd == "tag":
         # tag RID: an approved promotion's micro version, made now (for one
         # approved before tags were made).

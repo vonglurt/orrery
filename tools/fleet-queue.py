@@ -817,6 +817,13 @@ def main(argv):
         cfg = q.config()
         r = subprocess.run(["bash", "-c", "%s now" % cfg["planner"]], text=True)
         sys.exit(r.returncode)
+    elif cmd == "resolve":
+        # The local line (promotions that self-modified, without push
+        # permission or with auto mode off) pushed to main, from a machine
+        # that can push.
+        cfg = q.config()
+        r = subprocess.run(["bash", "-c", "%s resolve" % cfg["planner"]], text=True)
+        sys.exit(r.returncode)
     elif cmd == "new":
         if len(argv) < 3:
             sys.exit("new KIND [key=value ...]")

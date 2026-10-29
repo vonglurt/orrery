@@ -150,8 +150,83 @@ pub fn draw(ui: &mut Ui, m: &Model, c: &mut Crucible, st: &mut State) -> Option<
     draw_crucible(ui, rect(body.x + half + 10, y, body.w - half - 10, card_h), m, c);
     y += card_h + 14;
 
-    draw_matrix(ui, rect(body.x, y, body.w, body.bottom() - y), m, c);
+    let y = draw_matrix(ui, rect(body.x, y, body.w, body.bottom() - y), m, c);
+    if m.queue.as_ref().map(|q| !q.islands.is_empty()).unwrap_or(false) {
+        draw_ladder(ui, rect(body.x, y + 10, body.w, body.bottom() - y - 10), m);
+    }
     go
+}
+
+/// crucible's milestones, a chain oldest to newest, and the newest
+/// champions with what became of each (the lineage).
+fn draw_ladder(ui: &mut Ui, at: Rect, m: &Model) {
+    let t = ui.t;
+    let Some(q) = &m.queue else { return };
+    let l = &q.ladder;
+    let lh = F8X13.height as i32;
+    if at.h < 3 * lh {
+        return;
+    }
+    let tw = ui.label(at.x, at.y, "crucible's ladder", &F8X13, t.accent);
+    let note = format!(
+        "milestones, each beating the one before: {}; {} champions kept; a segment meets {}",
+        l.milestones.len(),
+        l.kept,
+        l.rungs.len()
+    );
+    ui.label_in(tw + 12, at.y, at.right() - tw - 12, &note, &F8X13, t.dim);
+    let mut y = at.y + lh + 8;
+    if l.milestones.is_empty() {
+        ui.label_in(
+            at.x + 10,
+            y,
+            at.w - 20,
+            "none yet: the first exam made sets milestone 1, and from then on a champion must beat the newest by two standard errors",
+            &F8X13,
+            t.dim,
+        );
+        return;
+    }
+    // The chain: as many of the newest as fit, oldest on the left.
+    let bw = 132;
+    let gap = 18;
+    let fit = ((at.w + gap) / (bw + gap)).max(1) as usize;
+    let shown = &l.milestones[l.milestones.len().saturating_sub(fit)..];
+    let bh = 3 * lh + 14;
+    let mut x = at.x;
+    for (i, (id, island, gen, margin, _)) in shown.iter().enumerate() {
+        let b = rect(x, y, bw, bh);
+        ui.panel(b, t.tile);
+        ui.outline(b, if l.rungs.contains(id) { t.accent } else { t.line });
+        let short = id.split('-').next().unwrap_or(id);
+        ui.label(b.x + 8, b.y + 5, short, &F8X13, t.ink);
+        if l.rungs.contains(id) {
+            ui.light(b.right() - 12, b.y + 5 + lh / 2, 3, Light::Full, t.up);
+        }
+        ui.label_in(b.x + 8, b.y + 5 + lh + 3, bw - 16, &format!("{} g{}", island.trim_end_matches("-cuda"), gen), &F8X13, t.dim);
+        let m = if i == 0 && l.milestones.len() == shown.len() { "first".to_string() } else { format!("+{:.1} se", margin) };
+        ui.label_in(b.x + 8, b.y + 5 + 2 * (lh + 3), bw - 16, &m, &F8X13, t.up);
+        if i + 1 < shown.len() {
+            let ay = y + bh / 2;
+            ui.panel(rect(b.right() + 3, ay, gap - 6, 1), t.dim);
+            ui.panel(rect(b.right() + gap - 6, ay - 2, 2, 5), t.dim);
+        }
+        x += bw + gap;
+    }
+    y += bh + 10;
+    // The lineage, newest first.
+    for (job, island, gen, against, margin, result) in l.lineage.iter().rev() {
+        if y + lh > at.bottom() {
+            break;
+        }
+        let col = if result.starts_with("milestone") { t.up } else { t.dim };
+        ui.label_in(at.x + 10, y, 170, job, &F8X13, t.ink);
+        ui.label_in(at.x + 185, y, 130, &format!("{} g{}", island.trim_end_matches("-cuda"), gen), &F8X13, t.ink);
+        let m = margin.parse::<f64>().map(|v| format!("{:+.1} se vs {}", v, against.split('-').next().unwrap_or(""))).unwrap_or_else(|_| "no exam".into());
+        ui.label_in(at.x + 320, y, 140, &m, &F8X13, t.ink);
+        ui.label_in(at.x + 465, y, at.w - 475, result, &F8X13, col);
+        y += lh + 3;
+    }
 }
 
 fn card(ui: &mut Ui, at: Rect, name: &str, lamp: (Light, crate::draw::Rgb, &str)) -> i32 {
@@ -214,11 +289,13 @@ fn draw_crucible(ui: &mut Ui, at: Rect, m: &Model, c: &Crucible) {
         let running = islands.iter().filter(|i| !i.running.is_empty()).count();
         let state = format!("in the queue: {} island(s), {} running", islands.len(), running);
         let y = card(ui, at, "crucible", (Light::Full, t.up, &state));
-        let mut rows: Vec<(String, crate::draw::Rgb)> = vec![("a self-learning loop entirely on the GPU; islands swap champions".into(), t.dim)];
+        let mut rows: Vec<(String, crate::draw::Rgb)> = vec![("on the GPUs; ladder: all milestones/newest, wins less losses".into(), t.dim)];
         for i in islands {
-            let yard = i.yard.map(|(g, w)| format!(", yardstick {:.0}% at {}", w * 100.0, g)).unwrap_or_default();
+            // Short: the card is half the window.
+            let yard = i.yard.map(|(_, w)| format!(", yard {:.0}%", w * 100.0)).unwrap_or_default();
+            let lad = i.ladder.map(|(_, a, top)| format!(", ladder {:+.2}/{:+.2}", a, top)).unwrap_or_default();
             let fail = if i.failures > 0 { format!(", {} failed", i.failures) } else { String::new() };
-            rows.push((format!("{}: {} segments, {} generations{}{}", i.name, i.segments, i.generations, yard, fail), if i.failures >= 3 { t.alarm } else { t.ink }));
+            rows.push((format!("{}: g{}{}{}{}", i.name.trim_end_matches("-cuda"), i.generations, yard, lad, fail), if i.failures >= 3 { t.alarm } else { t.ink }));
         }
         let best = islands.iter().map(|i| i.msteps).fold(0.0, f64::max);
         if best > 0.0 {
@@ -253,7 +330,7 @@ fn short_gpu(name: &str) -> String {
 }
 
 /// A row per machine: what it has, and each project's work on it.
-fn draw_matrix(ui: &mut Ui, at: Rect, m: &Model, c: &Crucible) {
+fn draw_matrix(ui: &mut Ui, at: Rect, m: &Model, c: &Crucible) -> i32 {
     let t = ui.t;
     let lh = F8X13.height as i32;
     let x_name = at.x + 10;
@@ -309,6 +386,7 @@ fn draw_matrix(ui: &mut Ui, at: Rect, m: &Model, c: &Crucible) {
         ui.label_in(x_cr + 14, y + 1, at.right() - x_cr - 20, &word, &F8X13, col);
         y += lh + 12;
     }
+    y
 }
 
 #[cfg(test)]
