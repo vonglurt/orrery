@@ -321,8 +321,12 @@ at the same ease. It does not change which ease is best.
   (treadcore `9032026`). With w1266's values, all 109 tests pass. A
   candidate whose tests failed is now tried once more when main moves
   (`retry_after_main`).
-- `the_square_law` still rejects w1198, on its `engage_odds` of 0.175. It
-  has not been looked at.
+- *Settled too:* `the_square_law` pinned a constant as well. Its rule is
+  relative to the bar: below `engage_odds`, with teammates on the way, a
+  bot masses. But it asserted that 1 against 2 (odds 0.25) masses, which is
+  true only while the default `engage_odds` sits above 0.25. w1198's 0.175
+  failed it. It now pins the bars it was written for, 0.7 and 2.0
+  (treadcore `5ef8ad7`). All 109 tests pass with w1198's values.
 - The anchor reads catch a drift only once it is three promotions deep.
 
 ## VII. What to watch
