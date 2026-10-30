@@ -2038,7 +2038,10 @@ class Plan:
     def patch_run(self, rid, p, st):
         depth, steps, seeds = int(p.get("depth", 2)), int(p.get("steps", 30)), int(p.get("seeds", 24))
         seed0 = int(p.get("seed0", 700000000))
-        A, C, maxstep = float(p.get("a", 0.05)), float(p.get("c", 0.03)), float(p.get("maxstep", 0.05))
+        # A step well under the probe: at a = 0.05 every number moved its full 0.05 on one
+        # census of 24 seeds, more than the probe itself, and a random 0.15 loses 11 a seat
+        # (r0063, cancelled after a step). At these, a read of +2 moves each about 0.005.
+        A, C, maxstep = float(p.get("a", 0.00025)), float(p.get("c", 0.03)), float(p.get("maxstep", 0.01))
         if st["status"] == "new":
             if not self.defaults():
                 return []
