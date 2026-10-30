@@ -484,7 +484,11 @@ class Plan:
             if v["status"] != "passed" or jid in self.state["held_read"]:
                 continue
             trial = v["text"]
-            for k in range(2):
+            # ONE AT A TIME: of 117 candidates read twice, the 36 whose first read was
+            # under zero included none that passed at z 2 pooled, and each second
+            # read costs 14 minutes of a machine (30 October).
+            self.state.setdefault("held_second", []).append(jid)
+            for k in range(1):
                 hid = "h%04d" % self.state["held_n"]
                 seed0 = w["held_seed0"] + 200000 * self.state["held_n"]
                 self.state["held_n"] += 1
@@ -492,6 +496,26 @@ class Plan:
                              "needs": "cpu", "after_host": self.after_host(), "cmd": self.census_cmd(trial, w["held_seeds"], seed0, hid),
                              "fetch": "%s/out/%s" % (self.home, hid), "timeout_s": 6 * 3600})
             self.state["held_read"].append(jid)
+        # The second read, for a first read that came back at zero or better.
+        waiting = self.state.get("held_second", [])
+        if waiting:
+            pairs = self.held_pairs()
+            for jid in list(waiting):
+                ds = pairs.get(jid, [])
+                if len(ds) != 1 or jid not in seq:
+                    if len(ds) >= 2 or jid not in seq:
+                        waiting.remove(jid)
+                    continue
+                first = self.pool(ds)
+                waiting.remove(jid)
+                if not first or first["every"][1] <= 0 or first["every"][0] < 0:
+                    continue
+                hid = "h%04d" % self.state["held_n"]
+                seed0 = w["held_seed0"] + 200000 * self.state["held_n"]
+                self.state["held_n"] += 1
+                jobs.append({"id": hid, "kind": "weights", "title": "held-out read 2 of %s (%d seeds)" % (jid, w["held_seeds"]),
+                             "needs": "cpu", "after_host": self.after_host(), "cmd": self.census_cmd(seq[jid]["text"], w["held_seeds"], seed0, hid),
+                             "fetch": "%s/out/%s" % (self.home, hid), "timeout_s": 6 * 3600})
         # Then the reads on, the most promising first: a test begun is
         # finished before most new ones begin (Fishtest's way). A third of
         # the room is kept for new trials, so a backlog of reads on (the
@@ -666,6 +690,10 @@ class Plan:
                     continue
                 # A slot with no patch in it stops a census: asked for only when trained.
                 if name == "patch" and not os.path.exists(os.path.join(patches, "%d.bin" % i)):
+                    continue
+                # Whole nets in place of the rules are retired from the search: every
+                # slot read about -20 a seat. A transform over the rules replaces them.
+                if name == "model" and self.cfg.get("models") is False:
                     continue
                 if name == "model":
                     # A slot with a model in it, stamped with its file: a

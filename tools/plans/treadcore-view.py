@@ -55,7 +55,7 @@ def read(path, default=""):
 
 def probe(addr):
     cmd = ["bash", "-c", PROBE] if addr == "local" else \
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", addr, PROBE]
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "ControlMaster=auto", "-o", "ControlPath=/tmp/orrery-view-%r@%h-%p", "-o", "ControlPersist=120", addr, PROBE]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=6).stdout
     except (subprocess.TimeoutExpired, OSError):

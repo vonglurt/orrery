@@ -32,7 +32,7 @@ import sys
 FLEET = os.environ.get("COPAL_FLEET", "grove")
 FDIR = os.environ.get("COPAL_FLEET_DIR") or os.path.expanduser("~/.copal/fleets/%s" % FLEET)
 # COPAL_SSH_OPTS: the check's containers answer on their own ports.
-SSH = ["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", "-i", FDIR + "/operator"] + os.environ.get("COPAL_SSH_OPTS", "").split()
+SSH = ["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", "-o", "ControlMaster=auto", "-o", "ControlPath=/tmp/orrery-fq-%r@%h-%p", "-o", "ControlPersist=120", "-i", FDIR + "/operator"] + os.environ.get("COPAL_SSH_OPTS", "").split()
 OPS = ("!=", ">=", "<=", "=", ">", "<")
 
 
