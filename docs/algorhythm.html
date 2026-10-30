@@ -84,7 +84,7 @@ a { color: var(--cable); } a:focus-visible { outline: 2px solid var(--lit); outl
 </div></header>
 
 <main class="wrap"><div class="col">
-<div class="abstract"><b>Abstract.</b> Most game AI is improved by tuning numbers or by training a network. In Algorhythm, a person writes many interchangeable implementations of each decision, and simulation chooses among them. Whole-number switches select exactly one function, continuous weights adjust it, and a final learned transform may override its answer when confident. The structure runs on a nine-machine fleet in the tank game treadcore. All new layers are silent by default, confirmed by identical results on nine scenario families. No transform has been trained and the new choices have not been measured at full scale, so this report describes a working structure and does not claim stronger play.</div>
+<div class="abstract"><b>Abstract.</b> Most game AI is improved by tuning numbers or by training a network. In Algorhythm, a person writes many interchangeable implementations of each decision, and simulation chooses among them. Whole-number switches select exactly one function, continuous weights adjust it, and a final learned transform may override its answer when confident. The structure runs on a nine-machine fleet in the tank game treadcore. All new layers are silent by default, confirmed by identical results on nine scenario families. In a separate, simple GPU arena, a hybrid net that starts at the rules reached about 60% wins and 8% losses against those rules after 1,000 generations, overriding them on about 4% of steps. In treadcore itself, no transform has finished training and the new choices have not been measured at full scale, so we do not claim stronger play there.</div>
 
 <h2>The idea</h2>
 <p>A normal parameter tuner changes how a function behaves. It cannot change which function runs. Paul Richeson's design adds that second axis, and takes its model from an analogue FM synthesizer.</p>
@@ -171,11 +171,26 @@ if confidence &gt;= patch_confidence:  move the rules' point</pre>
 <tr><td>Biorhythm switch and waves</td><td><span class="state y">built, tested</span></td></tr>
 <tr><td>Multi-step transform, confidence gate, slots</td><td><span class="state y">built, tested</span></td></tr>
 <tr><td>Inspector and version tracking</td><td><span class="state y">built</span></td></tr>
-<tr><td>Training a transform</td><td><span class="state n">not built</span></td></tr>
-<tr><td>Fleet reads of the new choices</td><td><span class="state n">not run: tasks are stopped</span></td></tr>
+<tr><td>Training a transform</td><td><span class="state y">built, running</span>; no result yet</td></tr>
+<tr><td>Promoting a transform</td><td><span class="state n">not built: the game has no file for a slot</span></td></tr>
+<tr><td>Hybrid crucible</td><td><span class="state y">built, tested, on three GPU islands</span></td></tr>
+<tr><td>Fleet reads of the new choices</td><td><span class="state y">running</span>; too few reads to report</td></tr>
 <tr><td>Separate paths for each tank within a team</td><td><span class="state n">not built: choices are per team</span></td></tr>
 <tr><td>Rewritten functions, such as <code>target_pick</code></td><td><span class="state n">designed only</span></td></tr>
 </table></div>
+
+<h2>Does a confident override help? A first test</h2>
+<p>crucible is a separate GPU arena with simple tanks, far faster than treadcore. We gave it the same structure: a scripted tank decides, and a net reads the senses and that answer, then gives a correction and a confidence. Below zero confidence, the gate stays shut and the tank plays the rules. Each population was trained against varied opponents, and its best net was then read against the fixed scripted tank.</p>
+<div class="scroll"><table>
+<tr><th>Generation</th><th>Hybrid: win / draw / loss</th><th>Plain, from scratch</th><th>Hybrid overrides</th></tr>
+<tr><td class="n">24</td><td class="n">5 / 89 / 5%</td><td class="n">5 / 6 / 89%</td><td class="n">0.2%</td></tr>
+<tr><td class="n">99</td><td class="n">22 / 70 / 8%</td><td class="n">5 / 4 / 91%</td><td class="n">9.3%</td></tr>
+<tr><td class="n">299</td><td class="n">37 / 53 / 10%</td><td class="n">4 / 7 / 88%</td><td class="n">4.6%</td></tr>
+<tr><td class="n">1,000&ndash;2,000 mean</td><td class="n">58 / 34 / 8%</td><td class="n">not run</td><td class="n">about 4%</td></tr>
+<tr><td class="n">2,000&ndash;3,000 mean</td><td class="n">61 / 32 / 7%</td><td class="n">not run</td><td class="n">4.4%</td></tr>
+</table></div>
+<p>The first row is the important check: with its gates almost always shut, the hybrid ties the rules, as designed. It then gains while overriding on only a few percent of steps. The rows up to 299 come from one 300-generation run of each kind, and the later rows from a separate 3,000-generation hybrid run with another seed.</p>
+<p><b>Limits.</b> This is one simple arena and one fixed opponent, which is also the very rule the hybrid builds on, so some of the gain may be exploiting that rule. Wins level off near 60% from about generation 1,000. Plain islands on the fleet did eventually reach about 95% against this opponent after over 100,000 generations, so the hybrid's advantage here is mostly how fast it starts, and we have not shown where it ends. crucible's senses and arena differ from treadcore's, so its nets cannot be moved across. Its transform is a single step, unlike treadcore's. This supports the design, and it does not show that a transform will help in treadcore.</p>
 
 <h2>How the project got here</h2>
 <p>A fixed hand-written Commander came first. Then about 120 weights tuned by paired censuses, followed by on/off capabilities. Whole-number choices arrived next (<code>ladder</code>, <code>roles</code>, <code>model</code>), along with a league of learned nets. A check on 30 October found that no switch could ever have been promoted, because of two bugs. Once they were fixed, pings off became the first switch promoted, at +1.99 a seat. Algorhythm is the next step: functions treated as a patch, with the learned stage placed after the rules instead of replacing them.</p>

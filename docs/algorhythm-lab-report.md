@@ -19,7 +19,7 @@ transform, which reads the agent's senses and the deterministic function's own a
 it is confident. The transform may be several steps, and at all zeros it leaves the rules unchanged. We report the
 design's evolution on a working fleet of nine machines, its implementation in the tank game treadcore, a new
 five-way pinging function as a worked example of A/B/C/D/E selection, and a biorhythm input. All of the new layers are
-silent by default, verified by identical results on nine scenario families. We have not yet trained a transform or
+silent by default, verified by identical results on nine scenario families. We have not yet finished training a transform or
 measured the new choices over a full census, and we report those as open. The closest prior work we found is
 Programming by Optimization and residual policy learning. We found no system combining all of these in this form,
 and our search was not exhaustive.
@@ -216,7 +216,8 @@ it reads like the net's layers, and it is laid out with the same colours. The Ne
 | Inspector, version tracker | `training.rs`, `fleet-versions.py` | built |
 | Training a transform: SPSA over its numbers, a census a step, on the fleet | `treadcore.py`, `patch_run` | built; its start is proven to play the rules' own games (+0.00 ±0.00 over 4 seeds), a large random patch −11.65 ±4.93. **No result yet** |
 | Promoting a transform | | **not built:** the game has no file for a slot, so it waits for a person |
-| **Fleet reads of the new choices** | | **not run: all tasks are stopped** |
+| Fleet reads of the new choices | `treadcore.py` | running; too few reads to report |
+| Hybrid crucible: the net overrides a scripted tank | crucible `HYBRID=1` | built, tested, on three GPU islands |
 | crucible reading treadcore's senses | | **not built:** its arena, senses and net differ |
 
 The trainer is SPSA over the transform's 918 numbers, because a step costs one paired census however many numbers there
@@ -249,6 +250,29 @@ means little.
 
 **Nothing here is a measurement of strength yet.** We do not know that typed pings, intuition or a transform are better
 than what they extend.
+
+### A first test of confident overrides
+
+crucible is a separate, fast GPU arena with simple tanks. It was given the same structure: a scripted tank decides, a net reads
+the senses and that answer and gives a correction and a confidence, and below zero the gate stays shut. Each population trained
+against varied opponents; its best net was then read against the fixed scripted tank.
+
+| Generation | Hybrid win/draw/loss | Plain, from scratch | Hybrid overrides |
+|---|---|---|---|
+| 24 | 5/89/5% | 5/6/89% | 0.2% |
+| 99 | 22/70/8% | 5/4/91% | 9.3% |
+| 299 | 37/53/10% | 4/7/88% | 4.6% |
+| 1,000 to 2,000, mean | 58/34/8% | not run | about 4% |
+| 2,000 to 3,000, mean | 61/32/7% | not run | 4.4% |
+
+With its gates almost always shut, the hybrid ties the rules, as designed; it then gains while overriding on few steps. The rows
+to 299 are one 300-generation run of each kind; the later rows are a separate 3,000-generation hybrid run on another seed.
+
+**Limits.** One simple arena and one fixed opponent, which is the very rule the hybrid builds on, so some of the gain may exploit
+that rule. Wins level off near 60% from about generation 1,000. Plain islands did eventually reach about 95% against this opponent
+after over 100,000 generations, so the advantage shown is mostly how fast the hybrid starts, and where it ends is not shown.
+Its nets cannot be moved to treadcore, whose senses differ, and its transform is one step. This supports the design. It does not
+show that a transform will help in treadcore.
 
 ## VII. Discussion
 
