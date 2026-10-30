@@ -972,6 +972,8 @@ def health(q):
             said += "; read on until decided: %d reading, %d to read on, %d dropped, %d passed to the held-out reads%s" % (
                 q_.get("reading", 0), q_.get("read on", 0), q_.get("dropped", 0), q_.get("passed", 0),
                 ", %d seeds a decision" % q_["seeds_a_decision"] if q_.get("seeds_a_decision") else "")
+        if s.get("ab"):
+            said += "; A/B %d of %d versions asked on today's defaults" % (s["ab"]["versions"] - s["ab"]["left"], s["ab"]["versions"])
         stall = s.get("stall", 150)
         if s.get("stalled") and s.get("reads", 0) - s.get("widened_at", s.get("reads", 0)) >= 3 * stall:
             check("warn", "search", said + ": dry %d trials since it widened, the next gain wants a change to the brain itself"

@@ -226,12 +226,18 @@ class Plan:
         blob = self.weights_rs(commit)
         if not blob:
             return {}
-        cache = self.state.setdefault("tables", {})
+        # "tables_caps": the tables read before the switches were in them
+        # would miss a promoted switch against a fresh one.
+        self.state.pop("tables", None)
+        cache = self.state.setdefault("tables_caps", {})
         if blob not in cache:
             text = run(["git", "-C", self.tc, "cat-file", "-p", blob]).stdout
             table = {}
             for m in re.finditer(r'^\s*[A-Z][A-Za-z0-9]*\s+"([a-z_0-9]+)"\s+(-?[0-9][0-9.eE+-]*)\s*,', text, re.M):
                 table[m.group(1)] = float(m.group(2))
+            # The switches, as 1 and 0: a promoted switch is new defaults.
+            for m in re.finditer(r'^\s*[A-Z][A-Z0-9_]*\s+[0-9]+\s+"([a-z_0-9]+)"\s+(true|false)\s*,', text, re.M):
+                table["caps:" + m.group(1)] = 1.0 if m.group(2) == "true" else 0.0
             cache[blob] = table
         return cache[blob]
 
@@ -508,6 +514,9 @@ class Plan:
             if r.returncode != 0:
                 raise SystemExit("suggest.py: " + r.stderr[-400:])
             self.state["gen"] += 1
+            # A/B first: each switch flipped, each choice at each other
+            # version, once a generation, a third of the room at most.
+            ab = self.ab_trials(max(1, want // 3), out, s)
             # A stalled search gives half the generation to wide trials.
             wide = self.wide_trials(want // 2 or 1, out, g, defaults) if s["stalled"] else []
             fit = []
@@ -516,7 +525,7 @@ class Plan:
             except OSError:
                 pass
             picked, now = [], set()
-            for f in wide + fit:
+            for f in ab + wide + fit:
                 if len(picked) >= want:
                     break
                 text = open(f).read()
@@ -562,8 +571,12 @@ class Plan:
     @staticmethod
     def trial_key(text):
         """A trial's weights, three figures each: the fit's top moves by a
-        hair as rows come in, and a hair is the same trial."""
+        hair as rows come in, and a hair is the same trial. Its caps line
+        too, its names sorted: every switch's trial had the empty key."""
         canon = ";".join("%s=%.3g" % kv for kv in sorted(parse_weights(text).items()))
+        caps = [l.split("=", 1)[1] for l in text.splitlines() if re.match(r"^\s*caps\s*=", l.split("#")[0])]
+        if caps:
+            canon += ";caps=" + ",".join(sorted(c.strip() for c in caps[-1].split("#")[0].split(",") if c.strip()))
         return hashlib.sha1(canon.encode()).hexdigest()[:12]
 
     def search(self, defaults):
@@ -605,6 +618,50 @@ class Plan:
         note = {k: v for k, v in s.items() if k != "tried"}
         note.update({"distinct": len(s["tried"]), "stall": self.STALL, "checked": time.strftime("%Y-%m-%dT%H:%M:%S")})
         save(os.path.join(self.pd, "search.json"), note)
+
+    # ---- A/B: the brain's other versions ----------------------------------------------
+    # Paul, 29 October: "more efficient A/B testing alternate functions such
+    # that we can expand binary paths of brains using a or b". The brain
+    # has two kinds of version: a capability (caps!, a bit: on or off) and a
+    # choice (weights!, a doc saying "(choice: a | b | ...)", 0 as built).
+    # Each generation every one is tried against the defaults, alone: the
+    # switch flipped, the choice at each version it is not. A trial is a
+    # trial: the sequential read decides it, the held-out reads confirm it,
+    # and set-defaults.py promotes a caps line or a choice as it does a
+    # number. suggest.py leaves them out, a fit across versions being a fit
+    # across functions.
+    def versions(self):
+        """(caps {name: on}, choices {name: (default, [versions])}) from
+        today's weights.rs."""
+        blob = self.weights_rs(self.sha())
+        text = run(["git", "-C", self.tc, "cat-file", "-p", blob]).stdout if blob else ""
+        caps = {m.group(1): m.group(2) == "true"
+                for m in re.finditer(r'^\s*[A-Z][A-Z0-9_]*\s+[0-9]+\s+"([a-z_0-9]+)"\s+(true|false)\s*,', text, re.M)}
+        choices = {m.group(1): (float(m.group(2)), [v.strip() for v in m.group(3).split("|")])
+                   for m in re.finditer(r'^\s*[A-Z][A-Za-z0-9]*\s+"([a-z_0-9]+)"\s+(-?[0-9.]+),\s*"[^"]*\(choice: ([^)]*)\)', text, re.M)}
+        return caps, choices
+
+    def ab_trials(self, n, out, s):
+        """Up to n A/B trials not yet asked on today's defaults, written to
+        out as ab-NAME-VERSION.weights; s's count of them kept for health."""
+        caps, choices = self.versions()
+        want = []
+        for name, on in sorted(caps.items()):
+            want.append(("ab-%s-%s" % (name, "off" if on else "on"),
+                         "# A/B: %s %s, the rest as the defaults\ncaps = baseline, %s%s\n" % (name, "off" if on else "on", "-" if on else "", name)))
+        for name, (dflt, vs) in sorted(choices.items()):
+            for i, v in enumerate(vs):
+                if i != int(round(dflt)):
+                    want.append(("ab-%s-%s" % (name, v), "# A/B: %s %s against %s\n%s = %d\n" % (name, v, vs[int(round(dflt))], name, i)))
+        left = [(f, text) for f, text in want if not s["tried"].get(self.trial_key(text))]
+        s["ab"] = {"versions": len(want), "left": len(left)}
+        os.makedirs(out, exist_ok=True)
+        files = []
+        for f, text in left[:n]:
+            p = os.path.join(out, f + ".weights")
+            open(p, "w").write(text)
+            files.append(p)
+        return files
 
     def unit_weights(self):
         """suggest.py's UNIT: weights from 0 to 1, which stop halfway to 1."""
@@ -757,15 +814,22 @@ class Plan:
         p = self.promotions()
         if not p or p[-1][1] in done or not p[-1][2].get("confirmed"):
             return
-        back, old = p[-self.ANCHOR:], {}
+        back, old, caps = p[-self.ANCHOR:], {}, {}
         for _, _, st_ in back:
             for l in st_.get("changed", []):
                 m = re.match(r"^([a-z_][a-z0-9_]*) ([-+0-9.eE]+) -> ([-+0-9.eE]+)$", l)
                 if m and m.group(1) not in old:
                     old[m.group(1)] = m.group(2)
+                # A switch a promotion flipped (set-defaults.py: "caps
+                # name on -> off") is put back as well.
+                m = re.match(r"^caps ([a-z_0-9]+) (on|off) -> (on|off)$", l)
+                if m and m.group(1) not in caps:
+                    caps[m.group(1)] = m.group(2) == "on"
         done.append(p[-1][1])
-        if old:
+        if old or caps:
             text = "".join("%s = %s\n" % kv for kv in sorted(old.items()))
+            if caps:
+                text += "caps = baseline, %s\n" % ", ".join(("" if on else "-") + c for c, on in sorted(caps.items()))
             jid = self.adopt(text, "anchor: the defaults before %s" % back[0][1])
             self.flag("anchor", "%s reads the defaults before %s against today's, after %s" % (jid, back[0][1], p[-1][1]),
                       key="anchor:%s" % p[-1][1], progress=True)
