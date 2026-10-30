@@ -279,6 +279,45 @@ def net():
             "heads": [{"name": n, "choices": c} for n, c in HEADS], "layers": layers}
 
 
+# The commit before the fleet's first promotion: where training began.
+FIRST_PROMOTION = "dc3df01"
+
+
+def algorhythm():
+    """The brain as a patch: its switches, its dials and how far training has moved
+    each from where the fleet found it, the transforms in their slots."""
+    import glob, re
+    rs = "source/treadcore-brain/src/weights.rs"
+    def parse(text):
+        return re.findall(r'^\s*[A-Z][A-Za-z0-9]*\s+"([a-z_0-9]+)"\s+(-?[0-9.]+),\s*"([^"]*)"', text, re.M)
+    text = read(os.path.join(TC, rs))
+    # Before the fleet's first promotion: where training began.
+    r = subprocess.run(["git", "-C", TC, "show", "%s~1:" % FIRST_PROMOTION + rs], capture_output=True, text=True)
+    factory = {n: float(v) for n, v, _ in parse(r.stdout)} if r.returncode == 0 else {}
+    switches, dials = [], []
+    for name, v, doc in parse(text):
+        m = re.search(r"\(choice: ([^)]*)\)", doc)
+        if m:
+            switches.append({"name": name, "value": int(round(float(v))), "versions": [x.strip() for x in m.group(1).split("|")]})
+        else:
+            dials.append({"name": name, "value": float(v), "factory": factory.get(name, float(v))})
+    caps = re.findall(r'^\s*[A-Z_]+ [0-9]+ "([a-z_]+)" (true|false),', text, re.M)
+    patches = []
+    pdir = os.path.join(QDIR, "patches") if QDIR else ""
+    for f in sorted(glob.glob(os.path.join(pdir, "*.bin"))) if pdir else []:
+        b = open(f, "rb").read()
+        if b[:4] != b"TCP1":
+            continue
+        steps, inputs = struct.unpack_from("<II", b, 4)
+        off, cols, cells = 12, inputs + 3, []
+        for _ in range(steps):
+            w = struct.unpack_from(f"<{3 * cols}f", b, off)
+            off += 4 * (3 * cols + 3)
+            cells.append(shrink(w, 3, cols, cap=320))
+        patches.append({"slot": os.path.basename(f)[:-4], "inputs": inputs, "steps": cells})
+    return {"switches": switches, "dials": dials, "caps": [{"name": n, "on": o == "true"} for n, o in caps], "patches": patches}
+
+
 def quality():
     q = read(os.path.join(FT, "best.json"))
     if q:
@@ -302,5 +341,5 @@ if __name__ == "__main__":
     run = newest_run()
     qd = queue()
     doc = {"fleet": FLEET, "queue": qd, "project": "treadcore", "at": time.strftime("%H:%M:%S"),
-           "machines": machines(run, qd), "run": run, "loop": loop(), "net": net(), "quality": quality()}
+           "machines": machines(run, qd), "run": run, "loop": loop(), "net": net(), "algorhythm": algorhythm(), "quality": quality()}
     print(json.dumps(doc))

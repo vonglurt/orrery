@@ -290,6 +290,7 @@ pub struct Model {
     pub looping: bool,
     pub best: String,
     pub net: Option<Net>,
+    pub algo: Option<Algo>,
     pub quality: Option<Quality>,
     pub queue: Option<Queue>,
 }
@@ -554,6 +555,24 @@ impl Model {
                     .unwrap_or_default(),
             });
         }
+        if let Some(x) = v.get("algorhythm").filter(|x| x.get("dials").is_some()) {
+            let num = |v: &json::Value, k: &str| v.get(k).and_then(|n| n.as_num()).unwrap_or(0.0);
+            m.algo = Some(Algo {
+                switches: arr(x, "switches").iter().map(|w| Switch {
+                    name: s(w, "name"),
+                    value: num(w, "value") as usize,
+                    versions: arr(w, "versions").iter().filter_map(|n| n.as_str().map(str::to_string)).collect(),
+                }).collect(),
+                dials: arr(x, "dials").iter().map(|w| (s(w, "name"), num(w, "value"), num(w, "factory"))).collect(),
+                caps: arr(x, "caps").len(),
+                patches: arr(x, "patches").iter().map(|w| {
+                    let steps: Vec<Vec<Vec<f64>>> = arr(w, "steps").iter().map(|st| {
+                        st.as_array().unwrap_or(&[]).iter().map(|r| r.as_array().unwrap_or(&[]).iter().filter_map(|c| c.as_num()).collect()).collect()
+                    }).collect();
+                    (s(w, "slot"), steps)
+                }).collect(),
+            });
+        }
         if let Some(x) = v.get("net").filter(|x| x.get("sizes").is_some()) {
             m.net = Some(Net {
                 name: s(x, "name"),
@@ -638,18 +657,19 @@ fn bar(ui: &mut Ui, r: Rect, frac: f64, c: Rgb) {
 /// the Results' (Candidates, Found, Net, Flags) and the Settings' (Keeper,
 /// Commits), by page number.
 const QUEUE_PAGES: [usize; 2] = [0, 1];
-const RESULTS_PAGES: [usize; 4] = [5, 2, 3, 4];
+const RESULTS_PAGES: [usize; 5] = [5, 2, 3, 8, 4];
 const SETTINGS_PAGES: [usize; 2] = [6, 7];
 
 /// (page number, name, what it shows). Candidates came after the rest and
 /// keeps the number 5, so ORRERY_FRAME_PAGE and a saved page mean what they
 /// meant.
-const PAGES: [(usize, &str, &str); 8] = [
+const PAGES: [(usize, &str, &str); 9] = [
     (0, "Fleet", "each machine and its job"),
     (1, "Runs", "ask for a run, cancel, accept"),
     (2, "Found", "improvements, by variable and machine"),
     (5, "Candidates", "trials past both held-out reads: progress, nothing to answer"),
     (3, "Net", "the learned tank's weights"),
+    (8, "Algorhythm", "the brain as a patch: dials, switches, transforms"),
     (4, "Flags", "what needs attention; acknowledge it"),
     (6, "Keeper", "is it running as it should: the keeper, its code, its planning, the lanes"),
     (7, "Commits", "the line the fleet builds, newest first, with the defaults each changed; a row opens it on GitHub"),
@@ -779,6 +799,7 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State, view: nav::View) -> Option<n
                     st.zoom = Some(i);
                 }
             }
+            8 => draw_algorhythm(ui, page, m),
             _ => draw_fleet_rows(ui, page, m),
         }
         return go;
@@ -1909,6 +1930,218 @@ fn draw_zoom(ui: &mut Ui, at: Rect, net: &Net, i: usize) -> bool {
 }
 
 /// The net, small. Returns the matrix clicked, to enlarge.
+/// One whole-number choice: a rotary switch on the panel.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Switch {
+    pub name: String,
+    pub value: usize,
+    pub versions: Vec<String>,
+}
+
+/// The brain as a patch (treadcore-view.py, `algorhythm`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Algo {
+    pub switches: Vec<Switch>,
+    /// A dial: its name, its value, and where the fleet found it.
+    pub dials: Vec<(String, f64, f64)>,
+    pub caps: usize,
+    /// A trained transform: its slot, and each step's matrix.
+    pub patches: Vec<(String, Vec<Vec<Vec<f64>>>)>,
+}
+
+impl Algo {
+    /// Programs before a dial is turned: every switch position and every on-or-off,
+    /// as a power of ten, because the number itself will not fit on the page.
+    pub fn programs_log10(&self) -> f64 {
+        let sw: f64 = self.switches.iter().map(|s| (s.versions.len().max(1) as f64).log10()).sum();
+        sw + self.caps as f64 * 2f64.log10()
+    }
+}
+
+/// How far a dial has been moved, in doublings; 0 for a dial at or from zero.
+pub fn doublings(value: f64, factory: f64) -> f64 {
+    if value > 0.0 && factory > 0.0 { (value / factory).log2() } else { 0.0 }
+}
+
+/// THE BRAIN AS A PATCH. Everything between what a tank senses and what it does, left
+/// to right, because the point of this design is that they compound: a dial scales a
+/// function, a switch chooses which function it scales, and the transform reads the
+/// answer. Drawn from the brain's own weights.rs, so it cannot describe another brain.
+fn draw_algorhythm(ui: &mut Ui, at: Rect, m: &Model) {
+    let t = ui.t;
+    let Some(a) = &m.algo else {
+        ui.label_in(at.x, at.y, at.w, "No brain to show yet.", &F8X13, t.dim);
+        return;
+    };
+    let lh = F8X13.height as i32 + 5;
+    // ---- the signal path ------------------------------------------------------------
+    let moved = a.dials.iter().filter(|d| (d.1 - d.2).abs() > 1e-6).count();
+    let on: Vec<&Switch> = a.switches.iter().filter(|s| s.value > 0).collect();
+    let steps = a.patches.first().map(|p| p.1.len()).unwrap_or(0);
+    let stages = [
+        ("SENSES".to_string(), "what it sees, and".to_string(), "three slow waves".to_string()),
+        ("DIALS".to_string(), format!("{} weights", a.dials.len()), format!("{} moved by training", moved)),
+        ("SWITCHES".to_string(), format!("{} choices, {} on/off", a.switches.len(), a.caps), format!("{} off version 0", on.len())),
+        ("THE RULES".to_string(), "one function each,".to_string(), "only the chosen runs".to_string()),
+        ("TRANSFORM".to_string(), format!("{} slots filled", a.patches.len()), if steps > 0 { format!("{} steps", steps) } else { "none: rules unchanged".to_string() }),
+        ("THE MOVE".to_string(), "what the".to_string(), "tank does".to_string()),
+    ];
+    let gap = 18;
+    let bw = (at.w - gap * 5) / 6;
+    let bh = lh * 3 + 8;
+    for (i, (a1, b, c)) in stages.iter().enumerate() {
+        let x = at.x + i as i32 * (bw + gap);
+        let r = rect(x, at.y, bw, bh);
+        ui.panel(r, t.tile);
+        ui.outline(r, if i == 4 && steps == 0 { t.line } else { t.up });
+        ui.label_in(x + 6, at.y + 4, bw - 12, a1, &F8X13, t.ink);
+        ui.label_in(x + 6, at.y + 4 + lh, bw - 12, b, &F8X13, t.dim);
+        ui.label_in(x + 6, at.y + 4 + lh * 2, bw - 12, c, &F8X13, t.dim);
+        if i < 5 {
+            ui.c.rect(x + bw + 2, at.y + bh / 2, gap - 4, 2, t.accent);
+            ui.c.rect(x + bw + gap - 7, at.y + bh / 2 - 2, 3, 6, t.accent);
+        }
+    }
+    let mut y = at.y + bh + 8;
+    let line = format!("This brain is one of 10^{:.1} programs before a dial is turned. Any combination runs; the census says which are worth having.", a.programs_log10());
+    ui.label_in(at.x, y, at.w, &line, &F8X13, t.ink);
+    y += lh + 6;
+
+    // ---- the switches and the waves ----------------------------------------------------
+    let top_h = 124;
+    let cw = (at.w * 3 / 5) / a.switches.len().max(1) as i32;
+    ui.label(at.x, y, "Switches: a whole number, one function runs", &F8X13, t.dim);
+    let sy = y + lh;
+    for (i, sw) in a.switches.iter().enumerate() {
+        let cx = at.x + i as i32 * cw + cw / 2;
+        let cy = sy + 38;
+        ui.c.disc(cx, cy, 24, t.tile);
+        let n = sw.versions.len().max(1);
+        for k in 0..n {
+            let ang = -2.356 + 4.712 * k as f64 / (n.max(2) - 1) as f64;
+            let (dx, dy) = (ang.sin(), -ang.cos());
+            let (px, py) = (cx + (dx * 21.0) as i32, cy + (dy * 21.0) as i32);
+            let lit = k == sw.value;
+            ui.c.disc(px, py, if lit { 4 } else { 2 }, if lit { t.up } else { t.dim });
+            if lit {
+                for r in 2..17 {
+                    ui.c.rect(cx + (dx * r as f64) as i32, cy + (dy * r as f64) as i32, 2, 2, t.ink);
+                }
+            }
+        }
+        let label_w = cw - 4;
+        let lx = cx - label_w / 2;
+        ui.label_in(lx, cy + 30, label_w, &sw.name, &F8X13, t.ink);
+        ui.label_in(lx, cy + 30 + lh - 2, label_w, sw.versions.get(sw.value).map(|v| v.as_str()).unwrap_or(""), &F8X13, if sw.value > 0 { t.up } else { t.dim });
+    }
+    // The waves, at the shape chosen; dim when bio is off.
+    let wx = at.x + at.w * 3 / 5 + 12;
+    let ww = at.right() - wx;
+    let bio = a.switches.iter().find(|s| s.name == "bio");
+    let shape = bio.map(|b| b.value).unwrap_or(0);
+    ui.label_in(wx, y, ww, &format!("Intuition: three waves, 23:28:33 ({})", bio.and_then(|b| b.versions.get(shape)).map(|v| v.as_str()).unwrap_or("off")), &F8X13, t.dim);
+    let plot = rect(wx, sy, ww, top_h - lh);
+    ui.panel(plot, t.tile);
+    let ratios = [1.0, 28.0 / 23.0, 33.0 / 23.0];
+    let colours = [t.up, t.accent, t.warn];
+    for px in 0..plot.w {
+        let u = px as f64 / plot.w.max(1) as f64 * 3.0;
+        for (i, r) in ratios.iter().enumerate() {
+            let p = u / r + i as f64 / 3.0;
+            let f = p - p.floor();
+            let v = match shape.max(1) {
+                2 => 1.0 - 4.0 * (f - 0.5).abs(),
+                3 => if f < 0.5 { 1.0 } else { -1.0 },
+                4 => 2.0 * f - 1.0,
+                _ => (f * std::f64::consts::TAU).sin(),
+            };
+            let py = plot.y + plot.h / 2 - (v * (plot.h / 2 - 6) as f64) as i32;
+            ui.c.rect(plot.x + px, py, 1, 2, if shape == 0 { t.line } else { colours[i] });
+        }
+    }
+    y = sy + top_h - lh + 8;
+
+    // ---- the dials ------------------------------------------------------------------------
+    let dials_h = ((at.bottom() - y) / 3).max(70);
+    ui.label(at.x, y, "Dials: how far training has moved each from where the fleet found it, in doublings", &F8X13, t.dim);
+    let dy = y + lh;
+    let chart = rect(at.x, dy, at.w * 3 / 5, dials_h - lh);
+    ui.panel(chart, t.tile);
+    let mid = chart.y + chart.h / 2;
+    ui.c.rect(chart.x, mid, chart.w, 1, t.line);
+    let n = a.dials.len().max(1) as i32;
+    let (px, py) = ui.pointer();
+    let mut hover = None;
+    for (i, d) in a.dials.iter().enumerate() {
+        let x0 = chart.x + i as i32 * chart.w / n;
+        let w = ((i as i32 + 1) * chart.w / n - i as i32 * chart.w / n - 1).max(1);
+        let k = doublings(d.1, d.2);
+        let h = (k.abs().min(2.0) / 2.0 * (chart.h / 2 - 2) as f64) as i32;
+        if k >= 0.0 { ui.c.rect(x0, mid - h, w, h, t.up) } else { ui.c.rect(x0, mid, w, h, t.alarm) }
+        if px >= x0 && px < x0 + w + 1 && py >= chart.y && py < chart.bottom() {
+            hover = Some(format!("{}: {:.3}, found at {:.3}", d.0, d.1, d.2));
+        }
+    }
+    // Who has moved most, named.
+    let mut most: Vec<_> = a.dials.iter().map(|d| (doublings(d.1, d.2), d)).filter(|x| x.0 != 0.0).collect();
+    most.sort_by(|p, q| q.0.abs().total_cmp(&p.0.abs()));
+    let nx = chart.right() + 12;
+    let mut ny = dy;
+    for (k, d) in most.iter().take(((dials_h - lh) / lh) as usize) {
+        ui.label_in(nx, ny, at.right() - nx, &format!("{:+.2}  {}", k, d.0), &F8X13, if *k >= 0.0 { t.up } else { t.alarm });
+        ny += lh;
+    }
+    y = dy + dials_h - lh + 4;
+    ui.label_in(at.x, y, at.w, hover.as_deref().unwrap_or(""), &F8X13, t.ink);
+    y += lh;
+
+    // ---- the transform -------------------------------------------------------------------
+    ui.label_in(at.x, y, at.w, "Transform: its 3 outputs (across, down, confidence) by its 152 inputs (143 senses, 3 waves, 3 of the rules' answer, 3 of the steps so far)", &F8X13, t.dim);
+    y += lh;
+    let area = rect(at.x, y, at.w, (at.bottom() - y).max(30));
+    match a.patches.first() {
+        None => {
+            ui.panel(area, t.tile);
+            ui.outline(area, t.line);
+            ui.label_in(area.x + 10, area.y + 8, area.w - 20, "No transform trained yet. An empty slot is all zeros: the rules, unchanged.", &F8X13, t.dim);
+            // Its shape, so the page says what will fill it: a band an input group.
+            let (bx, bw) = (area.x + 10, area.w - 20);
+            let by = area.y + 8 + lh + 4;
+            let bh = (area.h - lh * 3 - 16).clamp(18, 150);
+            let mut from = 0;
+            for (name, n) in [("143 senses", 143), ("3", 3), ("3", 3), ("3", 3)] {
+                let (x0, x1) = (bx + from * bw / 152, bx + (from + n) * bw / 152);
+                let r = rect(x0, by, (x1 - x0 - 1).max(1), bh);
+                for row in 1..3 {
+                    ui.c.rect(r.x, r.y + row * r.h / 3, r.w, 1, t.line);
+                }
+                ui.outline(r, t.line);
+                ui.label_in(x0 + 2, by + bh + 2, (x1 - x0 + 60).min(bx + bw - x0), name, &F8X13, t.dim);
+                from += n;
+            }
+        }
+        Some((slot, steps)) => {
+            let sh = (area.h - lh) / steps.len().max(1) as i32;
+            for (k, st) in steps.iter().enumerate() {
+                let r = rect(area.x, area.y + k as i32 * sh, area.w, sh - 3);
+                let rows = st.len().max(1) as i32;
+                let cols = st.first().map(|c| c.len()).unwrap_or(1).max(1) as i32;
+                let max = st.iter().flatten().fold(1e-6f64, |m, v| m.max(v.abs()));
+                for ry in 0..rows {
+                    for c in 0..cols {
+                        let v = st[ry as usize].get(c as usize).copied().unwrap_or(0.0);
+                        let (x0, x1) = (r.x + c * r.w / cols, r.x + (c + 1) * r.w / cols);
+                        let (y0, y1) = (r.y + ry * r.h / rows, r.y + (ry + 1) * r.h / rows);
+                        ui.c.rect(x0, y0, (x1 - x0).max(1), (y1 - y0).max(1), weight_colour(ui, v, max));
+                    }
+                }
+                ui.outline(r, t.line);
+            }
+            ui.label_in(area.x, area.bottom() - lh + 2, area.w, &format!("slot {}: {} steps; each reads the one before", slot, steps.len()), &F8X13, t.dim);
+        }
+    }
+}
+
 fn draw_net(ui: &mut Ui, at: Rect, m: &Model) -> Option<usize> {
     let t = ui.t;
     let Some(net) = &m.net else {
@@ -1929,7 +2162,9 @@ fn draw_net(ui: &mut Ui, at: Rect, m: &Model) -> Option<usize> {
     // the size. Inputs run across, outputs down.
     let labels = LAYER_NAMES;
     let gap = 14;
-    let side = ((at.w - gap * 2) / 3).min(150).max(60);
+    // As large as the page allows (Paul, 30 October: "increase the size of the
+    // inspector graphics"): a matrix of 143 x 64 is a picture, not a thumbnail.
+    let side = ((at.w - gap * 2) / 3).min((at.h * 2 / 5).max(150)).max(60);
     let mut x = at.x;
     let mut hover: Option<String> = None;
     // Where each matrix was drawn: (x, y, w, h, rows, cols), for the marks
@@ -2127,6 +2362,28 @@ fn draw_net(ui: &mut Ui, at: Rect, m: &Model) -> Option<usize> {
         }
     }
     clicked
+}
+
+#[cfg(test)]
+mod algo_tests {
+    use super::*;
+
+    #[test]
+    fn a_dial_reads_in_doublings_and_a_zero_reads_as_unmoved() {
+        assert_eq!(doublings(2.0, 1.0), 1.0);
+        assert_eq!(doublings(0.5, 1.0), -1.0);
+        assert_eq!(doublings(0.0, 1.0), 0.0);
+        assert_eq!(doublings(1.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn the_programs_multiply_by_each_switch_and_each_on_off() {
+        let sw = |n: usize| Switch { versions: vec![String::new(); n], ..Switch::default() };
+        let a = Algo { switches: vec![sw(10), sw(10)], caps: 0, ..Algo::default() };
+        assert!((a.programs_log10() - 2.0).abs() < 1e-9);
+        let b = Algo { switches: vec![], caps: 10, ..Algo::default() };
+        assert!((b.programs_log10() - 3.0103).abs() < 1e-3);
+    }
 }
 
 #[cfg(test)]

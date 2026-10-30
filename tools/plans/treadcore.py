@@ -653,9 +653,19 @@ class Plan:
             want.append(("ab-%s-%s" % (name, "off" if on else "on"),
                          "# A/B: %s %s, the rest as the defaults\ncaps = baseline, %s%s\n" % (name, "off" if on else "on", "-" if on else "", name)))
         slots = {r["slot"]: r for r in self.models()}
+        # A version that plays the very games of the defaults has nothing to say, and
+        # asking again on each new set of defaults only spends the fleet (ladder 2).
+        for j, v in self.sequential().items():
+            if v.get("d") == 0 and v.get("se") == 0 and v.get("seeds", 0) >= 55:
+                self.flag("ab", "%s plays the same games as the defaults: dead, or waiting on another setting" % v["text"].split("\n")[0][2:],
+                          key="dead:%s" % self.trial_key(v["text"]))
+        patches = os.path.join(self.q, "patches")
         for name, (dflt, vs) in sorted(choices.items()):
             for i, v in enumerate(vs):
                 if i == int(round(dflt)):
+                    continue
+                # A slot with no patch in it stops a census: asked for only when trained.
+                if name == "patch" and not os.path.exists(os.path.join(patches, "%d.bin" % i)):
                     continue
                 if name == "model":
                     # A slot with a model in it, stamped with its file: a
