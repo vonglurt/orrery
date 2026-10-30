@@ -368,7 +368,7 @@ class Plan:
             "set -e; [ -f ~/.cargo/env ] && . ~/.cargo/env; export PATH=$HOME/.cargo/bin:$PATH\n"
             "Q=~/%s; C=%s; mkdir -p $Q/trials; echo %s | base64 -d > $Q/trials/%s.weights\n"
             "cd $C/wt && export CARGO_TARGET_DIR=$HOME/fleet/target\n"
-            "TRIAL=$Q/trials/%s.weights SEEDS=%d SEED0=%d SECS=%d MAP=%s RESPAWNS=3 JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) CENSUS_BIN=$C/census-bin scripts/census.sh 2>&1 | tail -3\n"
+            "TRIAL=$Q/trials/%s.weights CENSUS_MODELS=$Q/models SEEDS=%d SEED0=%d SECS=%d MAP=%s RESPAWNS=3 JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) CENSUS_BIN=$C/census-bin scripts/census.sh 2>&1 | tail -3\n"
             "d=$(ls -td build/census/*/ | head -1); s=$(basename $d)\n"
             "rm -rf $Q/out/%s; mkdir -p $Q/out/%s/$s; cp $d/*.txt $d/*.env $d/*.weights $d/g-*.log $Q/out/%s/$s/; rm -rf $d\n"
         ) % (self.home, self.cdir(), b, out_id, out_id, seeds, seed0, w["secs"], w["map"], out_id, out_id, out_id)
@@ -574,6 +574,9 @@ class Plan:
         hair as rows come in, and a hair is the same trial. Its caps line
         too, its names sorted: every switch's trial had the empty key."""
         canon = ";".join("%s=%.3g" % kv for kv in sorted(parse_weights(text).items()))
+        stamp = re.search(r"^# A/B: model slot (\d+) \S+, sha (\w+)", text, re.M)
+        if stamp:
+            canon += ";slot%s=%s" % stamp.groups()
         caps = [l.split("=", 1)[1] for l in text.splitlines() if re.match(r"^\s*caps\s*=", l.split("#")[0])]
         if caps:
             canon += ";caps=" + ",".join(sorted(c.strip() for c in caps[-1].split("#")[0].split(",") if c.strip()))
@@ -649,10 +652,21 @@ class Plan:
         for name, on in sorted(caps.items()):
             want.append(("ab-%s-%s" % (name, "off" if on else "on"),
                          "# A/B: %s %s, the rest as the defaults\ncaps = baseline, %s%s\n" % (name, "off" if on else "on", "-" if on else "", name)))
+        slots = {r["slot"]: r for r in self.models()}
         for name, (dflt, vs) in sorted(choices.items()):
             for i, v in enumerate(vs):
-                if i != int(round(dflt)):
-                    want.append(("ab-%s-%s" % (name, v), "# A/B: %s %s against %s\n%s = %d\n" % (name, v, vs[int(round(dflt))], name, i)))
+                if i == int(round(dflt)):
+                    continue
+                if name == "model":
+                    # A slot with a model in it, stamped with its file: a
+                    # slot given a new model is a new trial.
+                    if i not in slots:
+                        continue
+                    r = slots[i]
+                    want.append(("ab-model-%d-%s" % (i, r["name"]), "# A/B: model slot %d %s, sha %s, against %s\nmodel = %d\n"
+                                 % (i, r["name"], r["sha"], vs[int(round(dflt))], i)))
+                    continue
+                want.append(("ab-%s-%s" % (name, v), "# A/B: %s %s against %s\n%s = %d\n" % (name, v, vs[int(round(dflt))], name, i)))
         left = [(f, text) for f, text in want if not s["tried"].get(self.trial_key(text))]
         s["ab"] = {"versions": len(want), "left": len(left)}
         os.makedirs(out, exist_ok=True)
@@ -662,6 +676,121 @@ class Plan:
             open(p, "w").write(text)
             files.append(p)
         return files
+
+    # ---- model slots: a league of learned brains, 1 to 7 -------------------------------
+    # Paul, 29 October: "we are training an AI brain, its output should be
+    # fed back into a competing model, where we can have an enum of up to
+    # 0-7 different alternate ai models. we can name the models as
+    # generations progress." The brain's choice `model` (treadcore 37b6b65):
+    # 0 the rules, k the net in slot k. The slots are this queue's:
+    # models/k.bin, and models/models.tsv naming each by its generation
+    # (gN-what, N counting up from the first seven, the nets in
+    # treadcore's nets/). Each finished train or school run is the next
+    # generation: an empty slot takes it, else the slot whose A/B read
+    # against the rules is lowest, never the defaults' own. A slot's trial
+    # is stamped with its file's hash, so a trial of the net it held
+    # before is no evidence for the net it holds now. Each census sends
+    # the slots it plays (model_sends).
+    MODEL_SLOTS = 7
+
+    def models_file(self):
+        return os.path.join(self.q, "models", "models.tsv")
+
+    def models(self):
+        """[{slot, name, gen, source, sha}] of the filled slots."""
+        try:
+            lines = open(self.models_file()).read().splitlines()[1:]
+        except OSError:
+            return []
+        out = []
+        for l in lines:
+            p = l.split("\t")
+            if len(p) >= 5 and os.path.exists(os.path.join(self.q, "models", "%s.bin" % p[0])):
+                out.append({"slot": int(p[0]), "name": p[1], "gen": int(p[2]), "source": p[3], "sha": p[4]})
+        return out
+
+    def model_put(self, rows, slot, name, gen, src):
+        dst = os.path.join(self.q, "models", "%d.bin" % slot)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copyfile(src, dst + ".part")
+        os.replace(dst + ".part", dst)
+        sha = hashlib.sha256(open(dst, "rb").read()).hexdigest()[:12]
+        rows = [r for r in rows if r["slot"] != slot] + [{"slot": slot, "name": name, "gen": gen, "source": src, "sha": sha}]
+        with open(self.models_file() + ".part", "w") as f:
+            f.write("slot\tname\tgeneration\tsource\tsha\n")
+            for r in sorted(rows, key=lambda r: r["slot"]):
+                f.write("%d\t%s\t%d\t%s\t%s\n" % (r["slot"], r["name"], r["gen"], r["source"], r["sha"]))
+        os.replace(self.models_file() + ".part", self.models_file())
+        self.flag("models", "model slot %d is %s (generation %d, from %s)" % (slot, name, gen, os.path.basename(src)),
+                  key="model:%d:%s" % (slot, sha), progress=True)
+        return rows
+
+    def model_stale(self, text):
+        """A trial of a slot's model that the slot no longer holds."""
+        m = re.search(r"^# A/B: model slot (\d+) \S+, sha (\w+)", text, re.M)
+        if not m:
+            return False
+        r = next((r for r in self.models() if r["slot"] == int(m.group(1))), None)
+        return not r or r["sha"] != m.group(2)
+
+    def models_update(self):
+        rows = self.models()
+        if not rows and not self.state.get("models_seeded"):
+            # The first generation: the nets treadcore already has, newest first.
+            nets = sorted(glob.glob(os.path.join(self.tc, "nets", "*.bin")), key=os.path.getmtime, reverse=True)[:self.MODEL_SLOTS]
+            for k, f in enumerate(nets, 1):
+                rows = self.model_put(rows, k, "g1-" + os.path.basename(f)[:-4], 1, f)
+            self.state["models_seeded"] = True
+        taken = self.state.setdefault("models_taken", [])
+        for r in self.runs():
+            rid, kind = r["id"], r["kind"]
+            if kind not in ("train", "school") or rid in taken or self.rstate(rid).get("status") != "done":
+                continue
+            out = os.path.join(self.q, "results", "%s-%s" % (rid, kind), self.home, "out", "%s-%s" % (rid, kind))
+            nets = glob.glob(os.path.join(out, "*.bin"))
+            if kind == "school":
+                # Its last round.
+                nets = sorted(nets, key=lambda f: int(re.sub(r"\D", "", os.path.basename(f)) or 0))[-1:]
+            else:
+                nets = sorted(nets, key=os.path.getmtime)[-1:]
+            if not nets:
+                taken.append(rid)
+                continue
+            gen = max([x["gen"] for x in rows] or [0]) + 1
+            free = [k for k in range(1, self.MODEL_SLOTS + 1) if k not in {x["slot"] for x in rows}]
+            if free:
+                slot = free[0]
+            else:
+                # The weakest against the rules, by its A/B read; a slot
+                # not read yet is kept, and so is the defaults' own.
+                own = int(self.defaults_at(self.sha()).get("model", 0))
+                read = {}
+                for v in self.sequential().values():
+                    m = re.search(r"^# A/B: model slot (\d+) ", v["text"], re.M)
+                    if m:
+                        read[int(m.group(1))] = v["d"]
+                scored = [(read[x["slot"]], x["slot"]) for x in rows if x["slot"] in read and x["slot"] != own]
+                if not scored:
+                    # It waits for the slots' reads: a run is never
+                    # dropped for want of a slot.
+                    continue
+                slot = min(scored)[1]
+            taken.append(rid)
+            rows = self.model_put(rows, slot, "g%d-%s-%s" % (gen, rid, os.path.basename(nets[0])[:-4]), gen, nets[0])
+
+    def model_sends(self, jobs):
+        """Each census job gets the slots it plays: its trial's and the
+        defaults' own."""
+        own = int(self.defaults_at(self.sha()).get("model", 0))
+        for j in jobs:
+            m = re.search(r"echo (\S+) \| base64 -d > \$Q/trials/", j.get("cmd", ""))
+            if j.get("kind") != "weights" or not m:
+                continue
+            k = parse_weights(base64.b64decode(m.group(1)).decode()).get("model")
+            for slot in {int(k) if k else 0, own} - {0}:
+                src = os.path.join(self.q, "models", "%d.bin" % slot)
+                if os.path.exists(src):
+                    j.setdefault("send", []).append({"src": src, "dst": "~/%s/models/%d.bin" % (self.home, slot)})
 
     def unit_weights(self):
         """suggest.py's UNIT: weights from 0 to 1, which stop halfway to 1."""
@@ -907,8 +1036,10 @@ class Plan:
                 status = "dropped"
             else:
                 status = "read on"
-            out[jid] = {"status": status, "d": d, "se": se, "seeds": n, "z": z, "stage": stage,
-                        "text": open(os.path.join(ds[0], "trial.weights")).read()}
+            text = open(os.path.join(ds[0], "trial.weights")).read()
+            if self.model_stale(text):
+                continue
+            out[jid] = {"status": status, "d": d, "se": se, "seeds": n, "z": z, "stage": stage, "text": text}
         return out
 
     def read_on_jobs(self, seq, room, w):
@@ -1970,6 +2101,8 @@ class Plan:
         for jid, ds in self.held_pairs().items():
             if self.held_pass(ds):
                 tw = glob.glob(os.path.join(self.q, "results", jid, self.home, "out", jid, "*", "trial.weights"))
+                if tw and self.model_stale(open(tw[0]).read()):
+                    continue
                 c = self.job_census(jid)
                 held = [self.job_census(d.rstrip("/").split(os.sep)[-2]) for d in ds]
                 if tw and c and all(held):
@@ -2751,6 +2884,7 @@ class Plan:
         # prepared promotion approved (inside run_jobs). A promotion moves
         # main, so the builds are asked for after it.
         self.adopt_runs()
+        self.models_update()
         self.candidate_states()
         self.auto_promote()
         self.anchor_trial()
@@ -2788,6 +2922,7 @@ class Plan:
             self.ease()
             note["difficulty"] = dict(self.state.get("difficulty", {}), last_promotion=(self.promotions() or [[None, None]])[-1][1])
             save(os.path.join(self.pd, "search.json"), note)
+        self.model_sends(jobs)
         self.keep()
         print(json.dumps(jobs))
 

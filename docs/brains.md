@@ -31,6 +31,8 @@ way.
 | Undoing a switch a promotion flipped | `anchor_trial` | **built** |
 | A learned tank: senses (about a hundred numbers) → a 64×64 net → seven action heads | treadcore `senses.rs`, `net.rs`, `NetBrain` | built; plays a census as the trial team (`CENSUS_NET`) |
 | crucible: populations of nets duelling on the GPU | `~/code/crucible` | built; **its own arena, senses and net (H = 32): its champions do not play treadcore** |
+| Roles, the choice `roles`: a bots' team of five after its leader (0 as built: a guard, two rangers, a wing; 1 no guard; 2 two guards; 3 three guards) | treadcore `fleet.rs`, `MIXES`, `role_by_rank` | **built, treadcore `b02f1fe`**; a team plays the mix of the settings it is dealt under |
+| Model slots, the choice `model`: 0 the rules, k the net in slot k, the trial's and the baseline's alike | treadcore `fleet.rs` census (`CENSUS_MODELS/k.bin`); orrery `models_update`, `model_sends` | **built, treadcore `37b6b65`**; slots 1–7 seeded from treadcore's nets as generation 1 (`g1-bc1` … `g1-phase3`); each finished train or school run is the next generation; health's models check |
 
 A version is judged the way a number is. Its first read is 55 seeds,
 then the stages of the read on, then two held-out reads pooled. Its
@@ -191,8 +193,14 @@ read is a model no one can judge.
 ## 7. Order of work
 
 1. ~~Choices, the ladder, A/B for every switch and choice~~ (built).
-2. `role` (3a), with roles seated in the census.
-3. Model slots and the `model` choice (6.1–6.2).
+2. ~~`roles` (3a)~~ (built, `b02f1fe`). One choice for the team's mix;
+   per-role ladders and switches are the next step of it.
+3. ~~Model slots and the `model` choice (6.1–6.2)~~ (built, `37b6b65`).
+   Still open: a promoted model plays in the census only. The game's bots
+   and the families gauntlet still deal the rules, so a model's families
+   "hold" without testing it. Slot 1 (`bc2` then) read −10.3 a seat
+   against the rules over 2 seeds: the first generation is far behind, as
+   expected.
 4. Sense ablation on the Net page (4).
 5. `think_every` and `think_order` (3b, 3c).
 6. A learned target pick (5).

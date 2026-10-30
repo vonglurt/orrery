@@ -982,6 +982,15 @@ def health(q):
             check("ok", "search", said + ": widened (bound %s, half of each generation wide trials)" % s.get("bound"))
         else:
             check("ok", "search", said)
+    # The model slots (plan treadcore's models/models.tsv): the league of
+    # learned brains the A/B reads against the rules, by generation.
+    try:
+        rows = [l.split("\t") for l in open(q.p("models", "models.tsv")).read().splitlines()[1:] if l.strip()]
+    except OSError:
+        rows = []
+    if rows:
+        check("ok", "models", "%d of 7 slots, generation %s the newest: %s" % (
+            len(rows), max(int(r[2]) for r in rows), ", ".join("%s %s" % (r[0], r[1]) for r in rows)))
     # The difficulty: how far every bar is lowered, so a promotion comes
     # about every every_min. At its floor and a promotion twice overdue, the
     # trials hold no more at any bar a promotion should pass.
