@@ -55,7 +55,10 @@ pub struct Verb {
 ///   * `power on` cannot travel over ssh, because a Pi that is off has no
 ///     standby rail feeding its NIC. See build_argv.
 pub const WRITE_VERBS: &[Verb] = &[
-    Verb { name: "scene",    argv: &["scene", "{arg}"],              arg: Arg::Name,  per_node: true },
+    // RECORDED ON THE NODE, not applied from here. `copal fleet scene` runs a
+    // playbook from a checkout of scenes, which a fleet of Ubuntu and Alpine
+    // workers has no use for; `scene apply` is the verb their listener answers.
+    Verb { name: "scene",    argv: &["run", "scene", "apply", "{arg}"], arg: Arg::Name, per_node: true },
     Verb { name: "run",      argv: &["run", "{arg}"],                arg: Arg::Name,  per_node: true },
     Verb { name: "power",    argv: &["run", "power", "{arg}"],       arg: Arg::Power, per_node: true },
     Verb { name: "snapshot", argv: &["run", "snapshot", "restore"],  arg: Arg::None,  per_node: true },
@@ -274,13 +277,13 @@ mod tests {
 
     #[test]
     fn builds_the_argv_the_real_cli_expects() {
-        // `copal fleet scene show --node museum-01`, not `--nodes a,b`.
+        // `copal fleet run --node museum-01 scene apply show`, not `--nodes a,b`.
         let plan = build_argv(lookup("scene").unwrap(), Some("show")).unwrap();
-        assert_eq!(plan.argv, ["scene", "show"]);
+        assert_eq!(plan.argv, ["run", "scene", "apply", "show"]);
         assert!(plan.per_node);
         assert_eq!(
             aimed_at(&plan, "museum-01"),
-            ["scene", "--node", "museum-01", "show"]
+            ["run", "--node", "museum-01", "scene", "apply", "show"]
         );
         assert!(!plan.argv.iter().any(|a| a.contains('{')));
     }

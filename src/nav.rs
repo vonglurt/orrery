@@ -50,6 +50,11 @@ pub enum View {
     /// The machines' terminals in a grid, each a resumable tmux session
     /// (sessions.rs).
     Sessions,
+    /// Who may command the fleet, what each machine is, what the commands can do
+    /// today: select by question, send a verb (orchestrate.rs).
+    Fleet,
+    /// A plain chat with each machine, kept on the machine (orchestrate.rs).
+    Chat,
     /// Is it running as it should: the keeper's checks and its buttons, and
     /// the commits the fleet builds with the values each changed
     /// (training.rs).
@@ -75,13 +80,15 @@ impl View {
             View::Results => "Results",
             View::Lab => "Lab",
             View::Sessions => "Sessions",
+            View::Fleet => "Orchestrate",
+            View::Chat => "Chat",
             View::Settings => "Settings",
         }
     }
 
     /// Every view, chapter by chapter.
     pub const ALL: &'static [View] =
-        &[View::Machines, View::Media, View::Storage, View::Projects, View::Queue, View::Results, View::Lab, View::Sessions, View::Settings];
+        &[View::Machines, View::Media, View::Storage, View::Projects, View::Queue, View::Results, View::Lab, View::Sessions, View::Fleet, View::Chat, View::Settings];
 
     pub fn chapter(&self) -> Chapter {
         match self {
@@ -90,6 +97,7 @@ impl View {
             View::Queue => Chapter::Queue,
             View::Results => Chapter::Results,
             View::Lab | View::Sessions => Chapter::Watch,
+            View::Fleet | View::Chat => Chapter::Fleet,
             View::Settings => Chapter::Settings,
         }
     }
@@ -103,12 +111,13 @@ pub enum Chapter {
     Queue,
     Results,
     Watch,
+    Fleet,
     Settings,
 }
 
 impl Chapter {
     pub const ALL: &'static [Chapter] =
-        &[Chapter::Machines, Chapter::Projects, Chapter::Queue, Chapter::Results, Chapter::Watch, Chapter::Settings];
+        &[Chapter::Machines, Chapter::Projects, Chapter::Queue, Chapter::Results, Chapter::Watch, Chapter::Fleet, Chapter::Settings];
 
     pub fn title(&self) -> &'static str {
         match self {
@@ -117,6 +126,7 @@ impl Chapter {
             Chapter::Queue => "Queue",
             Chapter::Results => "Results",
             Chapter::Watch => "Watch",
+            Chapter::Fleet => "Fleet",
             Chapter::Settings => "Settings",
         }
     }
@@ -129,6 +139,7 @@ impl Chapter {
             Chapter::Queue => &[View::Queue],
             Chapter::Results => &[View::Results],
             Chapter::Watch => &[View::Lab, View::Sessions],
+            Chapter::Fleet => &[View::Fleet, View::Chat],
             Chapter::Settings => &[View::Settings],
         }
     }
@@ -141,6 +152,7 @@ impl Chapter {
             Chapter::Queue => &["3. The work runs:", "each machine's", "job, and the", "runs asked for."],
             Chapter::Results => &["4. What it found:", "candidates", "promote", "themselves."],
             Chapter::Watch => &["5. Look in: the", "room, and every", "terminal."],
+            Chapter::Fleet => &["6. Command it:", "ask what each is,", "then act on the", "answer."],
             Chapter::Settings => &["Under it all: the", "keeper, its code,", "and each commit", "the fleet builds."],
         }
     }
@@ -394,11 +406,11 @@ mod tests {
             .map(|c| F8X13.measure(c.title()) as i32 + 22)
             .sum();
         assert_eq!(width_for(false), sum);
-        // Six chapters since Settings (28 October): under 500 pixels, still
-        // a strip beside the fleet's name at 960 wide; in metal, with a lamp
-        // and a digit on each key, under 600.
-        assert!(width_for(false) > 0 && width_for(false) < 500, "the strip is {}", width_for(false));
-        assert!(width_for(true) < 600, "the metal strip is {}", width_for(true));
+        // Seven chapters since Fleet (30 October): under 560 pixels, still a
+        // strip beside the fleet's name at 960 wide; in metal, with a lamp and a
+        // digit on each key, under 700, which leaves the readout about 170.
+        assert!(width_for(false) > 0 && width_for(false) < 560, "the strip is {}", width_for(false));
+        assert!(width_for(true) < 700, "the metal strip is {}", width_for(true));
     }
 
     #[test]
@@ -490,7 +502,7 @@ mod tests {
             assert!(v.chapter().views().contains(v));
         }
         let titles: Vec<&str> = Chapter::ALL.iter().map(|c| c.title()).collect();
-        // The story's five, then Settings, outside it.
-        assert_eq!(titles, ["Machines", "Projects", "Queue", "Results", "Watch", "Settings"]);
+        // The story's six, then Settings, outside it.
+        assert_eq!(titles, ["Machines", "Projects", "Queue", "Results", "Watch", "Fleet", "Settings"]);
     }
 }

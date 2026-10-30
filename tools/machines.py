@@ -35,8 +35,10 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
@@ -93,6 +95,15 @@ RECIPES = [
      "os": ["ubuntu", "alpine"],
      "files": ["fleet-poweroff-setup.sh"], "run": "sh fleet-poweroff-setup.sh",
      "does": ["one rule: the user may run poweroff as root without a password, and nothing else"]},
+    {"id": "listener", "title": "Answer the Lab's buttons",
+     "os": ["ubuntu", "alpine"], "signed": True,
+     "files": ["fleet-listener.sh", "fleet-exec.sh"], "run": "sh fleet-listener.sh",
+     "does": ["the account copal-fleet: no password, no tty, one forced command (Message, Run, Scene, Power, facts)",
+              "the fleet's CA and this machine's host certificate, signed here and checked there",
+              "a human's certificate logs in as the user (Terminal, Exchange, Send); the user's own key keeps working",
+              "one marked block in sshd_config, proved by sshd -t or taken back; sshd reloaded, not restarted",
+              "the last message at every login",
+              "--undo takes it all away"]},
 ]
 
 # Read on the machine as the user: plain sh (busybox on Alpine), key=value.
@@ -121,6 +132,7 @@ k tmux "$(command -v tmux)"
 k screen "$(command -v screen)"
 k copal_tm "$( ( [ -x ~/.local/bin/copal-tm ] && echo ~/.local/bin/copal-tm ) || command -v copal-tm)"
 k topnotch "$( [ -x /usr/local/bin/topnotch ] && echo yes)"
+k listener "$( [ -x /usr/bin/copal-fleet-exec ] && echo yes)"
 # The power-off command exactly as the rule allows it (fleet-poweroff-setup.sh):
 # sudo lists it, for a NOPASSWD rule, to the user; doas's rule file is root's
 # alone, but that it exists can be seen.
@@ -259,6 +271,7 @@ class Machines:
         have = {
             "fleet-login": bool(f.get("topnotch")),
             "poweroff": bool(f.get("poweroff")),
+            "listener": bool(f.get("listener")),
             "auto-update": bool(f.get("auto_update")),
             "copal-node": bool(f.get("cargo") and f.get("treadcore") and f.get("tmux") and f.get("poweroff")),
             "cuda-node": bool(f.get("nvidia_smi") and f.get("cuda") and f.get("tmux") and f.get("copal_tm")),
@@ -322,6 +335,8 @@ class Machines:
                            + ["%s:orrery-recipes/" % t], capture_output=True, text=True, timeout=120)
         if r.returncode != 0:
             raise SystemExit("copying to %s failed: %s" % (t, r.stderr.strip()[-200:]))
+        if self.recipe(rid).get("signed"):
+            self.sign_for(name, t)
         # What arrived is what was shown: the sums read back on the machine.
         names = " ".join(shlex.quote(f["name"]) for f in d["files"])
         r = subprocess.run(SSH + [t, "cd ~/orrery-recipes && (sha256sum %s 2>/dev/null || shasum -a 256 %s)" % (names, names)],
@@ -333,6 +348,32 @@ class Machines:
         self.reg[name].setdefault("log", []).append({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "staged": rid, "command": d["command"]})
         self.keep()
         return {"machine": name, "target": t, "command": d["command"], "files": [f["name"] for f in d["files"]]}
+
+    def sign_for(self, name, t):
+        """This machine's host certificate and the CA's public key, beside the
+        recipe. THE SIGNING IS copal fleet certify's: orrery never creates a
+        credential (docs/lockdown.md, section 5), it carries one. The key was
+        born on the machine and is read over a login known_hosts vouches for;
+        the listener checks what arrives."""
+        capub = os.path.expanduser("~/.copal/ca/%s_ca.pub" % self.fleet)
+        r = subprocess.run(SSH + [t, "cat /etc/ssh/ssh_host_ed25519_key.pub"], capture_output=True, text=True, timeout=30)
+        if r.returncode != 0 or not r.stdout.startswith("ssh-ed25519"):
+            raise SystemExit("%s has no ed25519 host key to sign" % name)
+        addrs = re.findall(r"(\d+\.\d+\.\d+\.\d+)/", (self.reg[name].get("facts") or {}).get("addrs", ""))
+        env = dict(os.environ, PATH=os.environ.get("PATH", "") + ":" + os.path.expanduser("~/.local/bin"))
+        c = subprocess.run(["copal", "fleet", "certify", "--fleet", self.fleet, name] + addrs,
+                           input=r.stdout, capture_output=True, text=True, timeout=30, env=env)
+        if c.returncode != 0:
+            raise SystemExit("signing %s failed: %s" % (name, c.stderr.strip()[-200:]))
+        cert = c.stdout.strip().splitlines()[-1]
+        with tempfile.TemporaryDirectory() as d:
+            for src, dst in ((cert, "fleet-host-cert.pub"), (capub, "fleet-ca.pub")):
+                shutil.copy(src, os.path.join(d, dst))
+            r = subprocess.run(["scp", "-q", "-o", "BatchMode=yes", os.path.join(d, "fleet-host-cert.pub"),
+                                os.path.join(d, "fleet-ca.pub"), "%s:orrery-recipes/" % t],
+                               capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                raise SystemExit("copying the certificate to %s failed: %s" % (name, r.stderr.strip()[-200:]))
 
     # ---- joining ------------------------------------------------------------------
     def join(self, name):

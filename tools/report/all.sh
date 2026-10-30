@@ -15,4 +15,6 @@ cuda-hybrid|One Source, Two CUDAs|orrery · crucible · CUDA 12 and 13
 difficulty|Promotion Difficulty|orrery · the search · promotions
 copal-machines|Copal Machines Join|orrery · the fleet · machines
 storage|Fleet Storage|orrery · the fleet · storage
+fleet-commanders|Fleet Commanders|orrery · the fleet · commanders
+fleet-orchestration|Commanding the Fleet|orrery · the fleet · orchestration
 LIST

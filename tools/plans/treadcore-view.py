@@ -35,8 +35,8 @@ FLEET = sys.argv[sys.argv.index("--fleet") + 1] if "--fleet" in sys.argv else "g
 # summary, so the view shows the queue and what each machine runs in it.
 QDIR = sys.argv[sys.argv.index("--queue") + 1] if "--queue" in sys.argv else ""
 QUEUE_PY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fleet-queue.py")
-STORE = os.environ.get("STORE", "user@192.168.8.181").split("@")[-1]
-CENSUS = os.environ.get("CENSUS_HOST", "user@192.168.8.224").split("@")[-1]
+STORE = os.environ.get("STORE", "user@calber").split("@")[-1]
+CENSUS = os.environ.get("CENSUS_HOST", "user@columbia").split("@")[-1]
 HEADS = [("drive", 10), ("gun", 9), ("lead", 3), ("mortar", 9), ("drone", 5), ("squad", 7), ("signal", 4)]
 
 PROBE = ("echo cores=$(nproc 2>/dev/null || sysctl -n hw.ncpu); "

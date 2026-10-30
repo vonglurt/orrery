@@ -65,6 +65,7 @@ mod seat;
 mod sessions;
 #[allow(dead_code)]
 mod sftp;
+mod orchestrate;
 mod storage;
 #[allow(dead_code)]
 mod ssh;
@@ -304,6 +305,15 @@ fn main() {
                 jobs_answer(&format!("{} status", storage_cmd(&queue_ctl)))
             };
             Frame::Storage { doc, select: frame_select.clone() }
+        } else if frame_view == "fleet" {
+            let doc = if !frame_state.is_empty() {
+                std::fs::read_to_string(&frame_state).unwrap_or_default()
+            } else {
+                jobs_answer(&format!("{} status", orchestrate_cmd(&queue_ctl)))
+            };
+            Frame::Fleet { doc, select: frame_select.clone() }
+        } else if frame_view == "chat" {
+            Frame::Chat { doc: std::fs::read_to_string(&frame_state).unwrap_or_default() }
         } else if frame_view == "machines" {
             let doc = if !frame_state.is_empty() {
                 std::fs::read_to_string(&frame_state).unwrap_or_default()
@@ -507,6 +517,15 @@ fn storage_cmd(queue_ctl: &str) -> String {
     }
 }
 
+/// orchestrate.py beside fleet-queue.py, as machines.py is.
+fn orchestrate_cmd(queue_ctl: &str) -> String {
+    if queue_ctl.contains("/fleet-queue.py ") {
+        queue_ctl.replacen("/fleet-queue.py ", "/orchestrate.py ", 1)
+    } else {
+        String::new()
+    }
+}
+
 fn machines_cmd(queue_ctl: &str) -> String {
     if queue_ctl.contains("/fleet-queue.py ") {
         queue_ctl.replacen("/fleet-queue.py ", "/machines.py ", 1)
@@ -538,6 +557,8 @@ enum Frame {
     /// The machines, from a fresh install to a node (machines.rs).
     Machines { doc: String, select: Vec<String> },
     Storage { doc: String, select: Vec<String> },
+    Fleet { doc: String, select: Vec<String> },
+    Chat { doc: String },
     /// The machines' sessions, live: joined, then drawn after a wait
     /// (ORRERY_FRAME_WAIT seconds, 8 by default) for their screens to arrive.
     Sessions { fleet: String },
@@ -742,6 +763,22 @@ fn write_frame(
                 let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
                 storage::draw(&mut u, &m, &mut st);
             }
+            Frame::Fleet { ref doc, ref select } => {
+                let m = orchestrate::Model::parse(doc);
+                let mut st = orchestrate::State::new(std::env::var("ORRERY_FRAME_OPERATOR").is_ok());
+                st.chosen = select.clone();
+                let mut ui_state = ui::UiState::default();
+                ui_state.pointer = (-1, -1);
+                let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
+                orchestrate::draw(&mut u, &m, &mut st);
+            }
+            Frame::Chat { ref doc } => {
+                let mut st = orchestrate::State::new(true);
+                let mut ui_state = ui::UiState::default();
+                ui_state.pointer = (-1, -1);
+                let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
+                orchestrate::draw_chat(&mut u, orchestrate::parse_room(doc).as_ref(), &mut st);
+            }
             Frame::Machines { ref doc, ref select } => {
                 let m = machines::Model::parse(doc);
                 let mut st = machines::State::new(std::env::var("ORRERY_FRAME_OPERATOR").is_ok());
@@ -916,6 +953,46 @@ fn gui_loop<S: surface::Surface>(
         });
     } else {
         *storage_doc.lock().unwrap_or_else(|e| e.into_inner()) = "no storage tool: start orrery with --queue DIR".into();
+    }
+    // THE FLEET SCREEN, the same way: the document every five seconds, read from
+    // the last survey, and the machines asked again each minute, on a thread of its
+    // own because asking takes as long as the slowest machine.
+    let ocmd = orchestrate_cmd(queue_ctl);
+    let fleet_doc: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let fleet_reply: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let fleet_shown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let chat_doc: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let mut fleet_state = orchestrate::State::new(posture == lab::Posture::Operator && !ocmd.is_empty());
+    if !ocmd.is_empty() {
+        let doc = Arc::clone(&fleet_doc);
+        let cmd = format!("{} status", ocmd);
+        thread::spawn(move || loop {
+            *doc.lock().unwrap_or_else(|e| e.into_inner()) = jobs_answer(&cmd);
+            thread::sleep(Duration::from_secs(5));
+        });
+        let cmd = format!("{} survey", ocmd);
+        let looking = Arc::clone(&fleet_shown);
+        thread::spawn(move || loop {
+            // Only while the screen is open: a console nobody is reading asks nothing.
+            if looking.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = jobs_answer(&cmd);
+                for _ in 0..60 {
+                    thread::sleep(Duration::from_secs(1));
+                }
+            } else {
+                thread::sleep(Duration::from_secs(1));
+            }
+        });
+        // FLEET CHAT, ALWAYS, while orrery is open: this console hosts the room, so a
+        // line typed on one machine reaches the others whichever page is in front.
+        let doc = Arc::clone(&chat_doc);
+        let cmd = format!("{} chat", ocmd);
+        thread::spawn(move || loop {
+            *doc.lock().unwrap_or_else(|e| e.into_inner()) = jobs_answer(&cmd);
+            thread::sleep(Duration::from_secs(4));
+        });
+    } else {
+        *fleet_doc.lock().unwrap_or_else(|e| e.into_inner()) = "no fleet tool: start orrery with --queue DIR".into();
     }
     // Keys a menu item asks the next frame to see (commands.rs: LabKey).
     let mut injected: Vec<surface::Input> = Vec::new();
@@ -1156,6 +1233,7 @@ fn gui_loop<S: surface::Surface>(
         {
             let mut c = draw::Canvas::new(s.pixels(), w, h);
             let mut u = ui::Ui::begin(&mut c, theme, &inputs, &mut ui_state);
+            fleet_shown.store(view == nav::View::Fleet, std::sync::atomic::Ordering::Relaxed);
             match (shell.as_mut(), view) {
                 // A SHELL IS IN FRONT OF EVERYTHING. It is the only face that
                 // takes every keystroke, so leaving the lab's own keys live
@@ -1329,6 +1407,75 @@ fn gui_loop<S: surface::Surface>(
                                 Err(e) => format!("{}: {}", doing, e),
                             };
                             *said.lock().unwrap_or_else(|e| e.into_inner()) = msg;
+                        });
+                    }
+                    if let Some(v) = go {
+                        action = Some(lab::Action::Go(v));
+                    }
+                }
+                (None, nav::View::Chat) => {
+                    let text = chat_doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let go = orchestrate::draw_chat(&mut u, orchestrate::parse_room(&text).as_ref(), &mut fleet_state);
+                    if let Some(orchestrate::Ask::Say(text)) = fleet_state.ask.take() {
+                        let q = |x: &str| format!("'{}'", x.replace('\'', "'\\''"));
+                        let cmd = format!("{} say -- {}", ocmd, q(&text));
+                        let doc = Arc::clone(&chat_doc);
+                        thread::spawn(move || {
+                            *doc.lock().unwrap_or_else(|e| e.into_inner()) = jobs_answer(&cmd);
+                        });
+                    }
+                    if let Some(v) = go {
+                        action = Some(lab::Action::Go(v));
+                    }
+                }
+                (None, nav::View::Fleet) => {
+                    let text = fleet_doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    fleet_state.reply = fleet_reply.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let go = orchestrate::draw(&mut u, &orchestrate::Model::parse(&text), &mut fleet_state);
+                    if let Some(ask) = fleet_state.ask.take() {
+                        let q = |x: &str| format!("'{}'", x.replace('\'', "'\\''"));
+                        // A selection's words stay words: orchestrate.py reads each.
+                        let words = |x: &str| x.split_whitespace().map(|w| q(w)).collect::<Vec<_>>().join(" ");
+                        let cmd = match &ask {
+                            orchestrate::Ask::Survey => format!("{} survey", ocmd),
+                            orchestrate::Ask::Login => format!("{} login", ocmd),
+                            orchestrate::Ask::Select(w) => format!("{} select {}", ocmd, words(w)),
+                            orchestrate::Ask::Install(n) => format!("{} stage listener {}", mcmd, q(n)),
+                            orchestrate::Ask::Send { nodes, verb } => format!("{} send {} {}", ocmd, q(&nodes.join(",")), words(verb)),
+                            orchestrate::Ask::Shot(nodes) => format!("{} shot {}", ocmd, q(&nodes.join(","))),
+                            orchestrate::Ask::Say(text) => format!("{} say -- {}", ocmd, q(text)),
+                            orchestrate::Ask::Text { nodes, verb, text } => format!(
+                                "{} text {} {} -- {}",
+                                ocmd,
+                                q(&nodes.join(",")),
+                                words(verb),
+                                text.as_deref().map(q).unwrap_or_default()
+                            ),
+                        };
+                        fleet_state.said = "asking...".to_string();
+                        fleet_state.lines.clear();
+                        // Cleared, so the same answer twice still reads as an answer.
+                        *fleet_reply.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+                        let reply = Arc::clone(&fleet_reply);
+                        let hand = Arc::clone(&handoff);
+                        thread::spawn(move || {
+                            let msg = match std::process::Command::new("sh").arg("-c").arg(&cmd).output() {
+                                Ok(o) if o.status.success() => {
+                                    let text = String::from_utf8_lossy(&o.stdout).into_owned();
+                                    match json::parse(text.trim()) {
+                                        // A staged install: its command to the machine's tile.
+                                        Ok(v) if v.get("command").is_some() => {
+                                            let g = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                                            *hand.lock().unwrap_or_else(|e| e.into_inner()) = Some((g("machine"), g("target"), g("command")));
+                                            format!("{}: copied; its command is typed in its Sessions tile, for the password", g("machine"))
+                                        }
+                                        _ => text,
+                                    }
+                                }
+                                Ok(o) => String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("it failed").to_string(),
+                                Err(e) => e.to_string(),
+                            };
+                            *reply.lock().unwrap_or_else(|e| e.into_inner()) = msg;
                         });
                     }
                     if let Some(v) = go {
@@ -2044,7 +2191,7 @@ mod tests {
         // Two nodes is two runs, and the report says so per node.
         assert_eq!(
             v.get("ran").unwrap().as_str(),
-            Some("copal fleet scene show --node <each of 2>")
+            Some("copal fleet run scene apply show --node <each of 2>")
         );
         let rows = v.get("results").unwrap().as_array().unwrap();
         assert_eq!(rows.len(), 2, "a two-node selection did not produce two results");
