@@ -82,6 +82,13 @@ RECIPES = [
      "files": ["fleet-update.sh"], "run": "sh fleet-update.sh",
      "does": ["apk update and apk upgrade (Alpine), or apt-get update and upgrade (Ubuntu)",
               "a new kernel waits for the next boot: nothing is restarted"]},
+    {"id": "auto-update", "title": "Update daily and at boot",
+     "os": ["ubuntu", "alpine"],
+     "files": ["fleet-auto-update.sh", "fleet-update.sh"], "run": "sh fleet-auto-update.sh",
+     "does": ["fleet-update.sh --auto every day (Alpine: crond at 2:00; Ubuntu: a systemd timer near 3:00, a missed day made up)",
+              "and a few minutes after every boot (Alpine: OpenRC's local service; Ubuntu: the timer's OnBootSec)",
+              "on Ubuntu the NVIDIA driver and CUDA held back in those runs: a driver upgraded under a running machine stops CUDA until the boot",
+              "nothing is restarted; each run's line in /var/log/fleet-update.log; fleet-auto-update.sh --undo takes it away"]},
     {"id": "poweroff", "title": "Let the fleet power it off",
      "os": ["ubuntu", "alpine"],
      "files": ["fleet-poweroff-setup.sh"], "run": "sh fleet-poweroff-setup.sh",
@@ -121,6 +128,9 @@ p=$(sudo -n -l 2>/dev/null | sed -n 's/.*NOPASSWD: *\(.*poweroff.*\)$/\1/p' | he
 if [ -n "$p" ]; then k poweroff "sudo -n $p"
 elif [ -e /etc/doas.d/fleet-poweroff.conf ]; then k poweroff "doas -n $(command -v poweroff || echo /sbin/poweroff)"
 else k poweroff ""; fi
+# Kept up to date by itself (fleet-auto-update.sh), and its last run's line.
+k auto_update "$( ( [ -e /etc/periodic/daily/fleet-update ] || [ -e /etc/systemd/system/fleet-update.timer ] ) && echo yes)"
+k updated "$(tail -n1 /var/log/fleet-update.log 2>/dev/null)"
 k uptime "$(uptime | sed 's/.*up *//; s/, *[0-9]* user.*//')"
 '''
 
@@ -249,6 +259,7 @@ class Machines:
         have = {
             "fleet-login": bool(f.get("topnotch")),
             "poweroff": bool(f.get("poweroff")),
+            "auto-update": bool(f.get("auto_update")),
             "copal-node": bool(f.get("cargo") and f.get("treadcore") and f.get("tmux") and f.get("poweroff")),
             "cuda-node": bool(f.get("nvidia_smi") and f.get("cuda") and f.get("tmux") and f.get("copal_tm")),
         }

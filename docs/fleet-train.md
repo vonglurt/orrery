@@ -509,6 +509,19 @@ Opening it again shows where the queue is.
   NAME|all`) fast-forwards every git checkout in the user's home. One with
   changes of its own, no upstream, or a branch gone its own way is left as
   it is, and each checkout gets a line saying what happened to it.
+- **Daily and at boot, by itself.** The recipe **Update daily and at
+  boot** (`fleet-auto-update.sh`, root once) installs
+  `fleet-update.sh --auto`. On Alpine it runs from busybox crond's daily
+  folder at 2:00, and through OpenRC's `local` service two minutes after a
+  boot. On Ubuntu it's a systemd timer near 3:00, five minutes after a
+  boot, and a missed day is made up. The automatic runs hold back the
+  NVIDIA driver and CUDA on Ubuntu, because a driver upgraded under a
+  running machine stops CUDA until the boot. By hand, Run upgrades
+  everything. Nothing restarts. Each run leaves a line in
+  `/var/log/fleet-update.log`, which the probe shows as **updated**.
+  `--undo` takes it away. It was tested in Alpine 3.22 and Ubuntu 24.04
+  containers (installed, run, run again, undone; a stand-in `nvidia-`
+  package held and released).
 - **The power-off command follows the machine.** Each probe writes the
   command a machine's rule allows into its `config.json` entry. Join had
   copied it once, so a rule applied after joining was never seen, and

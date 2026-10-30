@@ -257,7 +257,7 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
         st.typed.clear();
     }
     y += lh + 2;
-    let facts: [(&str, String); 7] = [
+    let facts: [(&str, String); 8] = [
         ("system", format!("{} ({} {})", x.fact("pretty"), x.fact("kernel"), x.fact("arch"))),
         ("CPU", format!("{} · {} threads · {} GB", x.fact("cpu_model"), x.fact("cpus"), x.fact("mem_gb"))),
         ("GPU", if x.fact("os_id") == "macos" {
@@ -272,8 +272,10 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
         ("login, power", if x.fact("os_id") == "macos" {
             format!("Orrery.app {} · Copal TM.app {} · up {}", yes(x.fact("orrery_app")), yes(x.fact("copal_tm_app")), x.fact("uptime"))
         } else {
-            format!("topnotch {} · power-off {}", yes(x.fact("topnotch")), or(x.fact("poweroff"), "no"))
+            format!("topnotch {} · power-off {} · daily update {}", yes(x.fact("topnotch")), or(x.fact("poweroff"), "no"), yes(x.fact("auto_update")))
         }),
+        // The last update's line (fleet-update.sh): when, and what it found.
+        ("updated", or(&x.fact("updated").replacen('T', " ", 1), "no run yet").to_string()),
         ("read", if x.probed.is_empty() { "not yet: Probe".into() } else { x.probed.replace('T', " ") }),
     ];
     for (k, v) in facts.iter() {
