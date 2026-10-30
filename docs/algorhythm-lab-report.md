@@ -67,7 +67,7 @@ the nearest learned counterpart to a fleet.
 
 **Synthesis.** Chowning's FM synthesis [9] gives the analogy its vocabulary. Horner et al. [10] used genetic algorithms
 to find FM parameters, a direct precedent for searching a synthesizer's patch space by simulation. This name also comes
-from there: the arrangements of operators on FM instruments are called algorithms.
+from there: the DX7 calls each of its operator arrangements an algorithm.
 
 **What we believe is different.** Not any one layer. It is the whole arrangement: a person writing many interchangeable
 functions, whole-number selection under a game's Monte Carlo, continuous dials over them, and a learned override that
@@ -77,7 +77,12 @@ history. A proper literature review would be needed before any such claim in a r
 **Is there a name?** We found no single established name for the exact combination. The closest for the core idea is
 Programming by Optimization [1]. Hyper-heuristics select among low-level heuristics [13], and neural architecture search
 chooses among operations, though DARTS relaxes that choice into a blend during search [14], which ours never does. We call
-the method *patch programming* and the system Algorhythm. Both are proposals; we did not search whether they are in use.
+the method *patch programming* and the system Algorhythm. Both are working titles. A web search found no established use of
+"patch programming" as a method's name, though "patch" usually means a software fix. "Algorhythm" is already in use, by
+Algorhythm Holdings, a Nasdaq-listed AI company (https://pitchbook.com/profiles/company/41050-54), and algorhythms.ai, a
+generative music tool (https://algorhythms.ai/), among others, so it would need a trademark check, not yet done, before any
+commercial use. It fits because the Yamaha DX7 calls each of its 32 operator arrangements an algorithm
+(https://www.righto.com/2021/12/yamaha-dx7-chip-reverse-engineering.html).
 
 **The claim, stated precisely.** Choosing among implementations by optimization is not itself new. What we did not find is
 the combination: many hand-written implementations of each decision, whole-number switches and continuous dials optimized
