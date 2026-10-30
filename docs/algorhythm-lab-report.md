@@ -74,6 +74,15 @@ functions, whole-number selection under a game's Monte Carlo, continuous dials o
 reads the rules' own answer. We call this novel with caution: the search here was brief, and the parts have a long
 history. A proper literature review would be needed before any such claim in a real publication.
 
+**Is there a name?** We found no single established name for the exact combination. The closest for the core idea is
+Programming by Optimization [1]. Hyper-heuristics select among low-level heuristics [13], and neural architecture search
+chooses among operations, though DARTS relaxes that choice into a blend during search [14], which ours never does. We call
+the method *patch programming* and the system Algorhythm. Both are proposals; we did not search whether they are in use.
+
+**The claim, stated precisely.** Choosing among implementations by optimization is not itself new. What we did not find is
+the combination: many hand-written implementations of each decision, whole-number switches and continuous dials optimized
+together, selection by paired Monte Carlo games, and a learned stage that overrides the rules' answer only when confident.
+
 ## III. Evolution to This Phase
 
 1. **Fixed rules.** A hand-written Commander.
@@ -281,3 +290,7 @@ The design, the synthesizer analogy and the requirements are Paul Richeson's. Im
 [11] "Biorhythm (pseudoscience)," Wikipedia. https://en.wikipedia.org/wiki/Biorhythm_(pseudoscience)
 
 [12] T. Hines, review of biorhythm studies, as described in [11]; the original was not read for this paper.
+
+[13] E. K. Burke et al., "Hyper-heuristics: a survey of the state of the art," 2013. https://eprints.nottingham.ac.uk/28281/
+
+[14] H. Liu, K. Simonyan and Y. Yang, "DARTS: Differentiable architecture search," *ICLR*, 2019. https://arxiv.org/abs/1806.09055
