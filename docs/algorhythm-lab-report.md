@@ -214,13 +214,14 @@ it reads like the net's layers, and it is laid out with the same colours. The Ne
 | Multi-step transform, gate, slots from `CENSUS_PATCHES` | `patch.rs` | built, tested; **no slot filled** |
 | Exact-zero flag; a patch asked for only when trained | `treadcore.py` | built |
 | Inspector, version tracker | `training.rs`, `fleet-versions.py` | built |
-| **Training a transform** | | **not built** |
+| Training a transform: SPSA over its numbers, a census a step, on the fleet | `treadcore.py`, `patch_run` | built; its start is proven to play the rules' own games (+0.00 ±0.00 over 4 seeds), a large random patch −11.65 ±4.93. **No result yet** |
+| Promoting a transform | | **not built:** the game has no file for a slot, so it waits for a person |
 | **Fleet reads of the new choices** | | **not run: all tasks are stopped** |
 | crucible reading treadcore's senses | | **not built:** its arena, senses and net differ |
 
-Training is the largest missing piece. `Patch::flat` and `with_flat` give a search one list of numbers. crucible cannot
-train it yet, because crucible's arena has its own senses and net; the likely first trainer is therefore an evolution
-strategy over censuses on the fleet, as `spsa` and `tune` already move weights, at the cost of many games a step.
+The trainer is SPSA over the transform's 918 numbers, because a step costs one paired census however many numbers there
+are. Each step is noisy, so a step's own reading is not the judge: the finished transform goes in a slot and is read like
+any version. crucible cannot train it, because crucible's arena has its own senses and net.
 
 ## VI. Results
 

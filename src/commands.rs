@@ -104,6 +104,7 @@ pub const MENU: &[(&str, &str, &str, Cmd)] = &[
     ("Fleet", "Collect Results and Stop Now...", "", Cmd::ArmStop),
     ("Fleet", "Shut the Fleet Down...", "", Cmd::ArmShutdown),
     // ---- runs, as the Runs page asks them
+    ("Runs", "Train a Transform", "", Cmd::Run("new patch")),
     ("Runs", "SPSA (search; result adopted)", "", Cmd::Run("new spsa")),
     ("Runs", "Tune (search; result adopted)", "", Cmd::Run("new tune")),
     ("Runs", "Census of @best", "", Cmd::Run("new census trial=@best name=best")),

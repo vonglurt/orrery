@@ -66,6 +66,7 @@ import os
 import re
 import shutil
 import statistics as st
+import struct
 import subprocess
 import sys
 import time
@@ -368,7 +369,7 @@ class Plan:
             "set -e; [ -f ~/.cargo/env ] && . ~/.cargo/env; export PATH=$HOME/.cargo/bin:$PATH\n"
             "Q=~/%s; C=%s; mkdir -p $Q/trials; echo %s | base64 -d > $Q/trials/%s.weights\n"
             "cd $C/wt && export CARGO_TARGET_DIR=$HOME/fleet/target\n"
-            "TRIAL=$Q/trials/%s.weights CENSUS_MODELS=$Q/models SEEDS=%d SEED0=%d SECS=%d MAP=%s RESPAWNS=3 JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) CENSUS_BIN=$C/census-bin scripts/census.sh 2>&1 | tail -3\n"
+            "TRIAL=$Q/trials/%s.weights CENSUS_MODELS=$Q/models CENSUS_PATCHES=$Q/patches SEEDS=%d SEED0=%d SECS=%d MAP=%s RESPAWNS=3 JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu) CENSUS_BIN=$C/census-bin scripts/census.sh 2>&1 | tail -3\n"
             "d=$(ls -td build/census/*/ | head -1); s=$(basename $d)\n"
             "rm -rf $Q/out/%s; mkdir -p $Q/out/%s/$s; cp $d/*.txt $d/*.env $d/*.weights $d/g-*.log $Q/out/%s/$s/; rm -rf $d\n"
         ) % (self.home, self.cdir(), b, out_id, out_id, seeds, seed0, w["secs"], w["map"], out_id, out_id, out_id)
@@ -598,7 +599,7 @@ class Plan:
         hair as rows come in, and a hair is the same trial. Its caps line
         too, its names sorted: every switch's trial had the empty key."""
         canon = ";".join("%s=%.3g" % kv for kv in sorted(parse_weights(text).items()))
-        stamp = re.search(r"^# A/B: model slot (\d+) \S+, sha (\w+)", text, re.M)
+        stamp = re.search(r"^# A/B: model slot (\d+) \S+, sha (\w+)", text, re.M) or re.search(r"^# A/B: patch slot (\d+), sha (\w+)", text, re.M)
         if stamp:
             canon += ";slot%s=%s" % stamp.groups()
         caps = [l.split("=", 1)[1] for l in text.splitlines() if re.match(r"^\s*caps\s*=", l.split("#")[0])]
@@ -689,7 +690,12 @@ class Plan:
                 if i == int(round(dflt)):
                     continue
                 # A slot with no patch in it stops a census: asked for only when trained.
-                if name == "patch" and not os.path.exists(os.path.join(patches, "%d.bin" % i)):
+                if name == "patch":
+                    f = os.path.join(patches, "%d.bin" % i)
+                    if os.path.exists(f):
+                        # Stamped with its file: a slot retrained is a new trial.
+                        sha = hashlib.sha256(open(f, "rb").read()).hexdigest()[:12]
+                        want.append(("ab-patch-%d" % i, "# A/B: patch slot %d, sha %s, against none\npatch = %d\n" % (i, sha, i)))
                     continue
                 # Whole nets in place of the rules are retired from the search: every
                 # slot read about -20 a seat. A transform over the rules replaces them.
@@ -840,7 +846,12 @@ class Plan:
             m = re.search(r"echo (\S+) \| base64 -d > \$Q/trials/", j.get("cmd", ""))
             if j.get("kind") != "weights" or not m:
                 continue
-            k = parse_weights(base64.b64decode(m.group(1)).decode()).get("model")
+            w = parse_weights(base64.b64decode(m.group(1)).decode())
+            if w.get("patch"):
+                src = os.path.join(self.q, "patches", "%d.bin" % int(w["patch"]))
+                if os.path.exists(src):
+                    j.setdefault("send", []).append({"src": src, "dst": "~/%s/patches/%d.bin" % (self.home, int(w["patch"]))})
+            k = w.get("model")
             for slot in {int(k) if k else 0, own} - {0}:
                 src = os.path.join(self.q, "models", "%d.bin" % slot)
                 if os.path.exists(src):
@@ -1571,7 +1582,7 @@ class Plan:
                 rot["cycle"] = cycle + 1
                 # Fresh seeds every time, clear of the trials' (20M), the
                 # held-out reads' (60M up) and the recordings' (9.9M).
-                if kind in ("spsa", "tune", "census"):
+                if kind in ("spsa", "tune", "census", "patch"):
                     params["seed0"] = 500000000 + 1000000 * cycle
                 if kind == "record":
                     nxt = rot.get("record_next", 9920000)
@@ -1638,8 +1649,11 @@ class Plan:
             return
         tried = self.state.setdefault("auto_tried", [])
         self.retry_after_main(autos, tried)
+        # NOT A TRANSFORM, YET. The slot's file lives with the queue and the game has none:
+        # promoted, `patch = k` would stop every game that starts. It waits for a person.
         ev = {k: v for k, v in self.evidence().items()
-              if v.get("current") and v["families"] == "holds" and v["held_mean"] is not None and k not in tried}
+              if v.get("current") and v["families"] == "holds" and v["held_mean"] is not None and k not in tried
+              and "patch" not in parse_weights(v["weights"])}
         if not ev:
             return
         name = max(ev, key=lambda k: ev[k]["held_mean"])
@@ -1697,7 +1711,7 @@ class Plan:
             if r["kind"] == "promote" and self.rstate(r["id"]).get("status") in ("new", "running", "prepared"):
                 print("a promotion is already under way: %s" % r["id"])
                 return
-        ev = {k: v for k, v in self.evidence().items() if v.get("current") and v["families"] == "holds" and v["held_mean"] is not None}
+        ev = {k: v for k, v in self.evidence().items() if v.get("current") and v["families"] == "holds" and v["held_mean"] is not None and "patch" not in parse_weights(v["weights"])}
         if ev:
             name = max(ev, key=lambda k: ev[k]["held_mean"])
             rid = self.new_run("promote", {"candidate": name}, "now")
@@ -1778,14 +1792,14 @@ class Plan:
             return open(p).read()
         return v.replace(";", "\n") + "\n"
 
-    def census_job(self, jid, title, trial, base, seeds, seed0, secs, mp, respawns=3, net=None, host=None):
+    def census_job(self, jid, title, trial, base, seeds, seed0, secs, mp, respawns=3, net=None, host=None, env="", also=None):
         b1 = base64.b64encode(trial.encode()).decode()
         b2 = base64.b64encode(base.encode()).decode()
-        net_env = ""
-        send = []
+        net_env = env
+        send = list(also or [])
         if net:
-            send = [{"src": net, "dst": "~/%s/trials/%s.net" % (self.home, jid)}]
-            net_env = "CENSUS_NET=$Q/trials/%s.net " % jid
+            send.append({"src": net, "dst": "~/%s/trials/%s.net" % (self.home, jid)})
+            net_env += "CENSUS_NET=$Q/trials/%s.net " % jid
         cmd = (
             "set -e; [ -f ~/.cargo/env ] && . ~/.cargo/env; export PATH=$HOME/.cargo/bin:$PATH\n"
             "Q=~/%s; C=%s; mkdir -p $Q/trials\n"
@@ -1853,6 +1867,8 @@ class Plan:
                 jobs += self.spsa_run(rid, p, st)
             elif kind == "tune":
                 jobs += self.tune_run(rid, p, st)
+            elif kind == "patch":
+                jobs += self.patch_run(rid, p, st)
             elif kind in self.HARNESS_KINDS:
                 jobs += self.harness_run(rid, kind, p, st)
             elif kind == "record":
@@ -1981,6 +1997,93 @@ class Plan:
         self.rsave(rid, st)
         return [self.census_job(jid, "spsa %s: step %d of %d" % (rid, k, steps), base_extra + plus, base_extra + minus,
                                 seeds, seed0 + (k - 1) * seeds, p.get("secs", 900), p.get("map", "maps/naval.map"))]
+
+    # ---- the transform: Algorhythm's last stage (treadcore patch.rs) ----------------------
+    # SPSA, because a step costs two sides of one census however many numbers there are:
+    # a transform is about 900 and a census is minutes. The sides are a patch each, played
+    # on the same seeds. IT STARTS AT TODAY'S BRAIN: every correction 0 and the confidence
+    # just past the gate, so the gate can close or open by what the senses say, and until a
+    # correction grows the games are the rules' own (patch_gate_open_is_the_rules, read by
+    # a census at exactly 0.00). A run takes up where the last left off. What it ends with
+    # goes in a slot, and the fleet reads the slot as it reads any version: 55 seeds, the
+    # read on, two held-out reads. A step's own number is far too noisy to judge it by.
+    PATCH_INPUTS = 149  # senses 143, waves 3, the rules' answer 3
+    PATCH_STEP = 3 * (149 + 3) + 3
+
+    @staticmethod
+    def patch_write(path, theta, depth):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".part", "wb") as f:
+            f.write(b"TCP1" + struct.pack("<II", depth, Plan.PATCH_INPUTS) + struct.pack("<%df" % len(theta), *theta))
+        os.rename(path + ".part", path)
+
+    @staticmethod
+    def patch_start(depth):
+        theta = [0.0] * (Plan.PATCH_STEP * depth)
+        # b[2] of the first step: tanh(0.6) = 0.54, past patch_confidence's 0.5.
+        theta[Plan.PATCH_STEP - 1] = 0.6
+        return theta
+
+    def patch_install(self, rid, theta, depth):
+        d = os.path.join(self.q, "patches")
+        os.makedirs(d, exist_ok=True)
+        files = {k: os.path.join(d, "%d.bin" % k) for k in range(1, 8)}
+        free = [k for k, f in files.items() if not os.path.exists(f)]
+        slot = free[0] if free else min(files, key=lambda k: os.path.getmtime(files[k]))
+        self.patch_write(files[slot], theta, depth)
+        save(os.path.join(d, "theta.json"), {"depth": depth, "theta": theta, "run": rid})
+        self.flag("patch", "%s: a transform of %d steps is in slot %d; the fleet reads it next" % (rid, depth, slot),
+                  key="patch:%s" % rid, progress=True)
+
+    def patch_run(self, rid, p, st):
+        depth, steps, seeds = int(p.get("depth", 2)), int(p.get("steps", 30)), int(p.get("seeds", 24))
+        seed0 = int(p.get("seed0", 700000000))
+        A, C, maxstep = float(p.get("a", 0.05)), float(p.get("c", 0.03)), float(p.get("maxstep", 0.05))
+        if st["status"] == "new":
+            if not self.defaults():
+                return []
+            last = load(os.path.join(self.q, "patches", "theta.json"), {})
+            theta = last["theta"] if last.get("depth") == depth else self.patch_start(depth)
+            st = {"status": "running", "k": 0, "theta": theta, "steps": [], "pending": None, "commit": self.short()}
+        if st.get("pending"):
+            pend = st["pending"]
+            if pend["job"] in self.ids("failed", "stopped"):
+                st.update({"status": "failed", "why": "step %d's census failed" % pend["k"]})
+                self.rsave(rid, st)
+                return []
+            c = self.job_census(pend["job"]) if pend["job"] in self.ids("done") else None
+            if not c:
+                return []
+            d = c[0]
+            rnd = random.Random("%s-%d" % (rid, pend["k"]))
+            for i in range(len(st["theta"])):
+                sign = rnd.choice((-1, 1))
+                st["theta"][i] += max(-maxstep, min(maxstep, pend["ak"] * d / (2 * pend["ck"] * sign)))
+            st["steps"].append({"k": pend["k"], "d": d, "se": c[1], "host": c[3]})
+            st["pending"] = None
+            self.tick({"kind": "patch", "run": rid, "step": pend["k"], "d": d, "se": c[1], "host": c[3], "vars": {}, "improved": False})
+        if st["k"] >= steps:
+            self.patch_install(rid, st["theta"], depth)
+            st["status"] = "done"
+            self.rsave(rid, st)
+            return []
+        k = st["k"] + 1
+        ak, ck = A / (k + 1) ** 0.602, C / k ** 0.101
+        rnd = random.Random("%s-%d" % (rid, k))
+        signs = [rnd.choice((-1, 1)) for _ in st["theta"]]
+        jid = "%s-k%02d" % (rid, k)
+        also = []
+        for slot, sg in ((1, 1), (2, -1)):
+            f = os.path.join(self.rdir(rid), "k%02d" % k, "%d.bin" % slot)
+            self.patch_write(f, [t + sg * ck * s for t, s in zip(st["theta"], signs)], depth)
+            also.append({"src": f, "dst": "~/%s/trials/%s.patches/%d.bin" % (self.home, jid, slot)})
+        st["k"] = k
+        st["pending"] = {"k": k, "ak": ak, "ck": ck, "job": jid}
+        self.rsave(rid, st)
+        w = self.cfg.get("weights") or {}
+        return [self.census_job(jid, "transform %s: step %d of %d" % (rid, k, steps), "patch = 1\n", "patch = 2\n", seeds,
+                                seed0 + (k - 1) * seeds, p.get("secs", w.get("secs", 900)), p.get("map", w.get("map", "all")),
+                                env="CENSUS_PATCHES=$Q/trials/%s.patches " % jid, also=also)]
 
     # A (1 + lambda) evolution strategy (scripts/tune.sh's rule), a
     # generation's children side by side, the best replacing the parent
