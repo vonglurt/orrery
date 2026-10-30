@@ -733,6 +733,22 @@ class Plan:
         r = next((r for r in self.models() if r["slot"] == int(m.group(1))), None)
         return not r or r["sha"] != m.group(2)
 
+    def best_slot(self):
+        """The slot whose A/B reads strongest against the rules on today's defaults,
+        its file still there; with none read, the newest generation. None: no slots."""
+        rows = [r for r in self.models() if os.path.exists(r["source"])]
+        if not rows:
+            return None
+        read = {}
+        for v in self.sequential().values():
+            m = re.search(r"^# A/B: model slot (\d+) ", v["text"], re.M)
+            if m and v.get("d") is not None:
+                read[int(m.group(1))] = v["d"]
+        known = [r for r in rows if r["slot"] in read]
+        if known:
+            return max(known, key=lambda r: read[r["slot"]])
+        return max(rows, key=lambda r: r["gen"])
+
     def models_update(self):
         rows = self.models()
         if not rows and not self.state.get("models_seeded"):
@@ -1086,7 +1102,8 @@ class Plan:
             l = l.split("#")[0].strip()
             if "=" in l:
                 k, v = (x.strip() for x in l.split("=", 1))
-                out.append("%s=%s" % (k, v))
+                # Words, split on spaces by the test: "baseline, -pings" is one.
+                out.append("%s=%s" % (k, v.replace(", ", ",")))
         return " ".join(out)
 
     def held_pairs(self):
@@ -1135,6 +1152,14 @@ class Plan:
         f = self.cfg.get("families")
         if not f or not self.cpu_ready() or n <= 0:
             return []
+        # A read that crashed said nothing about the candidate: once more on each
+        # new commit, which is the only thing that could have mended it.
+        done = load(os.path.join(self.pd, "families.json"), {}) or {}
+        retried = self.state.setdefault("families_retried", {})
+        for name, v in done.items():
+            if v.get("verdict") == "ERROR" and retried.get(name) != self.short() and name in self.state["families_queued"]:
+                self.state["families_queued"].remove(name)
+                retried[name] = self.short()
         todo = [c for c in self.family_candidates() if c[0] not in self.state["families_queued"]]
         batch = int(f.get("batch", 8))
         jobs = []
@@ -1180,6 +1205,11 @@ class Plan:
                     if m:
                         fams.append({"family": m.group(1)[:-5], "held": int(m.group(2)), "runs": int(m.group(3)),
                                      "pct": float(m.group(4)), "se": float(m.group(5)), "floor": m.group(6), "verdict": m.group(7)})
+                # NO FAMILY READ IS NOT A FLOOR BROKEN. The test exits non-zero for
+                # both, and a panic before the first family (w1442, w1592, w1656, a
+                # switch's A/B each) was read as UNDER and could never be promoted.
+                if verdict == "UNDER" and not fams:
+                    verdict = "ERROR"
                 out[name] = {"set": sset.strip(), "verdict": verdict, "seconds": int(secs), "families": fams,
                              "job": d.rstrip("/").split(os.sep)[-1]}
         save(os.path.join(self.pd, "families.json"), out)
@@ -1988,6 +2018,15 @@ class Plan:
             self.rsave(rid, st)
             return []
         jid = "%s-%s" % (rid, kind)
+        # THE LEAGUE'S LOOP (docs/brains.md 6): a run nobody gave a start begins from
+        # the strongest model the fleet has read, so generations build on each other
+        # rather than each starting over. Asked once, so a run keeps its start.
+        if kind in ("train", "school") and not p.get("start"):
+            best = self.best_slot()
+            if best:
+                p = dict(p, start=best["source"])
+                self.flag("league", "%s %s starts from slot %d, %s" % (kind, rid, best["slot"], best["name"]),
+                          key="league:%s" % rid, progress=True)
         env = {"train": "", "gauntlet": "GAUNTLET=1 ", "clips": "CLIPS=1 ", "school": "SCHOOL=1 "}[kind]
         send = []
         for k in ("start", "check"):
@@ -2622,6 +2661,8 @@ class Plan:
         for name, v in fam.items():
             if v.get("verdict") == "UNDER":
                 self.flag("families", "%s falls under a family's floor" % name, key="under:%s" % name)
+            elif v.get("verdict") == "ERROR":
+                self.flag("families", "%s: its families could not run; read again on the next commit" % name, key="error:%s:%s" % (name, self.short()))
 
     # ---- crucible: the second job, on the GPU lanes ----------------------------------------
     # Paul, 28 October: "i want to see a button to add more gpu CUDA to the

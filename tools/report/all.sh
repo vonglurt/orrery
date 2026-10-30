@@ -17,4 +17,5 @@ copal-machines|Copal Machines Join|orrery · the fleet · machines
 storage|Fleet Storage|orrery · the fleet · storage
 fleet-commanders|Fleet Commanders|orrery · the fleet · commanders
 fleet-orchestration|Commanding the Fleet|orrery · the fleet · orchestration
+brain-versions|Many Versions of One Brain|orrery · the brain · whole-number choices
 LIST

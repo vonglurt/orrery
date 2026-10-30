@@ -1,0 +1,148 @@
+<meta charset="utf-8">
+<title>Many Versions of One Brain</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+/* Layout: a lab report on orrery's paper -- a sticky bar of section
+   numerals, a masthead, then numbered sections at a reading measure, with
+   code and diagrams set dark like a terminal. Palette: orrery's draw.rs
+   LIGHT and DARK, as the user guide. */
+:root {
+  --base: #fce2ab; --panel: #f7d79a; --tile: #fff2d4; --ink: #121212;
+  --dim: #6b5836; --line: #c4a870; --accent: #87704f; --up: #4a7c4e;
+  --term-bg: #1c1a16; --term-ink: #f0e3c4; --term-dim: #8a7d63;
+  --rule: color-mix(in srgb, var(--line) 70%, transparent);
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --cond: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --measure: 68ch;
+  --step--1: clamp(.78rem, .76rem + .1vw, .84rem);
+  --step-0: clamp(1rem, .97rem + .16vw, 1.08rem);
+  --step-1: clamp(1.18rem, 1.12rem + .3vw, 1.36rem);
+  --step-2: clamp(1.45rem, 1.32rem + .6vw, 1.9rem);
+  --step-3: clamp(1.9rem, 1.6rem + 1.3vw, 2.8rem);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+    --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+    --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+    --rule: color-mix(in srgb, var(--line) 100%, transparent);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+  --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+  --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+  --rule: color-mix(in srgb, var(--line) 100%, transparent);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--base); color: var(--ink);
+  font-family: var(--serif); font-size: var(--step-0); line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--base); }
+.wrap { max-width: 980px; margin: 0 auto; }
+
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  background: color-mix(in srgb, var(--base) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+  margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+  padding-inline: max(16px, env(safe-area-inset-left, 0px));
+}
+.bar-in {
+  max-width: 980px; margin: 0 auto; padding-block: 9px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  font-family: var(--cond); font-size: var(--step--1);
+}
+.bar-in strong { letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin-right: auto; }
+.bar-in a { color: var(--dim); text-decoration: none; border-bottom: 1px solid transparent; }
+.bar-in a:hover, .bar-in a:focus-visible { color: var(--ink); border-bottom-color: var(--accent); }
+
+header.mast { padding-block: clamp(36px, 6vw, 72px) clamp(24px, 4vw, 40px); }
+.eyebrow { font-family: var(--mono); font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+h1 { font-family: var(--cond); font-weight: 700; font-size: var(--step-3); line-height: 1.05; letter-spacing: -.015em; text-wrap: balance; margin: 0 0 18px; max-width: 22ch; }
+.front p, .front li { font-size: var(--step--1); color: var(--dim); }
+.front p.note { font-family: var(--mono); letter-spacing: .04em; color: var(--accent); }
+.front ul { margin: 0; }
+
+nav.toc { border-top: 1px solid var(--rule); padding-block: 22px 30px; }
+nav.toc h2 { font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-family: var(--mono); font-weight: 500; margin: 0 0 10px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; columns: 2 18rem; column-gap: 32px; }
+nav.toc li { break-inside: avoid; padding: 3px 0; font-family: var(--cond); }
+nav.toc a { color: var(--ink); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { text-decoration: underline; text-decoration-color: var(--accent); }
+
+section { padding-block: clamp(28px, 4vw, 48px); border-top: 1px solid var(--rule); scroll-margin-top: 48px; }
+h2 { font-family: var(--cond); font-weight: 700; font-size: var(--step-2); line-height: 1.12; text-wrap: balance; margin: 0 0 18px; }
+h3 { font-family: var(--cond); font-weight: 600; font-size: var(--step-1); line-height: 1.25; text-wrap: balance; margin: 30px 0 10px; scroll-margin-top: 48px; }
+p, ul, ol, blockquote { max-width: var(--measure); }
+p { margin: 0 0 1em; }
+ul, ol { margin: 0 0 1em; padding-left: 1.3em; }
+li { margin-bottom: .35em; }
+li > ul, li > ol { margin: .35em 0 .2em; }
+li::marker { color: var(--accent); }
+p.note { font-size: var(--step--1); color: var(--dim); }
+strong { font-weight: 600; }
+a { color: var(--ink); text-underline-offset: 3px; text-decoration-color: var(--accent); }
+code { font-family: var(--mono); font-size: .86em; }
+p code, li code, td code, th code { color: var(--accent); word-break: break-word; }
+blockquote { margin: 0 0 1.2em; padding: 12px 18px; border-left: 3px solid var(--accent); background: var(--tile); font-family: var(--mono); font-size: var(--step--1); line-height: 1.6; }
+blockquote p { margin: 0; }
+
+.code { position: relative; margin: 0 0 1.3em; background: var(--term-bg); border-radius: 4px; overflow-x: auto; max-width: 100%; }
+.code pre { margin: 0; padding: 16px 18px; color: var(--term-ink); font-family: var(--mono); font-size: .8rem; line-height: 1.55; tab-size: 4; }
+.code code { font-size: inherit; color: inherit; }
+.code .lang { position: absolute; top: 6px; right: 10px; font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--term-dim); }
+.code.diagram { background: var(--tile); border: 1px solid var(--rule); }
+.code.diagram pre { color: var(--ink); }
+
+.table { overflow-x: auto; max-width: 100%; margin: 0 0 1.4em; }
+table { border-collapse: collapse; font-size: var(--step--1); line-height: 1.5; min-width: 30rem; }
+th { font-family: var(--cond); font-weight: 600; text-align: left; padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line); vertical-align: bottom; }
+td { padding: 8px 14px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: none; }
+td:first-child { font-weight: 600; font-family: var(--cond); }
+
+figure { margin: 0 0 1.4em; }
+figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); }
+figcaption { margin-top: 8px; font-size: var(--step--1); color: var(--dim); max-width: var(--measure); }
+
+footer { border-top: 1px solid var(--rule); padding-block: 24px 48px; font-size: var(--step--1); color: var(--dim); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="bar"><div class="bar-in"><strong><a href="index.html">orrery</a> · lab report</strong><a href="#abstract">Abstract</a><a href="#si">I</a><a href="#sii">II</a><a href="#siii">III</a><a href="#siv">IV</a><a href="#sv">V</a><a href="#svi">VI</a><a href="#svii">VII</a></div></div>
+<div class="wrap">
+  <header class="mast">
+    <p class="eyebrow">orrery · the brain · whole-number choices</p>
+    <h1>Many Versions of One Brain: What the A/B Found, and Whole-Number Choices of Rewritten Functions</h1>
+    <div class="front"><p class="note">Lab Report — IEEE Format · 30 October 2026</p><p>Copyright (c) 2026 Paul Richeson. MIT licensed, as orrery.</p><p>Companions: <code>docs/brains.md</code> (the map); treadcore <code>weights.rs</code> (<code>Settings::choice</code>), <code>commander.rs</code> (<code>Rung::order</code>), <code>fleet.rs</code> (roles, model slots), <code>scenario.rs</code> (<code>set_weights</code>); orrery <code>tools/plans/treadcore.py</code> (<code>ab_trials</code>, <code>sequential</code>, <code>families</code>, <code>best_slot</code>).</p></div>
+  </header>
+  <nav class="toc" aria-label="Contents"><h2>Contents</h2><ol><li><a href="#abstract">Abstract</a></li><li><a href="#si">I. Objective</a></li><li><a href="#sii">II. What Was Asked For, Checked</a></li><li><a href="#siii">III. The Fault</a></li><li><a href="#siv">IV. Results</a></li><li><a href="#sv">V. Expanding the Method</a></li><li><a href="#svi">VI. Training Changed</a></li><li><a href="#svii">VII. Discussion</a></li></ol></nav>
+  <main>
+  <section id="abstract"><h2>Abstract</h2><p>Paul asked, before anything was published, for a check that the A/B testing and enum matching were finished as he described them, and then for a report on expanding the method: <strong>several functions that do the same job, written differently, some reading new senses, chosen by a weight, with only the chosen one running.</strong></p><ul><li><strong>The enum is sound.</strong> <code>Settings::choice</code> makes every choice a whole number in range, each of the three choices dispatches to exactly one version, and no search can blend them.</li><li><strong>The A/B was not finished, and the fault was serious.</strong> Every switch's A/B crashed the families check, which recorded the crash as a floor broken. <strong>No switch could ever have been promoted.</strong> The strongest result in the fleet, pings off at +1.99 a seat on two held-out reads, was being refused for it. Mended on both sides.</li><li><strong>The mended gate then caught a second, worse fault</strong> (§III-B): promoted as it stood, pings off would have put a brain on main different from the one measured. Mended, and <strong>pings off is now the default, <code>c015965</code>.</strong></li><li><strong>The method's own harvest is thin so far.</strong> Of the three choices, none has beaten the defaults. <code>ladder = hunt_first</code> plays <em>identical</em> games to the default. All six model slots read lose by about 20 a seat.</li><li><strong>There are no rewritten functions yet.</strong> <code>ladder</code> reorders, <code>roles</code> deals, <code>model</code> swaps the whole brain. What Paul describes is a new kind of version, and §V sets out how to add it.</li></ul></section><section id="si"><h2>I. Objective</h2><p>To answer two questions from the code and the fleet's own records rather than from the design pages: is the A/B with whole-number choices finished, and how should it grow?</p></section><section id="sii"><h2>II. What Was Asked For, Checked</h2><div class="table"><table><thead><tr><th>Paul's requirement</th><th>Where</th><th>Finding</th></tr></thead><tbody><tr><td>A weight picks a version, 0 as built</td><td><code>weights!</code>, a doc saying <code>(choice: a \| b \| ...)</code></td><td><strong>Done</strong></td></tr><tr><td>"Whole Number enum only"</td><td><code>Settings::choice</code>: <code>self.w[w].round().max(0.0) as usize</code>, then the last version at most</td><td><strong>Done:</strong> the version is a <code>usize</code> at every use. 1.5 is version 2, never a mix</td></tr><tr><td>Only the chosen one runs</td><td>one <code>match</code> or index at each site: <code>Rung::order</code>, <code>MIXES[...]</code>, <code>model_of</code></td><td><strong>Done</strong> for the three that exist</td></tr><tr><td>The search must not move an enum as a number</td><td><code>suggest.py</code> skips choices; <code>ab_trials</code> writes <code>%d</code>; <code>wide_trials</code> draws from the fit's curves, which hold no choice</td><td><strong>Done,</strong> with one gap: a <code>tune</code> or <code>spsa</code> run told by hand to vary a choice would still try fractions. Harmless at dispatch, since they round, and wasteful</td></tr><tr><td>A/B of every version</td><td><code>ab_trials</code>: 31 versions on today's defaults, a generation at a time</td><td><strong>Running:</strong> 4 left to ask when read</td></tr><tr><td>Judged like any weight</td><td>the sequential read, two held-out reads, the families</td><td><strong>Broken for switches</strong> (§III)</td></tr><tr><td>Models as enum 0 to 7</td><td><code>model</code>, slots in <code>models/models.tsv</code></td><td><strong>Census only.</strong> A promoted model would not play in the game or the families (<code>docs/brains.md</code> §7)</td></tr><tr><td><code>think_every</code>, <code>think_order</code></td><td><code>docs/brains.md</code> 3b, 3c</td><td><strong>Not built</strong></td></tr><tr><td>Alternate functions, new senses</td><td></td><td><strong>Not built</strong> (§V)</td></tr></tbody></table></div></section><section id="siii"><h2>III. The Fault</h2><p>pings off was read three times and passed both held-out reads each time it reached them, and was never promoted. The planner's record said:</p><div class="code" class="diagram"><pre><code>grove/w1656  caps=baseline, -pings  UNDER  seconds 0  families []</code></pre></div><p>A floor broken takes minutes and names the family. This took no time and named none. The job's log:</p><div class="code" class="diagram"><pre><code>panicked at scenario.rs:1165: not a number: baseline,
+test result: FAILED. 0 passed; 1 failed; ... finished in 0.00s</code></pre></div><p><code>weights_set</code> wrote the trial as <code>caps=baseline, -pings</code>; the test split that on its space and read <code>baseline,</code> as a number. It exits non-zero both for a floor broken and for a panic, and the planner read both as <code>UNDER</code>. Three candidates had it: <code>-escort</code>, and pings off twice. Number trials and choices were never affected: 112 candidates held, and none of them contained a switch.</p><p><strong>Three repairs:</strong></p><ul><li><code>set_weights</code> reads a <code>caps</code> line, sets it on every Commander and leaves a RuleBot alone, and a misspelt switch stops the read. Test: <code>a_switch_is_set_on_every_commander</code>.</li><li><code>weights_set</code> writes one word.</li><li><strong>A read with no family in it is <code>ERROR</code>, not <code>UNDER</code>.</strong> It is read again on the next commit, and it does not count as a verdict on the candidate.</li></ul><p>The third matters most. The first two mend this crash; the third is why the next one will be seen.</p><h3 id="b-the-second-fault-a-switch-promoted-but">B. The second fault: a switch promoted but not applied</h3><p>The first attempt at promotion, r0061, failed a brain test, and the test was right. <code>set_settings</code> turned a switch off only when it saw it <em>change</em> from on to off. A dealt bot is made by <code>new</code>, then given its role's fields (<code>c.pings = true</code>), then its settings. With pings off in the <em>baseline</em> there is no change to see, so the bot goes on pinging. <strong>Every read of pings off started from an on baseline, where the change was seen. Promoted, the same brain would have been a different one.</strong> Nothing would have reported it: the next generation would have measured against a brain still pinging while its weights said otherwise.</p><p>Switches now go by state, not by change, and keep what the role gave them (<code>a_switch_off_before_the_deal_is_off_after_it</code>). Two tests assumed pings were on by default and now ask for them by name, by the rule in <code>docs/brains.md</code> §2. The suite passes with pings on and with pings off as the default. The second attempt, r0062, passed its tests and families on a branch and was pushed.</p><p><strong>No switch had ever been promoted, so nothing had ever walked this path.</strong> The first fault hid the second.</p></section><section id="siv"><h2>IV. Results</h2><p>Each is a pooled read against the defaults in seats a seat; the error is one standard error.</p><h3 id="a-choices">A. Choices</h3><div class="table"><table><thead><tr><th>Choice</th><th>Version</th><th>Reads</th><th>Result</th></tr></thead><tbody><tr><td><code>ladder</code></td><td>1 expand before hunt</td><td>3 commits, 55 seeds each</td><td>−0.08, +0.05, −0.23 ±0.3: nothing</td></tr><tr><td><code>ladder</code></td><td>2 hunt first</td><td>3 commits, 55 seeds each</td><td><strong>+0.00 ±0.00 each: identical games</strong></td></tr><tr><td><code>ladder</code></td><td>3 expand first</td><td>3 commits, pooled on today's 124 seeds</td><td>+0.04 ±0.25: nothing</td></tr><tr><td><code>roles</code></td><td>1 no guard</td><td><code>37b6b65</code>, 55 seeds</td><td>−0.28 ±0.89</td></tr><tr><td><code>roles</code></td><td>2 two guards</td><td><code>37b6b65</code>, 55 seeds</td><td>−0.10 ±0.76</td></tr><tr><td><code>roles</code></td><td>3 three guards</td><td><code>37b6b65</code>, 55 seeds</td><td>+0.38 ±0.70</td></tr><tr><td><code>model</code></td><td>slots 1 to 6</td><td>55 seeds each</td><td>−22.3, −22.1, −21.0, <strong>−18.9</strong>, −20.6, −20.5 ±~0.5</td></tr></tbody></table></div><p><strong><code>ladder = hunt_first</code> is a dead version, and the cause is not yet known.</strong> Exact equality over 165 seeds on three commits cannot be chance. It does differ in the unit test, so the dispatch works; in play the reorder never changes a decision. <code>w_posture</code> at 0.95 gives the fixed order only a twentieth of the score, which is a likely part of why all of <code>ladder</code> reads near nothing, and it does not by itself explain exact equality. A census ought to flag a read of exactly 0.00 and stop asking again: the fleet has spent three reads on it.</p><p><strong><code>roles</code> has only been read on an older brain:</strong> no read on today's defaults yet.</p><h3 id="b-switches">B. Switches</h3><div class="table"><table><thead><tr><th>Trial</th><th>Seeds</th><th>Result</th></tr></thead><tbody><tr><td><code>pings</code> off</td><td>987 pooled</td><td><strong>+2.03 ±0.19</strong>; held out +2.06 and +1.92</td></tr><tr><td><code>team_rotate</code> on</td><td>418</td><td>+1.19 ±0.22, <strong>dropped</strong>: a map under the bar at its last stage, and its last 143 seeds read −0.01</td></tr><tr><td><code>bridge_jobs</code> off</td><td>418</td><td>+0.12 ±0.10, dropped</td></tr><tr><td><code>dodge</code> off</td><td>55</td><td>−6.81 ±0.62: as it should</td></tr></tbody></table></div><p><strong>Read that first line carefully before believing it.</strong> A team that stops calling enemies and answering pings gains two seats. Either the pings are costing more than they give, which is a real finding, or the score misses what they are for. The census cannot tell these apart, and the families exist to catch the second.</p><p><strong>What promoting it changed.</strong> With pings off, the team test read "0 pings, 0 seats rallied". As the code reads, bots no longer answer a call, a person's included. A census of bots rewards this by +2 a seat; <strong>whether a person playing with bots wants it is not something the census can answer.</strong> It is one line to reverse.</p><h3 id="c-the-families-check-on-pings-off">C. The families check on pings off</h3><p>With the fault mended, run for real on this Mac: <strong>all nine families hold.</strong> The numbers are identical to today's defaults, which raised the question of whether the switch was applied at all. So the same path was run with <code>dodge</code> off, and six families fell under their floors (a duel in the open from 79.8% to 40.8%, a rolling tank under a shell from 99.8% to 89.9%). The switch is applied and the gate is real.</p><p><strong>So the families say nothing about pings:</strong> no family exercises them. They show that dropping pings breaks nothing else. <strong>The second reading above, that the score misses what pings are for, is not ruled out.</strong> Pings are for a person's team as well as for bots, and a census of bots would not see what a person loses.</p></section><section id="sv"><h2>V. Expanding the Method</h2><h3 id="a-the-new-kind-of-version">A. The new kind of version</h3><p>The three choices so far change a <em>parameter of a decision</em>. Paul describes something different: the same decision, implemented again by a different idea.</p><div class="code"><span class="lang">rust</span><pre><code>// weights.rs
+TargetPick &quot;target_pick&quot; 0.0, &quot;tactics: who to shoot (choice: nearest_scored | focus | threat_ranked | lead_time)&quot;;
+
+// commander.rs: the one place they differ
+let target = match self.settings.choice(W::TargetPick) {
+    1 =&gt; self.pick_focus(obs),
+    2 =&gt; self.pick_threat_ranked(obs, &amp;self.senses_threat(obs)),
+    3 =&gt; self.pick_lead_time(obs, &amp;self.senses_motion(obs)),
+    _ =&gt; self.pick(obs), // as built
+};</code></pre></div><h3 id="b-the-rules">B. The rules</h3><ol><li><strong>A whole number, always.</strong> The choice is read through <code>Settings::choice</code> and nowhere else. A <code>match</code> on it has a <code>_</code> arm for version 0. Weights inside a version stay ordinary numbers and are tuned as such.</li><li><strong>Only the chosen one runs.</strong> The <code>match</code> calls one function. <strong>Its senses are computed inside that arm</strong>, never ahead of it: a version that is not chosen costs no time and reads nothing. This is also what keeps A/B honest: if versions shared a precomputed sense, adding a version could change the timing of the others.</li><li><strong>Version 0 stays, unchanged.</strong> Written beside, not over. A test pins that 0 is the brain as it was.</li><li><strong>Same inputs and outputs at the dispatch.</strong> One return type, so a version cannot reach into another.</li><li><strong>Deterministic.</strong> The same seed plays the same game; a census's paired reads depend on it.</li></ol><h3 id="c-more-senses-for-a-new-function">C. More senses for a new function</h3><p>A sense for a rewritten function differs from a sense for the learned tank (<code>docs/brains.md</code> §4), and it is cheaper to judge: <strong>it needs no ablation, because the version that reads it is itself the experiment.</strong> Good first candidates, reading what the sim already holds:</p><div class="table"><table><thead><tr><th>Sense</th><th>For</th></tr></thead><tbody><tr><td>time to the next shell landing near the tank</td><td><code>dodge</code>, <code>target_pick</code></td></tr><tr><td>an enemy's closing speed and heading</td><td><code>target_pick = lead_time</code></td></tr><tr><td>a second enemy contact</td><td><code>target_pick = threat_ranked</code></td></tr><tr><td>the team board's posture</td><td><code>ladder</code>, <code>waypoint</code></td></tr><tr><td>cover along the way to a goal</td><td><code>waypoint = covered</code></td></tr></tbody></table></div><p>A sense from outside what a player could see would make the brain cheat. Each must be drawn from what <code>obs</code> already gives that seat.</p><h3 id="d-a-b-a-b-c-d-up-to-eight">D. A/B, A/B/C/D, up to eight</h3><p>Today each version is compared with the default, alone. That extends to many without new machinery, at a cost that should be stated:</p><ul><li><strong>Cost.</strong> About 70 seeds a version a generation. Eight versions of five choices is about 2,800 seeds a generation.</li><li><strong>False passes grow with versions.</strong> Eight tries at a 2% false-pass read give one in seven a false pass at the first gate. The held-out reads and the sequential bars absorb this, and they are why it is safe to have many.</li><li><strong>A tournament when two pass.</strong> If versions 2 and 3 both beat 0, the last step should read them against each other, on the same seeds, and promote the winner. Today the fleet would promote one, then re-read the other on the new defaults, which gets there more slowly. A later improvement, not a prerequisite.</li><li><strong>Drop dead versions.</strong> Exact zero means stop asking (§IV-A).</li><li><strong>Interactions are found by promotion.</strong> Each version is read against today's defaults, so a promoted version changes what the others are read against. The fleet re-reads on new defaults already, and this is why a version dropped once may be worth asking again later.</li></ul><h3 id="e-order-of-work">E. Order of work</h3><ol><li>~~Get a clean promotion through for a switch, which proves the mended gate.~~ Done, <code>c015965</code>.</li><li>Find out why <code>hunt_first</code> is dead, and flag exact-zero reads.</li><li>The first rewritten function: <strong><code>target_pick</code>.</strong> It is one decision, already a scorer, cheap to read, and <code>focus_blend</code> shows that targeting moves results. Two versions and one new sense.</li><li>Then <code>waypoint</code>, and <code>think_every</code>/<code>think_order</code> as the backlog has them.</li><li>A guard in <code>tune</code> and <code>spsa</code>: refuse a choice by name, so a hand-started run cannot waste reads on it.</li><li>A model in the game and the families, not only the census, before a <code>model</code> version can mean anything beyond the census.</li></ol></section><section id="svi"><h2>VI. Training Changed</h2><p>Train and school runs now start from the strongest slot read on today's defaults (<code>best_slot</code>) unless told otherwise, which is the league's loop <code>docs/brains.md</code> §6 asks for; each generation was starting over before. <strong>On the last defaults that was slot 4, <code>g5-r0039-round40</code>, at −18.9.</strong> Reads on the new defaults start again, and until a slot is read the newest generation is used. Starting there does not make it good: every slot is far behind the rules, and nothing yet shows that a warm start closes that gap. The first run with it is the first measurement. A running school, r0059, keeps the start it had. It has not yet started a run.</p></section><section id="svii"><h2>VII. Discussion</h2><p>The check was worth asking for. Nothing on the design page was false in what it said was built, and yet the most valuable path through it could not complete. The test that would have shown this, a switch reaching the families, did not exist, because each part had been tested on its own.</p><p>The lesson for §V: <strong>the first rewritten function should go all the way through to a promotion attempt before a second is written,</strong> so a fault like this one shows up at the cost of one version rather than eight.</p><h3 id="still-open">Still open</h3><ul><li>Why <code>ladder = hunt_first</code> plays identical games.</li><li><code>roles</code> on today's defaults.</li><li>A family of a team answering a call, and a decision on whether bots should answer a person's ping whatever the switch says.</li><li>Whether pings off is a real gain or a gap in what the score sees. A family of a team answering a call would test it; none exists.</li><li>All of §V is a design. No rewritten function exists.</li></ul></section>
+  </main>
+  <footer>
+    <p>Paul Richeson, 28 October 2026. MIT licensed, as orrery. The Markdown original and the example's source are in orrery: <code>docs/appkit-gui-lab-report.md</code> and <code>docs/appkit-example/</code>.</p>
+  </footer>
+</div>

@@ -192,6 +192,9 @@ read is a model no one can judge.
 
 ## 7. Order of work
 
+*30 October:* a switch can now be promoted (`docs/brain-versions-lab-report.md`); rewritten functions as choices
+are designed there, §V, and not built. Training starts from the best slot (`best_slot`).
+
 1. ~~Choices, the ladder, A/B for every switch and choice~~ (built).
 2. ~~`roles` (3a)~~ (built, `b02f1fe`). One choice for the team's mix;
    per-role ladders and switches are the next step of it.
