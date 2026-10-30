@@ -9,7 +9,9 @@ Companions: treadcore `bio.rs`, `patch.rs`, `weights.rs`, `commander.rs`; orrery
 
 ---
 
-***Abstract*—We describe Algorhythm, a design for game agents in which a person writes many interchangeable
+## Abstract
+
+We describe Algorhythm, a design for game agents in which a person writes many interchangeable
 functions for each decision, and a population of Monte Carlo simulations chooses among them. Control flows through
 three layers, drawn by analogy with a frequency-modulation modular synthesizer: continuous weights act as analogue
 dials, whole-number enumerations act as rotary switches selecting exactly one function, and a final learned
@@ -20,10 +22,10 @@ five-way pinging function as a worked example of A/B/C/D/E selection, and a bior
 silent by default, verified by identical results on nine scenario families. We have not yet trained a transform or
 measured the new choices over a full census, and we report those as open. The closest prior work we found is
 Programming by Optimization and residual policy learning. We found no system combining all of these in this form,
-and our search was not exhaustive.**
+and our search was not exhaustive.
 
-***Index Terms*—algorithm configuration, game AI, hybrid intelligence, Monte Carlo evaluation, programming by
-optimization, residual learning, sequential testing.**
+**Index Terms:** algorithm configuration, game AI, hybrid intelligence, Monte Carlo evaluation, programming by
+optimization, residual learning, sequential testing.
 
 ---
 

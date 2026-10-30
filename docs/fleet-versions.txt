@@ -1,0 +1,11 @@
+machine        treadcore            orrery               crucible             copal-tm            
+saskatchewan   e34d762 10-30        145c374 10-30        -                    a83fbeb 10-28       
+columbia       e34d762 10-30        145c374 10-30        -                    a83fbeb 10-28       
+nasser         e34d762 10-30        -                    -                    a83fbeb 10-28       
+calber         e34d762 10-30        -                    -                    a83fbeb 10-28       
+boburner       e34d762 10-30        -                    -                    a83fbeb 10-28       
+whitewolf      e34d762 10-30        -                    -                    a83fbeb 10-28       
+xinanjiang     e34d762 10-30        -                    -                    a83fbeb 10-28       
+jaguaribe      e34d762 10-30        -                    -                    a83fbeb 10-28       
+this Mac       e34d762 10-30        145c374 10-30        c8a39ce 10-29        a83fbeb 10-28       
+* not this Mac's commit   + changes of its own
