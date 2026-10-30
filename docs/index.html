@@ -361,11 +361,11 @@ footer p { max-width: 68ch; line-height: 1.6; }
   <h1>A room of machines, and a row of verbs</h1>
   <p class="standfirst">orrery is the console the operator stands in front of: a computer lab to select from, buttons that open a shell or take control of a machine, a pane that writes the SD cards the fleet is made of, and a queue that trains a game's brain on every machine in the room. The lab reports say what was built and how it was proved; the design set below is what the build followed.</p>
   <div class="mast-meta">
-    <span><b>7</b> lab reports</span>
+    <span><b>8</b> lab reports</span>
     <span><b>9</b> machines, <b>12</b> lanes</span>
     <span><b>3</b> CUDA cards</span>
     <span><b>12</b> phases, all done</span>
-    <span><b>352</b> tests</span>
+    <span><b>354</b> tests</span>
   </div>
 </header>
 
@@ -375,6 +375,12 @@ footer p { max-width: 68ch; line-height: 1.6; }
   <p class="lede">Each in the same form: an abstract, the objective, the materials, what was done, the results with their numbers, and a discussion that keeps what is still open. Every page is built from its Markdown by <code>tools/report/build.py</code>.</p>
   <div class="reports">
     <article class="report new">
+      <div class="when"><span>29 Oct 2026</span><span class="topic">Storage</span></div>
+      <h3><a href="storage-lab-report.html">Shared Storage for the Fleet</a></h3>
+      <p>What the disks are, the one way through, and the NVMe for a small Ceph. A survey of 45 disks and 20 Ceph candidates; NFS 4.2 between the Linux machines, SMB for the Mac, Ceph on three 10 Gb nodes; the Storage view's patch bay; and a 10 Gb card on jaguaribe, unplugged.</p>
+      <div class="links"><a href="storage-lab-report.html">read the report</a><a href="storage-lab-report.md">the Markdown</a></div>
+    </article>
+    <article class="report">
       <div class="when"><span>29 Oct 2026</span><span class="topic">Machines</span></div>
       <h3><a href="copal-machines-lab-report.html">Two Copal Machines Join the Fleet</a></h3>
       <p>Keys, setup, errands and updates by themselves. The key reached the new machines through saskatchewan, a Copal setup recipe fixed the Machines view's dead ends, and every machine now updates daily and at boot. Along the way: the queue knew how to power off only one machine.</p>

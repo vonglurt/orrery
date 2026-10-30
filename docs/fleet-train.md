@@ -522,6 +522,15 @@ Opening it again shows where the queue is.
   `--undo` takes it away. It was tested in Alpine 3.22 and Ubuntu 24.04
   containers (installed, run, run again, undone; a stand-in `nvidia-`
   package held and released).
+- **Storage, a patch bay** (Machines → Storage; `tools/storage.py QUEUE
+  survey|status|stage-share|stage-mount|stage-unmount`). The survey reads
+  every machine's disks, links, pools and mounts as the user. Share…
+  stages `share-nfs.sh` (NFS 4.2, the fleet's /24, root squashed), and the
+  patch bay's **+** stages `mount-share.sh` (nfs with `nconnect=8`, sshfs
+  or smb, now and at every boot). Each is typed into the machine's
+  Sessions tile for the password. Mounts use the server's fastest link's
+  address. Nothing formats a disk: the Ceph candidates are a list. The
+  plan, and the NVMe it wants: `docs/storage-lab-report.md`.
 - **The power-off command follows the machine.** Each probe writes the
   command a machine's rule allows into its `config.json` entry. Join had
   copied it once, so a rule applied after joining was never seen, and

@@ -65,6 +65,7 @@ mod seat;
 mod sessions;
 #[allow(dead_code)]
 mod sftp;
+mod storage;
 #[allow(dead_code)]
 mod ssh;
 mod surface;
@@ -296,6 +297,13 @@ fn main() {
             Frame::Media { copal: copal.clone(), demo }
         } else if frame_view == "sessions" {
             Frame::Sessions { fleet: fleet_name.clone() }
+        } else if frame_view == "storage" {
+            let doc = if !frame_state.is_empty() {
+                std::fs::read_to_string(&frame_state).unwrap_or_default()
+            } else {
+                jobs_answer(&format!("{} status", storage_cmd(&queue_ctl)))
+            };
+            Frame::Storage { doc, select: frame_select.clone() }
         } else if frame_view == "machines" {
             let doc = if !frame_state.is_empty() {
                 std::fs::read_to_string(&frame_state).unwrap_or_default()
@@ -490,6 +498,15 @@ fn main() {
 /// What `--frame` should render.
 /// The machines tool beside the queue's: `--queue DIR` gives
 /// `python3 TOOLS/fleet-queue.py 'DIR'`, and machines.py takes the same DIR.
+/// storage.py beside fleet-queue.py, as machines.py is.
+fn storage_cmd(queue_ctl: &str) -> String {
+    if queue_ctl.contains("/fleet-queue.py ") {
+        queue_ctl.replacen("/fleet-queue.py ", "/storage.py ", 1)
+    } else {
+        String::new()
+    }
+}
+
 fn machines_cmd(queue_ctl: &str) -> String {
     if queue_ctl.contains("/fleet-queue.py ") {
         queue_ctl.replacen("/fleet-queue.py ", "/machines.py ", 1)
@@ -520,6 +537,7 @@ enum Frame {
     Training { doc: String, view: nav::View },
     /// The machines, from a fresh install to a node (machines.rs).
     Machines { doc: String, select: Vec<String> },
+    Storage { doc: String, select: Vec<String> },
     /// The machines' sessions, live: joined, then drawn after a wait
     /// (ORRERY_FRAME_WAIT seconds, 8 by default) for their screens to arrive.
     Sessions { fleet: String },
@@ -711,6 +729,19 @@ fn write_frame(
                     training::draw(&mut u, &m, &mut st, view);
                 }
             }
+            Frame::Storage { ref doc, ref select } => {
+                let m = storage::Model::parse(doc);
+                let mut st = storage::State::new(std::env::var("ORRERY_FRAME_OPERATOR").is_ok());
+                match select.first().map(|s| s.as_str()) {
+                    Some("ceph") => st.ceph = true,
+                    Some(n) => st.sel = n.to_string(),
+                    None => {}
+                }
+                let mut ui_state = ui::UiState::default();
+                ui_state.pointer = (-1, -1);
+                let mut u = ui::Ui::begin(&mut c, *theme, &[], &mut ui_state);
+                storage::draw(&mut u, &m, &mut st);
+            }
             Frame::Machines { ref doc, ref select } => {
                 let m = machines::Model::parse(doc);
                 let mut st = machines::State::new(std::env::var("ORRERY_FRAME_OPERATOR").is_ok());
@@ -869,6 +900,23 @@ fn gui_loop<S: surface::Surface>(
     let machines_said: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let handoff: Arc<Mutex<Option<(String, String, String)>>> = Arc::new(Mutex::new(None));
     let mut machines_state = machines::State::new(posture == lab::Posture::Operator && !mcmd.is_empty());
+    // THE STORAGE VIEW, the same way: storage.py's document on a thread, its
+    // asks each on a thread, a staged change's command handed to the
+    // machine's Sessions tile (handoff) as a recipe's is.
+    let scmd = storage_cmd(queue_ctl);
+    let storage_doc: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let storage_said: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let mut storage_state = storage::State::new(posture == lab::Posture::Operator && !scmd.is_empty());
+    if !scmd.is_empty() {
+        let doc = Arc::clone(&storage_doc);
+        let cmd = format!("{} status", scmd);
+        thread::spawn(move || loop {
+            *doc.lock().unwrap_or_else(|e| e.into_inner()) = jobs_answer(&cmd);
+            thread::sleep(Duration::from_secs(5));
+        });
+    } else {
+        *storage_doc.lock().unwrap_or_else(|e| e.into_inner()) = "no storage tool: start orrery with --queue DIR".into();
+    }
     // Keys a menu item asks the next frame to see (commands.rs: LabKey).
     let mut injected: Vec<surface::Input> = Vec::new();
     if !mcmd.is_empty() {
@@ -1236,6 +1284,49 @@ fn gui_loop<S: surface::Surface>(
                                 }
                                 (_, true) => format!("{}: done", doing),
                                 (_, false) => format!("{}: {}", doing, line),
+                            };
+                            *said.lock().unwrap_or_else(|e| e.into_inner()) = msg;
+                        });
+                    }
+                    if let Some(v) = go {
+                        action = Some(lab::Action::Go(v));
+                    }
+                }
+                (None, nav::View::Storage) => {
+                    let text = storage_doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    storage_state.said = storage_said.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let go = storage::draw(&mut u, &storage::Model::parse(&text), &mut storage_state);
+                    if let Some(ask) = storage_state.ask.take() {
+                        let q = |x: &str| format!("'{}'", x.replace('\'', "'\\''"));
+                        let (cmd, doing) = match &ask {
+                            storage::Ask::Survey => (format!("{} survey all", scmd), "surveying every machine's disks, links and shares".to_string()),
+                            storage::Ask::Share { machine, path } => (format!("{} stage-share {} {}", scmd, q(machine), q(path)), format!("staging the share of {} on {}", path, machine)),
+                            storage::Ask::Mount { kind, server, path, client } => (
+                                format!("{} stage-mount {} {} {} {}", scmd, q(kind), q(server), q(path), q(client)),
+                                format!("staging the {} mount of {}:{} on {}", kind, server, path, client),
+                            ),
+                            storage::Ask::Unmount { client, at } => (format!("{} stage-unmount {} {}", scmd, q(client), q(at)), format!("staging the unmount of {} on {}", at, client)),
+                        };
+                        let said = Arc::clone(&storage_said);
+                        let hand = Arc::clone(&handoff);
+                        *said.lock().unwrap_or_else(|e| e.into_inner()) = format!("{}...", doing);
+                        thread::spawn(move || {
+                            let out = std::process::Command::new("sh").arg("-c").arg(&cmd).output();
+                            let msg = match out {
+                                Ok(o) if o.status.success() => {
+                                    let text = String::from_utf8_lossy(&o.stdout).into_owned();
+                                    match json::parse(text.trim()) {
+                                        // A staged change: its command to the machine's tile.
+                                        Ok(v) if v.get("command").is_some() => {
+                                            let g = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                                            *hand.lock().unwrap_or_else(|e| e.into_inner()) = Some((g("machine"), g("target"), g("command")));
+                                            format!("{}: copied; its command is typed in {}'s Sessions tile, for the password", g("what"), g("machine"))
+                                        }
+                                        _ => text.lines().last().unwrap_or("done").to_string(),
+                                    }
+                                }
+                                Ok(o) => format!("{}: {}", doing, String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("failed")),
+                                Err(e) => format!("{}: {}", doing, e),
                             };
                             *said.lock().unwrap_or_else(|e| e.into_inner()) = msg;
                         });

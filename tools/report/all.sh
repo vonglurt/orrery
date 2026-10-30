@@ -14,4 +14,5 @@ pascal-versions|Held Back on Purpose|orrery · the fleet · CUDA versions
 cuda-hybrid|One Source, Two CUDAs|orrery · crucible · CUDA 12 and 13
 difficulty|Promotion Difficulty|orrery · the search · promotions
 copal-machines|Copal Machines Join|orrery · the fleet · machines
+storage|Fleet Storage|orrery · the fleet · storage
 LIST
