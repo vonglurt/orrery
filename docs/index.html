@@ -1,4 +1,5 @@
-<title>Orrery Control Console</title>
+<meta charset="utf-8">
+<title>Orrery Documents</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
@@ -300,13 +301,49 @@ footer {
 }
 footer p { max-width: 68ch; line-height: 1.6; }
 
+/* The lab reports: a card each, newest first, on the console's paper. A
+   card is a link to its page; the Markdown it is built from beside it. */
+.reports { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); margin-top: 26px; }
+.report {
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--tile); border: 1px solid var(--line); border-radius: 3px;
+  padding: 20px 22px 18px; box-shadow: var(--shadow);
+  transition: border-color .15s ease, transform .15s ease;
+}
+.report:hover { border-color: var(--accent); transform: translateY(-1px); }
+.report .when {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: .74rem;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--dim);
+  display: flex; justify-content: space-between; gap: 12px;
+}
+.report .when .topic { color: var(--accent); }
+.report h3 { margin: 0; font-size: var(--step-1); line-height: 1.25; }
+.report h3 a { text-decoration: none; }
+.report h3 a:hover { text-decoration: underline; }
+.report p { font-size: var(--step--1); line-height: 1.55; color: color-mix(in srgb, var(--ink) 82%, var(--dim)); margin: 0; }
+.report .links { margin-top: auto; padding-top: 6px; display: flex; gap: 16px; font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: .76rem; }
+.report .links a { color: var(--accent); }
+.report.new { border-color: var(--accent); }
+.report.new .when::after { content: "newest"; color: var(--up); }
+.pages { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.pages a {
+  font-family: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif; font-weight: 600;
+  text-decoration: none; padding: 8px 14px; border: 1px solid var(--line); border-radius: 3px;
+  background: var(--panel);
+}
+.pages a:hover { border-color: var(--accent); }
+.pages a span { color: var(--dim); font-weight: 500; margin-left: 6px; }
+
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
 
 <nav class="bar">
   <div class="bar-in">
-    <strong>Orrery · design set</strong>
+    <strong>Orrery · documents</strong>
+    <a href="#reports">Lab reports</a>
+    <a href="#pages">Pages</a>
+    <a href="#docs">Design set</a>
     <a href="#findings">Findings</a>
     <a href="#interface">Interface</a>
     <a href="#verbs">Verbs</a>
@@ -320,22 +357,83 @@ footer p { max-width: 68ch; line-height: 1.6; }
 <div class="wrap">
 
 <header class="mast">
-  <p class="eyebrow">Design set · six documents · for review before implementation</p>
+  <p class="eyebrow">orrery · the console and its fleet · 29 October 2026</p>
   <h1>A room of machines, and a row of verbs</h1>
-  <p class="standfirst">orrery becomes the console the operator stands in front of: a computer lab you select from, buttons that open a shell or take control of a node, and a pane that writes the SD cards the fleet is made of — on a Raspberry Pi and on a Mac.</p>
+  <p class="standfirst">orrery is the console the operator stands in front of: a computer lab to select from, buttons that open a shell or take control of a machine, a pane that writes the SD cards the fleet is made of, and a queue that trains a game's brain on every machine in the room. The lab reports say what was built and how it was proved; the design set below is what the build followed.</p>
   <div class="mast-meta">
-    <span>written <b>1,840</b> lines</span>
-    <span>across <b>2</b> repositories</span>
-    <span>proposing <b>~11,400</b> lines of Rust</span>
-    <span>in <b>12</b> phases</span>
-    <span>committed <b>nothing</b></span>
+    <span><b>7</b> lab reports</span>
+    <span><b>9</b> machines, <b>12</b> lanes</span>
+    <span><b>3</b> CUDA cards</span>
+    <span><b>12</b> phases, all done</span>
+    <span><b>352</b> tests</span>
   </div>
 </header>
 
+<section id="reports">
+  <p class="kicker">What was built, and how it was proved</p>
+  <h2>Lab reports</h2>
+  <p class="lede">Each in the same form: an abstract, the objective, the materials, what was done, the results with their numbers, and a discussion that keeps what is still open. Every page is built from its Markdown by <code>tools/report/build.py</code>.</p>
+  <div class="reports">
+    <article class="report new">
+      <div class="when"><span>29 Oct 2026</span><span class="topic">Machines</span></div>
+      <h3><a href="copal-machines-lab-report.html">Two Copal Machines Join the Fleet</a></h3>
+      <p>Keys, setup, errands and updates by themselves. The key reached the new machines through saskatchewan, a Copal setup recipe fixed the Machines view's dead ends, and every machine now updates daily and at boot. Along the way: the queue knew how to power off only one machine.</p>
+      <div class="links"><a href="copal-machines-lab-report.html">read the report</a><a href="copal-machines-lab-report.md">the Markdown</a></div>
+    </article>
+    <article class="report">
+      <div class="when"><span>29 Oct 2026</span><span class="topic">The search</span></div>
+      <h3><a href="difficulty-lab-report.html">A Difficulty for Promotions</a></h3>
+      <p>How often the brain should change, measured. A bar that lowers itself, like a block's difficulty; why one promotion every 20 minutes would make the brain worse; the floor; and main red since a promotion committed one file of two.</p>
+      <div class="links"><a href="difficulty-lab-report.html">read the report</a><a href="difficulty-lab-report.md">the Markdown</a></div>
+    </article>
+    <article class="report">
+      <div class="when"><span>29 Oct 2026</span><span class="topic">CUDA</span></div>
+      <h3><a href="cuda-hybrid-lab-report.html">One Source for Two CUDAs</a></h3>
+      <p>crucible on Pascal (CUDA 12.9) and Ada (CUDA 13) from one source with no DEFINE, the card naming its own architecture, and the CUDA 13 build proved in Docker on an ARM Mac with no NVIDIA card.</p>
+      <div class="links"><a href="cuda-hybrid-lab-report.html">read the report</a><a href="cuda-hybrid-lab-report.md">the Markdown</a></div>
+    </article>
+    <article class="report">
+      <div class="when"><span>27–28 Oct 2026</span><span class="topic">CUDA</span></div>
+      <h3><a href="cuda-node-lab-report.html">A CUDA Node for the Fleet</a></h3>
+      <p>A GTX 1080 Ti on Ubuntu 24.04, set up over SSH: the driver branch, the toolkit, the check, and the first GPU lane.</p>
+      <div class="links"><a href="cuda-node-lab-report.html">read the report</a><a href="cuda-node-lab-report.md">the Markdown</a></div>
+    </article>
+    <article class="report">
+      <div class="when"><span>28 Oct 2026</span><span class="topic">CUDA</span></div>
+      <h3><a href="pascal-versions-lab-report.html">Held Back on Purpose</a></h3>
+      <p>The versions a GTX 1080 Ti can run CUDA on, and Nix as a way to pin them.</p>
+      <div class="links"><a href="pascal-versions-lab-report.html">read the report</a><a href="pascal-versions-lab-report.md">the Markdown</a></div>
+    </article>
+    <article class="report">
+      <div class="when"><span>28 Oct 2026</span><span class="topic">The app</span></div>
+      <h3><a href="appkit-gui-lab-report.html">From Cargo to a Mac Application</a></h3>
+      <p>A Rust program with an AppKit window and no crates, taught a layer at a time with a working example and every file in its appendix.</p>
+      <div class="links"><a href="appkit-gui-lab-report.html">read the report</a><a href="appkit-gui-lab-report.md">the Markdown</a></div>
+    </article>
+    <article class="report">
+      <div class="when"><span>28 Oct 2026</span><span class="topic">The app</span></div>
+      <h3><a href="mac-app-lab-report.html">Orrery and copal-tm as Mac Applications</a></h3>
+      <p>Bundles, icons and ad-hoc signatures, and what Gatekeeper makes of them.</p>
+      <div class="links"><a href="mac-app-lab-report.html">read the report</a><a href="mac-app-lab-report.md">the Markdown</a></div>
+    </article>
+  </div>
+</section>
+
+<section id="pages">
+  <p class="kicker">Longer pages</p>
+  <h2>Guides and write-ups</h2>
+  <div class="pages">
+    <a href="user-guide.html">The user guide<span>start here</span></a>
+    <a href="writeup.html">Orrery, eleven phases<span>the build</span></a>
+    <a href="the-net-in-orrery.html">The net in orrery<span>the learned tank</span></a>
+    <a href="phase4.html">The crypto primitives<span>phase 4</span></a>
+  </div>
+</section>
+
 <section id="docs">
-  <p class="kicker">What was written</p>
-  <h2>The documents</h2>
-  <p class="lede" style="margin-bottom:26px">Five in <code>~/code/orrery/docs/</code>, one in <code>~/code/copal-alpine-linux/docs/</code>. No code has changed and nothing is committed.</p>
+  <p class="kicker">What the build followed (27 October)</p>
+  <h2>The design set</h2>
+  <p class="lede" style="margin-bottom:26px">Written before a line of the console was, in <code>~/code/orrery/docs/</code> and <code>~/code/copal-alpine-linux/docs/</code>. Every phase of the plan is now done; the sections below are the argument as it was made, kept as written.</p>
 
   <div class="docs">
     <div class="doc">
@@ -679,7 +777,7 @@ footer p { max-width: 68ch; line-height: 1.6; }
 </section>
 
 <footer>
-  <p>Design set for review · <code>~/code/orrery/docs/</code> and <code>~/code/copal-alpine-linux/docs/</code> · nothing committed, no code changed. Palette taken from <code>src/draw.rs</code>, which takes it from <code>assets/wall.html</code>.</p>
+  <p>orrery's documents · <code>~/code/orrery/docs/</code> · the lab reports built by <code>tools/report/build.py</code>. Palette taken from <code>src/draw.rs</code>, which takes it from <code>assets/wall.html</code>, light and dark.</p>
 </footer>
 
 </div>

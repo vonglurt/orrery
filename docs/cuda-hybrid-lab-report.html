@@ -1,0 +1,142 @@
+<meta charset="utf-8">
+<title>One Source, Two CUDAs</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+/* Layout: a lab report on orrery's paper -- a sticky bar of section
+   numerals, a masthead, then numbered sections at a reading measure, with
+   code and diagrams set dark like a terminal. Palette: orrery's draw.rs
+   LIGHT and DARK, as the user guide. */
+:root {
+  --base: #fce2ab; --panel: #f7d79a; --tile: #fff2d4; --ink: #121212;
+  --dim: #6b5836; --line: #c4a870; --accent: #87704f; --up: #4a7c4e;
+  --term-bg: #1c1a16; --term-ink: #f0e3c4; --term-dim: #8a7d63;
+  --rule: color-mix(in srgb, var(--line) 70%, transparent);
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --cond: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --measure: 68ch;
+  --step--1: clamp(.78rem, .76rem + .1vw, .84rem);
+  --step-0: clamp(1rem, .97rem + .16vw, 1.08rem);
+  --step-1: clamp(1.18rem, 1.12rem + .3vw, 1.36rem);
+  --step-2: clamp(1.45rem, 1.32rem + .6vw, 1.9rem);
+  --step-3: clamp(1.9rem, 1.6rem + 1.3vw, 2.8rem);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+    --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+    --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+    --rule: color-mix(in srgb, var(--line) 100%, transparent);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+  --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+  --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+  --rule: color-mix(in srgb, var(--line) 100%, transparent);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--base); color: var(--ink);
+  font-family: var(--serif); font-size: var(--step-0); line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--base); }
+.wrap { max-width: 980px; margin: 0 auto; }
+
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  background: color-mix(in srgb, var(--base) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+  margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+  padding-inline: max(16px, env(safe-area-inset-left, 0px));
+}
+.bar-in {
+  max-width: 980px; margin: 0 auto; padding-block: 9px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  font-family: var(--cond); font-size: var(--step--1);
+}
+.bar-in strong { letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin-right: auto; }
+.bar-in a { color: var(--dim); text-decoration: none; border-bottom: 1px solid transparent; }
+.bar-in a:hover, .bar-in a:focus-visible { color: var(--ink); border-bottom-color: var(--accent); }
+
+header.mast { padding-block: clamp(36px, 6vw, 72px) clamp(24px, 4vw, 40px); }
+.eyebrow { font-family: var(--mono); font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+h1 { font-family: var(--cond); font-weight: 700; font-size: var(--step-3); line-height: 1.05; letter-spacing: -.015em; text-wrap: balance; margin: 0 0 18px; max-width: 22ch; }
+.front p, .front li { font-size: var(--step--1); color: var(--dim); }
+.front p.note { font-family: var(--mono); letter-spacing: .04em; color: var(--accent); }
+.front ul { margin: 0; }
+
+nav.toc { border-top: 1px solid var(--rule); padding-block: 22px 30px; }
+nav.toc h2 { font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-family: var(--mono); font-weight: 500; margin: 0 0 10px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; columns: 2 18rem; column-gap: 32px; }
+nav.toc li { break-inside: avoid; padding: 3px 0; font-family: var(--cond); }
+nav.toc a { color: var(--ink); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { text-decoration: underline; text-decoration-color: var(--accent); }
+
+section { padding-block: clamp(28px, 4vw, 48px); border-top: 1px solid var(--rule); scroll-margin-top: 48px; }
+h2 { font-family: var(--cond); font-weight: 700; font-size: var(--step-2); line-height: 1.12; text-wrap: balance; margin: 0 0 18px; }
+h3 { font-family: var(--cond); font-weight: 600; font-size: var(--step-1); line-height: 1.25; text-wrap: balance; margin: 30px 0 10px; scroll-margin-top: 48px; }
+p, ul, ol, blockquote { max-width: var(--measure); }
+p { margin: 0 0 1em; }
+ul, ol { margin: 0 0 1em; padding-left: 1.3em; }
+li { margin-bottom: .35em; }
+li > ul, li > ol { margin: .35em 0 .2em; }
+li::marker { color: var(--accent); }
+p.note { font-size: var(--step--1); color: var(--dim); }
+strong { font-weight: 600; }
+a { color: var(--ink); text-underline-offset: 3px; text-decoration-color: var(--accent); }
+code { font-family: var(--mono); font-size: .86em; }
+p code, li code, td code, th code { color: var(--accent); word-break: break-word; }
+blockquote { margin: 0 0 1.2em; padding: 12px 18px; border-left: 3px solid var(--accent); background: var(--tile); font-family: var(--mono); font-size: var(--step--1); line-height: 1.6; }
+blockquote p { margin: 0; }
+
+.code { position: relative; margin: 0 0 1.3em; background: var(--term-bg); border-radius: 4px; overflow-x: auto; max-width: 100%; }
+.code pre { margin: 0; padding: 16px 18px; color: var(--term-ink); font-family: var(--mono); font-size: .8rem; line-height: 1.55; tab-size: 4; }
+.code code { font-size: inherit; color: inherit; }
+.code .lang { position: absolute; top: 6px; right: 10px; font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--term-dim); }
+.code.diagram { background: var(--tile); border: 1px solid var(--rule); }
+.code.diagram pre { color: var(--ink); }
+
+.table { overflow-x: auto; max-width: 100%; margin: 0 0 1.4em; }
+table { border-collapse: collapse; font-size: var(--step--1); line-height: 1.5; min-width: 30rem; }
+th { font-family: var(--cond); font-weight: 600; text-align: left; padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line); vertical-align: bottom; }
+td { padding: 8px 14px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: none; }
+td:first-child { font-weight: 600; font-family: var(--cond); }
+
+figure { margin: 0 0 1.4em; }
+figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); }
+figcaption { margin-top: 8px; font-size: var(--step--1); color: var(--dim); max-width: var(--measure); }
+
+footer { border-top: 1px solid var(--rule); padding-block: 24px 48px; font-size: var(--step--1); color: var(--dim); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="bar"><div class="bar-in"><strong><a href="index.html">orrery</a> · lab report</strong><a href="#abstract">Abstract</a><a href="#si">I</a><a href="#sii">II</a><a href="#siii">III</a><a href="#siv">IV</a><a href="#sv">V</a><a href="#svi">VI</a><a href="#svii">VII</a><a href="#references">References</a></div></div>
+<div class="wrap">
+  <header class="mast">
+    <p class="eyebrow">orrery · crucible · CUDA 12 and 13</p>
+    <h1>One Source for Two CUDAs: crucible on Pascal (CUDA 12.9) and Ada (CUDA 13), Compiled in Docker on an ARM Mac</h1>
+    <div class="front"><p class="note">Lab Report — IEEE Format · 29 October 2026</p><p>Copyright (c) 2026 Paul Richeson. MIT licensed, as orrery.</p><p>Companions: <code>docs/cuda-node-lab-report.md</code> (the first CUDA node, calber, on Ubuntu 24.04 with CUDA 12.9); crucible's <code>Makefile</code> and <code>src/crucible.cu</code>; <code>tools/cuda-node.sh</code>.</p></div>
+  </header>
+  <nav class="toc" aria-label="Contents"><h2>Contents</h2><ol><li><a href="#abstract">Abstract</a></li><li><a href="#si">I. Objective</a></li><li><a href="#sii">II. Materials</a></li><li><a href="#siii">III. What crucible asks of CUDA</a></li><li><a href="#siv">IV. The hybrid: the machine says, the source does not branch</a></li><li><a href="#sv">V. Results</a></li><li><a href="#svi">VI. Discussion</a></li><li><a href="#svii">VII. Install day, saskatchewan</a></li><li><a href="#references">References</a></li></ol></nav>
+  <main>
+  <section id="abstract"><h2>Abstract</h2><p>saskatchewan, the fleet's census machine, runs Copal (Alpine, musl), and its NVIDIA card has never been used. The card turned out to be an RTX 4060 Ti 16 GB (<code>10de:2805</code>, Ada Lovelace, compute 8.9), two generations past the fleet's Pascal cards. Paul asked whether, on Ubuntu 26.04, the fleet's CUDA program could run "without much translation", and whether one source could serve both kinds of card, "only differing by a small DEFINE statement or like that. Some machine specific aware."</p><p>It can, and it needs no DEFINE at all:</p><ul><li><strong>The source:</strong> crucible uses 26 CUDA runtime and Thrust names. CUDA 13 removed exactly one of them: the field <code>cudaDeviceProp::clockRate</code>, read once, for a line of print. It is replaced by <code>cudaDeviceGetAttribute(cudaDevAttrClockRate)</code>, which exists in CUDA 12 and 13 alike.</li><li><strong>The Makefile:</strong> it now reads the card's compute capability from <code>nvidia-smi</code> and builds for it. It refuses, with a sentence, the one pairing that cannot work: CUDA 13 on a card older than Turing.</li><li><strong><code>tools/cuda-node.sh</code>:</strong> it now holds Ubuntu 24.04 and 26.04 in one table, and reads the card's generation from its PCI id before any driver is installed.</li></ul><p>With no CUDA 13 machine in the fleet, the CUDA 13 build was proved in NVIDIA's own <code>linux/arm64</code> development container on this Mac (Apple silicon, no NVIDIA GPU). Device code is compiled for the architecture you name, not the one you run on, so a Mac can compile for an Ada card:</p><ul><li>the old source failed there, with the one predicted error, at line 451;</li><li>the new source built for <code>sm_89</code>;</li><li>the Makefile's guard refused <code>sm_61</code> under CUDA 13.</li></ul><p>On calber, the new source built and ran on CUDA 12.9 as before.</p></section><section id="si"><h2>I. Objective</h2><ol><li>Find what in crucible depends on the CUDA version and the card.</li><li>Make one source and one Makefile build correctly on every card in the fleet, with nothing set by hand.</li><li>Prepare <code>cuda-node.sh</code> for Ubuntu 26.04 on saskatchewan.</li><li>Prove the CUDA 13 build without a CUDA 13 machine.</li></ol></section><section id="sii"><h2>II. Materials</h2><div class="table"><table><thead><tr><th>Item</th><th>Detail</th></tr></thead><tbody><tr><td>The new card</td><td>saskatchewan, 192.168.8.235: i7-13700F (24 threads), 63 GB; PCI <code>0000:01:00.0</code> is <code>10de:2805</code>, <strong>GeForce RTX 4060 Ti 16 GB</strong> (AD106, Ada, compute 8.9). Read from <code>/sys/bus/pci/devices/0000:01:00.0/{vendor,device}</code>, since Copal has no <code>lspci</code> names and no NVIDIA driver</td></tr><tr><td>The fleet's cards</td><td>calber GTX 1080 Ti, boburner GTX 1070 Ti, whitewolf (Pascal, compute 6.1, <code>nvidia-smi --query-gpu=compute_cap</code> says <code>6.1</code>); Ubuntu 24.04, driver 580, CUDA 12.9</td></tr><tr><td>The program</td><td>crucible, <code>src/crucible.cu</code> (696 lines): a self-learning loop entirely on the card, run by the fleet as island segments. The planner sends <code>src/crucible.cu</code> and <code>Makefile</code> with every segment and runs <code>make</code> on the node</td></tr><tr><td>The Mac</td><td>Apple silicon (<code>arm64</code>), colima's Docker, no NVIDIA GPU</td></tr><tr><td>The container</td><td><code>nvidia/cuda:13.0.1-devel-ubuntu24.04</code>, <code>--platform linux/arm64</code>: <code>Cuda compilation tools, release 13.0, V13.0.88</code></td></tr><tr><td>Ubuntu 26.04</td><td><code>resolute</code>, read from <code>archive.ubuntu.com/ubuntu/dists/resolute{,-updates}/restricted/binary-amd64/Packages.xz</code> (packages.ubuntu.com answered HTTP 500)</td></tr><tr><td>NVIDIA's repository</td><td><code>developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/</code>: <code>cuda-toolkit-13-3</code> and <code>13-4</code> (13.4.3 the newest), driver pinning packages for 610 and 615, no 12.x</td></tr></tbody></table></div></section><section id="siii"><h2>III. What crucible asks of CUDA</h2><p>Every CUDA and Thrust name in the source, counted with <code>grep -o</code>:</p><div class="table"><table><thead><tr><th>Kind</th><th>Names (uses)</th><th>In CUDA 13</th></tr></thead><tbody><tr><td>Memory</td><td><code>cudaMalloc</code> (8), <code>cudaMallocManaged</code> (1), <code>cudaMemcpy</code> (11) with <code>HostToDevice</code>, <code>DeviceToHost</code>, <code>DeviceToDevice</code>, <code>cudaMemset</code> (2), <code>cudaMemGetInfo</code> (1)</td><td>unchanged</td></tr><tr><td>Timing</td><td><code>cudaEventCreate</code>, <code>cudaEventRecord</code>, <code>cudaEventSynchronize</code>, <code>cudaEventElapsedTime</code></td><td>unchanged</td></tr><tr><td>Errors and sync</td><td><code>cudaGetLastError</code>, <code>cudaGetErrorString</code>, <code>cudaDeviceSynchronize</code>, <code>cudaSuccess</code>, <code>cudaError</code></td><td>unchanged</td></tr><tr><td>Occupancy</td><td><code>cudaFuncGetAttributes</code>, <code>cudaOccupancyMaxActiveBlocksPerMultiprocessor</code></td><td>unchanged</td></tr><tr><td>Device query</td><td><code>cudaGetDeviceProperties</code>, reading <code>name</code>, <code>major</code>, <code>minor</code>, <code>multiProcessorCount</code>, <code>maxThreadsPerMultiProcessor</code>, <strong><code>clockRate</code></strong></td><td><strong><code>clockRate</code> removed in 13.0</strong>; the rest unchanged</td></tr><tr><td>In kernels</td><td><code>atomicAdd</code> (9), <code>__syncthreads</code> (2), <code>__launch_bounds__(256, MINB)</code>, shared memory for two nets</td><td>unchanged</td></tr><tr><td>Thrust</td><td><code>device_ptr</code>, <code>sequence</code>, <code>sort_by_key</code> with <code>greater&lt;float&gt;</code>, <code>reduce</code></td><td>unchanged (CCCL 3; built under <code>-std=c++17</code>)</td></tr><tr><td>Build</td><td><code>-gencode arch=compute_61,code=sm_61</code> in the Makefile</td><td><strong>CUDA 13 does not build for compute under 7.5</strong></td></tr></tbody></table></div><p>So two things tie crucible to a CUDA and a card: one field, and one line of the Makefile. Neither is in the simulation, the net or the training.</p></section><section id="siv"><h2>IV. The hybrid: the machine says, the source does not branch</h2><p><strong>Why there is no DEFINE.</strong> A <code>#if CUDART_VERSION &gt;= 13000</code> around the print would have worked. But the replacement call exists in both toolkits, so a branch would only keep the removed field alive on 12.9, for nothing. The one thing that truly differs by machine is the architecture to compile for. That belongs to the build, and the card can be asked for it.</p><p><strong>The source</strong> (<code>src/crucible.cu</code>, at the device line):</p><div class="code"><span class="lang">c</span><pre><code>// The clock as an attribute, not cudaDeviceProp::clockRate: CUDA 13
+// removed the field, and the attribute is in 12 and 13 alike, so one
+// source builds on the Pascal cards (12.9) and the Ada one (13).
+int khz = 0;
+CK(cudaDeviceGetAttribute(&amp;khz, cudaDevAttrClockRate, 0));</code></pre></div><p><strong>The Makefile</strong>, in three parts:</p><div class="table"><table><thead><tr><th>Part</th><th>What</th><th>Why</th></tr></thead><tbody><tr><td><code>CAP</code></td><td><code>nvidia-smi --query-gpu=compute_cap</code> of the first card, <code>6.1</code> read as <code>61</code>, asked once (<code>ifndef</code>, <code>:=</code>). <code>61</code> if nvidia-smi cannot say; <code>make CAP=89</code> names one</td><td>the driver's own answer (there since driver 510), so a new card needs no edit</td></tr><tr><td><code>ARCH</code></td><td><code>-gencode arch=compute_$(CAP),code=sm_$(CAP)</code></td><td>the same form as before, so a Pascal node builds what it built</td></tr><tr><td>the guard</td><td><code>nvcc --version</code>'s major. 13 or more with <code>CAP</code> under 75 stops with "crucible: CUDA 13 cannot build for sm_61: keep CUDA 12 on this card"</td><td>a sentence in the segment's log, not nvcc's unsupported-architecture error</td></tr></tbody></table></div><p><code>make which</code> prints what this machine would build: <code>card sm_61, CUDA 12 (/usr/local/cuda/bin/nvcc), H=32, MINB=2</code>.</p><p><strong>Why not <code>nvcc -arch=native</code>?</strong> It also builds for the card present, and <code>cuda-node.sh</code>'s check program uses it. But it says nothing about what it chose, and it cannot be checked against the toolkit before nvcc runs. The explicit <code>CAP</code> can be printed, overridden and guarded.</p><p><strong>The node script</strong> (<code>tools/cuda-node.sh</code>). What differs between the two releases is one table, and nothing else in the script branches on the release:</p><div class="table"><table><thead><tr><th></th><th>24.04</th><th>26.04</th></tr></thead><tbody><tr><td>NVIDIA's repository</td><td><code>ubuntu2404</code></td><td><code>ubuntu2604</code></td></tr><tr><td>keyring sha256 (first use, over HTTPS)</td><td><code>d2a6b11c…6dba</code> (27 Oct; it still matched today)</td><td><code>f7f474b5…099e</code> (29 Oct)</td></tr><tr><td>Ubuntu's module package</td><td><code>linux-modules-nvidia-&lt;branch&gt;-generic-hwe-24.04</code></td><td><code>linux-modules-nvidia-&lt;branch&gt;-generic</code></td></tr><tr><td>default driver</td><td><code>580-server</code></td><td><code>595-server</code> (the newest headless server branch in <code>resolute</code>; 580 to 595 and 610 are there)</td></tr><tr><td>default CUDA</td><td><code>12-9</code></td><td><code>13-4</code></td></tr><tr><td>cards</td><td>any</td><td>Turing or newer only</td></tr></tbody></table></div><p><strong>The card is read before there is a driver.</strong> NVIDIA numbers its chips in order, and Turing begins at <code>10de:1e00</code> (TU102). A device id below that is Maxwell, Pascal or Volta, with compute under 7.5. On 26.04 such a card stops the run before anything is installed: "Ubuntu 26.04 has only CUDA 13, which does not build for this card: install Ubuntu 24.04". On 24.04 it is held to driver 580 and CUDA 12.</p></section><section id="sv"><h2>V. Results</h2><div class="table"><table><thead><tr><th>Test</th><th>Where</th><th>Result</th></tr></thead><tbody><tr><td>New source, card's own arch</td><td>calber, CUDA 12.9</td><td><code>make which</code>: <code>card sm_61, CUDA 12</code>; built (128 registers in <code>play</code>, as before)</td></tr><tr><td>New source, run</td><td>calber, one generation</td><td><code># device NVIDIA GeForce GTX 1080 Ti, sm_61, 28 SMs, 1683 MHz, 11.7 GB (11.2 free)</code>: the clock through the attribute</td></tr><tr><td>New source for Ada on 12.9</td><td>calber, <code>make CAP=89</code></td><td>built</td></tr><tr><td>Guard (a fake nvcc saying release 13.0)</td><td>calber, sm_61</td><td>stopped at the guard (<code>Makefile:27</code>)</td></tr><tr><td><strong>Old source on CUDA 13</strong></td><td>Mac, container, <code>sm_89</code></td><td><code>src/crucible.cu(451): error: class &quot;cudaDeviceProp&quot; has no member &quot;clockRate&quot;</code>, <code>1 error detected</code>: the one predicted, and no other</td></tr><tr><td><strong>New source on CUDA 13</strong></td><td>Mac, container, <code>make CAP=89</code></td><td><code>card sm_89, CUDA 13</code>; built, 3,059,040 bytes</td></tr><tr><td>Guard on CUDA 13</td><td>Mac, container, <code>make CAP=61</code></td><td>stopped (<code>Makefile:27</code>)</td></tr><tr><td>Card generation from PCI id</td><td>Mac, the script's own lines</td><td><code>1b06</code> (GTX 1080 Ti): before Turing; <code>2805</code> (RTX 4060 Ti): Turing or newer; <code>2184</code> (GTX 1660, Turing): Turing or newer</td></tr><tr><td>24.04 keyring</td><td>NVIDIA, today</td><td>still <code>d2a6b11c…6dba</code>, as pinned</td></tr><tr><td><code>cuda-node.sh</code></td><td>Mac</td><td><code>bash -n</code> clean</td></tr></tbody></table></div></section><section id="svi"><h2>VI. Discussion</h2><p><strong>Compiling for a GPU does not need a GPU.</strong> <code>nvcc</code> turns device code into code for the architecture it is given (<code>sm_89</code> here). The host CPU only decides what the host half of the binary runs on. So NVIDIA's <code>arm64</code> development image, on a Mac with no NVIDIA hardware at all, is a full CUDA 13 compiler for an Ada card. The container's warning, "The NVIDIA Driver was not detected", is true and does not matter for a build. This turned the question "will it compile on 13?" from install day's problem into a minute's work today, and it showed that the predicted single error was the only one. Its limits:</p><ul><li><strong>It proves the build, not the run.</strong> The kernels' behaviour on Ada, driver 595 and CUDA 13.4 is for the first segment on saskatchewan.</li><li><strong>The versions differ.</strong> The container was CUDA 13.0.1 and saskatchewan will get 13.4. The removal of <code>clockRate</code> was in 13.0, so a later 13 removes nothing crucible needs unless its notes say so.</li><li><strong>colima shares only the home folder.</strong> The first attempt mounted the session's scratch folder under <code>/private/tmp</code> and the container saw nothing ("No such file or directory"). The copy went under <code>~/.cache</code>.</li></ul><p><strong>Ask the card what it is, not the machine its name.</strong> The Makefile asks the driver for the compute capability, and the node script reads the PCI id. Neither names a machine. A card added next year, or saskatchewan's if it moves, needs no edit. The fleet-wide effect comes free, because the planner already sends the Makefile with every segment.</p><p><strong>The one pairing that cannot work stops with a sentence.</strong> CUDA 13 on Pascal fails inside nvcc with an architecture error that names neither the card nor the fix. The guard says both, once in the Makefile and once, earlier, in the node script. That is the same lesson as the first CUDA report: say what is happening.</p><p><strong>What the Ada card brings.</strong> 16 GB, and more shared memory and registers per SM than Pascal. A wider net (<code>make H=48</code>) fits as it does on Pascal. Whether anything larger is worth it is a question for crucible's own numbers.</p></section><section id="svii"><h2>VII. Install day, saskatchewan</h2><ol><li>Install Ubuntu 26.04 Server with "third-party" ticked, from Copal's boot menu or the ISO.</li><li>From the Mac: <code>scp tools/cuda-node.sh user@saskatchewan: &amp;&amp; ssh -t user@saskatchewan sudo bash cuda-node.sh</code>. It reads the card, keeps or installs 595-server, installs CUDA 13.4, then compiles and runs its check program. It says if it needs a reboot.</li><li>Add <code>saskatchewan-cuda</code> to the queue's hosts (caps <code>cuda</code>) beside <code>saskatchewan</code> (caps <code>cpu</code>), as calber and boburner have.</li><li>The first crucible segment builds itself (<code>card sm_89, CUDA 13</code>). Its log is the first run of crucible on Ada.</li></ol><p>While it is down, saskatchewan's CPU lane, the largest in the fleet, waits: the keeper marks it unreachable, and its running job goes back on the queue.</p></section><section id="references"><h2>References</h2><ol><li>NVIDIA, "CUDA Features Archive", CUDA 13.0: deprecated fields removed from <code>cudaDeviceProp</code>, <code>clockRate</code> → <code>cudaDeviceGetAttribute(cudaDevAttrClockRate)</code>. https://docs.nvidia.com/cuda/cuda-features-archive/index.html</li><li>NVIDIA, "CUDA Toolkit 13.0 Release Notes". https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/</li><li>Eigen issue 3000, "CUDA 13 compatibility": <code>clockRate</code> and <code>computeMode</code> breaking a build. https://gitlab.com/libeigen/eigen/-/issues/3000</li><li>orrery, <code>docs/cuda-node-lab-report.md</code>: the 24.04, 580, CUDA 12.9 choice for Pascal.</li></ol></section>
+  </main>
+  <footer>
+    <p>Paul Richeson, 28 October 2026. MIT licensed, as orrery. The Markdown original and the example's source are in orrery: <code>docs/appkit-gui-lab-report.md</code> and <code>docs/appkit-example/</code>.</p>
+  </footer>
+</div>

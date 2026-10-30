@@ -1,0 +1,143 @@
+<meta charset="utf-8">
+<title>Held Back on Purpose</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+/* Layout: a lab report on orrery's paper -- a sticky bar of section
+   numerals, a masthead, then numbered sections at a reading measure, with
+   code and diagrams set dark like a terminal. Palette: orrery's draw.rs
+   LIGHT and DARK, as the user guide. */
+:root {
+  --base: #fce2ab; --panel: #f7d79a; --tile: #fff2d4; --ink: #121212;
+  --dim: #6b5836; --line: #c4a870; --accent: #87704f; --up: #4a7c4e;
+  --term-bg: #1c1a16; --term-ink: #f0e3c4; --term-dim: #8a7d63;
+  --rule: color-mix(in srgb, var(--line) 70%, transparent);
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --cond: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --measure: 68ch;
+  --step--1: clamp(.78rem, .76rem + .1vw, .84rem);
+  --step-0: clamp(1rem, .97rem + .16vw, 1.08rem);
+  --step-1: clamp(1.18rem, 1.12rem + .3vw, 1.36rem);
+  --step-2: clamp(1.45rem, 1.32rem + .6vw, 1.9rem);
+  --step-3: clamp(1.9rem, 1.6rem + 1.3vw, 2.8rem);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+    --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+    --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+    --rule: color-mix(in srgb, var(--line) 100%, transparent);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+  --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+  --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+  --rule: color-mix(in srgb, var(--line) 100%, transparent);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--base); color: var(--ink);
+  font-family: var(--serif); font-size: var(--step-0); line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--base); }
+.wrap { max-width: 980px; margin: 0 auto; }
+
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  background: color-mix(in srgb, var(--base) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+  margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+  padding-inline: max(16px, env(safe-area-inset-left, 0px));
+}
+.bar-in {
+  max-width: 980px; margin: 0 auto; padding-block: 9px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  font-family: var(--cond); font-size: var(--step--1);
+}
+.bar-in strong { letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin-right: auto; }
+.bar-in a { color: var(--dim); text-decoration: none; border-bottom: 1px solid transparent; }
+.bar-in a:hover, .bar-in a:focus-visible { color: var(--ink); border-bottom-color: var(--accent); }
+
+header.mast { padding-block: clamp(36px, 6vw, 72px) clamp(24px, 4vw, 40px); }
+.eyebrow { font-family: var(--mono); font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+h1 { font-family: var(--cond); font-weight: 700; font-size: var(--step-3); line-height: 1.05; letter-spacing: -.015em; text-wrap: balance; margin: 0 0 18px; max-width: 22ch; }
+.front p, .front li { font-size: var(--step--1); color: var(--dim); }
+.front p.note { font-family: var(--mono); letter-spacing: .04em; color: var(--accent); }
+.front ul { margin: 0; }
+
+nav.toc { border-top: 1px solid var(--rule); padding-block: 22px 30px; }
+nav.toc h2 { font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-family: var(--mono); font-weight: 500; margin: 0 0 10px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; columns: 2 18rem; column-gap: 32px; }
+nav.toc li { break-inside: avoid; padding: 3px 0; font-family: var(--cond); }
+nav.toc a { color: var(--ink); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { text-decoration: underline; text-decoration-color: var(--accent); }
+
+section { padding-block: clamp(28px, 4vw, 48px); border-top: 1px solid var(--rule); scroll-margin-top: 48px; }
+h2 { font-family: var(--cond); font-weight: 700; font-size: var(--step-2); line-height: 1.12; text-wrap: balance; margin: 0 0 18px; }
+h3 { font-family: var(--cond); font-weight: 600; font-size: var(--step-1); line-height: 1.25; text-wrap: balance; margin: 30px 0 10px; scroll-margin-top: 48px; }
+p, ul, ol, blockquote { max-width: var(--measure); }
+p { margin: 0 0 1em; }
+ul, ol { margin: 0 0 1em; padding-left: 1.3em; }
+li { margin-bottom: .35em; }
+li > ul, li > ol { margin: .35em 0 .2em; }
+li::marker { color: var(--accent); }
+p.note { font-size: var(--step--1); color: var(--dim); }
+strong { font-weight: 600; }
+a { color: var(--ink); text-underline-offset: 3px; text-decoration-color: var(--accent); }
+code { font-family: var(--mono); font-size: .86em; }
+p code, li code, td code, th code { color: var(--accent); word-break: break-word; }
+blockquote { margin: 0 0 1.2em; padding: 12px 18px; border-left: 3px solid var(--accent); background: var(--tile); font-family: var(--mono); font-size: var(--step--1); line-height: 1.6; }
+blockquote p { margin: 0; }
+
+.code { position: relative; margin: 0 0 1.3em; background: var(--term-bg); border-radius: 4px; overflow-x: auto; max-width: 100%; }
+.code pre { margin: 0; padding: 16px 18px; color: var(--term-ink); font-family: var(--mono); font-size: .8rem; line-height: 1.55; tab-size: 4; }
+.code code { font-size: inherit; color: inherit; }
+.code .lang { position: absolute; top: 6px; right: 10px; font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--term-dim); }
+.code.diagram { background: var(--tile); border: 1px solid var(--rule); }
+.code.diagram pre { color: var(--ink); }
+
+.table { overflow-x: auto; max-width: 100%; margin: 0 0 1.4em; }
+table { border-collapse: collapse; font-size: var(--step--1); line-height: 1.5; min-width: 30rem; }
+th { font-family: var(--cond); font-weight: 600; text-align: left; padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line); vertical-align: bottom; }
+td { padding: 8px 14px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: none; }
+td:first-child { font-weight: 600; font-family: var(--cond); }
+
+figure { margin: 0 0 1.4em; }
+figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); }
+figcaption { margin-top: 8px; font-size: var(--step--1); color: var(--dim); max-width: var(--measure); }
+
+footer { border-top: 1px solid var(--rule); padding-block: 24px 48px; font-size: var(--step--1); color: var(--dim); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="bar"><div class="bar-in"><strong><a href="index.html">orrery</a> · lab report</strong><a href="#abstract">Abstract</a><a href="#si">I</a><a href="#sii">II</a><a href="#siii">III</a><a href="#siv">IV</a><a href="#sv">V</a><a href="#svi">VI</a><a href="#svii">VII</a><a href="#sviii">VIII</a></div></div>
+<div class="wrap">
+  <header class="mast">
+    <p class="eyebrow">orrery · the fleet · CUDA versions</p>
+    <h1>Held Back on Purpose: the Versions a GTX 1080 Ti Can Run CUDA On, and Nix as a Way to Pin Them</h1>
+    <div class="front"><p class="note">Lab Report — IEEE Format · 28 October 2026</p><p>Copyright (c) 2026 Paul Richeson. MIT licensed, as orrery.</p><p>Companions: <code>docs/cuda-node-lab-report.md</code> (setting up calber); <code>tools/cuda-node.sh</code>.</p></div>
+  </header>
+  <nav class="toc" aria-label="Contents"><h2>Contents</h2><ol><li><a href="#abstract">Abstract</a></li><li><a href="#si">I. Objective</a></li><li><a href="#sii">II. Why Pascal forces old versions</a></li><li><a href="#siii">III. The versions, layer by layer</a></li><li><a href="#siv">IV. What ends each hold</a></li><li><a href="#sv">V. Burn on Pascal: the probe</a></li><li><a href="#svi">VI. Recommendations</a></li><li><a href="#svii">VII. Nix: pinning the build dependencies</a></li><li><a href="#sviii">VIII. Open items</a></li></ol></nav>
+  <main>
+  <section id="abstract"><h2>Abstract</h2><p>A GTX 1080 Ti is a Pascal card (compute capability 6.1), and NVIDIA is retiring Pascal. Almost every version on the CUDA node calber was chosen <em>older</em> than the newest, because the newest would not run CUDA on this card: Ubuntu 24.04 rather than 26.04, driver series 580 rather than 590, CUDA 12.9 rather than 13. This report records each held-back version, the evidence that forced it, how it is held so an update cannot undo it, and what will end it. It then considers Nix (a flake, or <code>nix shell</code>) as a way to pin the <em>build</em> dependencies (the Rust toolchain, the CUDA toolkit, the libraries a GPU program links) per project and per commit, leaving the kernel driver to the host, which is where it has to stay.</p></section><section id="si"><h2>I. Objective</h2><ol><li>Say, for each layer from the kernel to the training library, which version calber runs and why not the newer one.</li><li>Say how each is held, and what to watch.</li><li>Weigh Nix flakes and <code>nix shell</code> for the build dependencies.</li></ol></section><section id="sii"><h2>II. Why Pascal forces old versions</h2><div class="table"><table><thead><tr><th>Evidence</th><th>Where it came from</th></tr></thead><tbody><tr><td>NVIDIA's <strong>580</strong> driver series is the last for Maxwell, Pascal and Volta; <strong>590</strong> drops them</td><td>NVIDIA's deprecation notice, reported by Phoronix and others (July 2025)</td></tr><tr><td><strong>CUDA 12.x</strong> is the last toolkit for those architectures; CUDA 13 does not target them</td><td>the same notice; and on calber <code>nvcc</code> 12.9 itself warns: "Support for offline compilation for architectures prior to <code>sm_75</code> will be removed in a future release"</td></tr><tr><td>NVIDIA's apt repository for <strong>Ubuntu 26.04</strong> has <code>cuda-toolkit-13-3</code> and <code>13-4</code> only, and no driver packages</td><td>read from <code>developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/</code>, 27 October 2026</td></tr><tr><td>NVIDIA's repository for <strong>Ubuntu 24.04</strong> has drivers 550 to <strong>580</strong> and <code>cuda-toolkit-12-5</code> to <strong><code>12-9</code></strong> (and 13.x)</td><td><code>.../ubuntu2404/x86_64/</code>, the same day</td></tr><tr><td>Arch moved Pascal off its default NVIDIA packages with 590</td><td>reported when calber still ran Omarchy, which is part of why it was replaced</td></tr></tbody></table></div></section><section id="siii"><h2>III. The versions, layer by layer</h2><div class="table"><table><thead><tr><th>Layer</th><th>On calber</th><th>Newer one not taken</th><th>Why</th><th>Held by</th></tr></thead><tbody><tr><td>OS</td><td><strong>Ubuntu 24.04.5 LTS</strong></td><td>26.04.1 LTS (offered at login: "New release '26.04.1 LTS' available")</td><td>NVIDIA's CUDA 12 packages exist for 24.04, not 26.04</td><td>not upgrading (see VI: the prompt should be turned off)</td></tr><tr><td>Kernel</td><td>7.0.0-38-generic (24.04's HWE kernel)</td><td>—</td><td>the newest 24.04 offers; Ubuntu builds and signs the NVIDIA module for each of its kernels</td><td>Ubuntu's <code>linux-modules-nvidia-580-server-generic-hwe-24.04</code>, which follows the kernel</td></tr><tr><td>Driver</td><td><strong>580.178.04</strong> (<code>580-server</code> branch, Ubuntu's)</td><td>590 and later</td><td>590 drops Pascal</td><td>a branch package: <code>580-server</code> only ever upgrades within 580; NVIDIA's repository pinned to priority 100 so its drivers never replace Ubuntu's</td></tr><tr><td>CUDA toolkit</td><td><strong>12.9.2</strong> (<code>nvcc</code> 12.9.86)</td><td>13.0 to 13.4</td><td>CUDA 13 does not target Pascal</td><td>the versioned package <code>cuda-toolkit-12-9</code>, never the unversioned <code>cuda</code> or <code>cuda-toolkit</code> metapackages</td></tr><tr><td>Compute capability</td><td><code>sm_61</code></td><td>—</td><td>the card's</td><td><code>nvcc -arch=native</code></td></tr><tr><td>Rust</td><td>1.99.1 (rustup, user's)</td><td>—</td><td>current; nothing about Pascal holds it</td><td>rustup, per user</td></tr><tr><td>Training library</td><td><strong>Burn 0.22.1</strong>, CubeCL 0.11.3, CUDA backend</td><td>—</td><td>the newest, and <strong>it runs on compute 6.1</strong> (V)</td><td><code>tools/burn-probe/Cargo.lock</code>, which records every crate's version as it ran</td></tr></tbody></table></div><p><code>ubuntu-drivers</code> recommends <code>nvidia-driver-470</code> for the card. That is an <em>older</em> series and was not taken: 580 is newer, still supports Pascal, and is what CUDA 12.9 needs.</p></section><section id="siv"><h2>IV. What ends each hold</h2><ul><li><strong>Driver 580:</strong> security updates for a retired series stop at some point NVIDIA announces; after that the card is a security question, not a CUDA one. Watch NVIDIA's driver support notes.</li><li><strong>Ubuntu 24.04:</strong> standard support to April 2029.</li><li><strong>CUDA 12.9:</strong> nothing ends it on this card; it ends the <em>software</em>: a library that requires CUDA 13 (a newer Burn, PyTorch build or cuDNN) will not run here. Each such library is a version to hold too.</li><li><strong>The card itself:</strong> a Turing or newer card (compute 7.5 and up) lifts every hold in this report.</li></ul></section><section id="sv"><h2>V. Burn on Pascal: the probe</h2><p>Burn's CUDA backend does not ship precompiled kernels; CubeCL generates them at run time and compiles them with NVIDIA's runtime compiler (NVRTC), for the card in front of it. Whether that path still accepts <code>sm_61</code> is not something the documentation settles, so it is measured: a Rust program on calber (<code>~/code/burnprobe</code>), Burn 0.22.1 with <code>cuda</code> and <code>autodiff</code>:</p><ol><li>a 256x256 matrix product on the GPU, compared with the same product done on the CPU (ok if the largest difference is under 1e-3);</li><li>200 Adam steps on a net of the learned tank's shape (143 -&gt; 64 -&gt; 64 -&gt; 8) fitting a fixed random target (learning if the loss falls by more than a fifth).</li></ol><p>Result, on calber, 28 October 2026 (<code>tools/burn-probe</code>, with its <code>Cargo.lock</code>):</p><div class="code" class="diagram"><pre><code>matmul 256x256 on the GPU: largest difference from the CPU 5.96e-6 -&gt; ok
+step   0: loss 1.0365
+step  50: loss 0.7537
+step 100: loss 0.3458
+step 150: loss 0.1229
+200 Adam steps in 4.02 s: loss 1.0365 -&gt; 0.0446 -&gt; learning</code></pre></div><p><strong>Burn 0.22.1 and CubeCL 0.11.3 run on <code>sm_61</code>.</strong> The arithmetic agrees with the CPU to 6e-6, and a net of the learned tank's shape cut its loss 23-fold in 200 steps on the card; the 4.02 s includes CubeCL compiling its kernels for the card the first time.</p><p>Two things learned on the way:</p><ul><li><strong>Burn 0.22 changed its API.</strong> Tensors no longer carry their backend as a type parameter (<code>Tensor&lt;2&gt;</code>, not <code>Tensor&lt;B, 2&gt;</code>); the device is chosen at run time (<code>Device::cuda(0).autodiff()</code>), and <code>Linear</code> and the optimizer are not generic. The probe was first written for the older API and did not compile; it was rewritten from 0.22's own README and source.</li><li><strong>After the program ends,</strong> a CubeCL worker thread panics eight times with <code>CUDA_ERROR_DEINITIALIZED</code>: it is still running while the CUDA driver shuts down. The results and the exit status (0) are not affected; it is noise at exit, to be quieted in the trainer (by synchronising and dropping the device's work before <code>main</code> returns).</li></ul><p>Had it failed, the alternatives were weaker than expected: Burn 0.22.0 deprecated its LibTorch backend ("will be removed in a future release"), leaving an older Burn and CubeCL pinned to the last versions that worked, or a newer card.</p></section><section id="svi"><h2>VI. Recommendations</h2><ol><li><strong>Turn off the release upgrade prompt</strong> on calber (<code>Prompt=never</code> in <code>/etc/update-manager/release-upgrades</code>), so 26.04 is not taken by accident; <code>tools/cuda-node.sh</code> should do it for a Pascal card.</li><li><strong>Never install the unversioned <code>cuda</code> or <code>cuda-toolkit</code> metapackages</strong> on it: they would pull CUDA 13.</li><li><strong>Record the version of everything a GPU program links</strong> (Burn, CubeCL, the CUDA libraries) beside its results, as the census records its binary.</li></ol></section><section id="svii"><h2>VII. Nix: pinning the build dependencies</h2><h3 id="what-it-would-pin-and-what-it-cannot">What it would pin, and what it cannot</h3><div class="table"><table><thead><tr><th></th><th>Nix can pin it</th><th>Why</th></tr></thead><tbody><tr><td>Rust toolchain, <code>cargo</code>, <code>pkg-config</code>, C libraries</td><td>yes</td><td>ordinary packages</td></tr><tr><td>CUDA toolkit pieces (<code>nvcc</code>, <code>cudart</code>, <code>nvrtc</code>, cuBLAS)</td><td>yes</td><td>nixpkgs packages NVIDIA's redistributable CUDA by version (a <code>cudaPackages_12_x</code> set); unfree, so <code>allowUnfree</code> and <code>cudaSupport</code> must be set</td></tr><tr><td>The kernel driver and <code>libcuda.so</code></td><td><strong>no, on Ubuntu</strong></td><td>the user-space driver must match the loaded kernel module exactly; it comes from the host. A Nix shell on a non-NixOS host is pointed at the host's driver libraries (a wrapper such as nixGL, or the host's <code>libcuda</code> on <code>LD_LIBRARY_PATH</code>)</td></tr></tbody></table></div><h3 id="flake-or-nix-shell">Flake or <code>nix shell</code></h3><div class="table"><table><thead><tr><th></th><th><code>nix shell</code> / <code>nix-shell -p ...</code></th><th>a flake (<code>flake.nix</code> + <code>flake.lock</code>) with a <code>devShell</code></th></tr></thead><tbody><tr><td>What it is</td><td>a shell with the named packages, for now</td><td>the project's dependencies, declared in the repository</td></tr><tr><td>Pinned</td><td>to whatever nixpkgs the machine has</td><td>to one nixpkgs commit, in <code>flake.lock</code>, in git</td></tr><tr><td>Same on every machine</td><td>no</td><td>yes: <code>nix develop</code> on calber, the Mac, a fleet node gives the same toolchain</td></tr><tr><td>Good for</td><td>trying something once</td><td>treadcore's GPU crate, so a result can be rebuilt with the exact toolchain that made it</td></tr></tbody></table></div><h3 id="why-it-fits-this-project">Why it fits this project</h3><ul><li><strong>It is the census's own rule, for toolchains.</strong> treadcore freezes the census binary because a different build plays different matches; a <code>flake.lock</code> freezes the toolchain the same way, and the commit that made a result names it.</li><li><strong>It holds old versions after the world moves on.</strong> nixpkgs will drop CUDA 12 in time; a locked flake keeps the commit that had it, and that is exactly the Pascal problem.</li><li><strong>It does not touch apt.</strong> The driver stays Ubuntu's (held as in III); the build world lives in <code>/nix/store</code> beside it, and can be removed.</li><li><strong>On Copal too, for build dependencies.</strong> Nix runs on Alpine (musl) and can provide glibc toolchains there; not CUDA, since a Copal node has no NVIDIA driver.</li></ul><h3 id="costs">Costs</h3><ul><li>Nix's store is large, and a first <code>nix develop</code> with CUDA downloads gigabytes.</li><li>Unfree CUDA packages are not in the public binary cache's free set, so they are fetched from NVIDIA's redistributables; the attribute names and which CUDA versions a nixpkgs commit carries must be checked at the pinned commit, not assumed.</li><li>Another tool to learn and keep; and the driver half stays outside it, which is where most of the CUDA trouble lives.</li></ul><h3 id="proposed-experiment">Proposed experiment</h3><p>A <code>flake.nix</code> for treadcore's GPU crate: Rust (pinned), <code>cudaPackages_12_x</code> with <code>nvcc</code> and <code>nvrtc</code>, <code>pkg-config</code>; the host's driver libraries passed in; <code>nix develop</code> on calber builds the same Burn program as the probe, and the probe's result must match. If it does, the GPU work is built that way from then on.</p></section><section id="sviii"><h2>VIII. Open items</h2><ol><li>Done: the Burn probe (V).</li><li>The release upgrade prompt off on calber, and in <code>cuda-node.sh</code>.</li><li>The Nix experiment (VII).</li><li>The CubeCL exit noise, in the trainer.</li></ol></section>
+  </main>
+  <footer>
+    <p>Paul Richeson, 28 October 2026. MIT licensed, as orrery. The Markdown original and the example's source are in orrery: <code>docs/appkit-gui-lab-report.md</code> and <code>docs/appkit-example/</code>.</p>
+  </footer>
+</div>

@@ -1,0 +1,138 @@
+<meta charset="utf-8">
+<title>Copal Machines Join</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+/* Layout: a lab report on orrery's paper -- a sticky bar of section
+   numerals, a masthead, then numbered sections at a reading measure, with
+   code and diagrams set dark like a terminal. Palette: orrery's draw.rs
+   LIGHT and DARK, as the user guide. */
+:root {
+  --base: #fce2ab; --panel: #f7d79a; --tile: #fff2d4; --ink: #121212;
+  --dim: #6b5836; --line: #c4a870; --accent: #87704f; --up: #4a7c4e;
+  --term-bg: #1c1a16; --term-ink: #f0e3c4; --term-dim: #8a7d63;
+  --rule: color-mix(in srgb, var(--line) 70%, transparent);
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --cond: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --measure: 68ch;
+  --step--1: clamp(.78rem, .76rem + .1vw, .84rem);
+  --step-0: clamp(1rem, .97rem + .16vw, 1.08rem);
+  --step-1: clamp(1.18rem, 1.12rem + .3vw, 1.36rem);
+  --step-2: clamp(1.45rem, 1.32rem + .6vw, 1.9rem);
+  --step-3: clamp(1.9rem, 1.6rem + 1.3vw, 2.8rem);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+    --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+    --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+    --rule: color-mix(in srgb, var(--line) 100%, transparent);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+  --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+  --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+  --rule: color-mix(in srgb, var(--line) 100%, transparent);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--base); color: var(--ink);
+  font-family: var(--serif); font-size: var(--step-0); line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--base); }
+.wrap { max-width: 980px; margin: 0 auto; }
+
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  background: color-mix(in srgb, var(--base) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+  margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+  padding-inline: max(16px, env(safe-area-inset-left, 0px));
+}
+.bar-in {
+  max-width: 980px; margin: 0 auto; padding-block: 9px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  font-family: var(--cond); font-size: var(--step--1);
+}
+.bar-in strong { letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin-right: auto; }
+.bar-in a { color: var(--dim); text-decoration: none; border-bottom: 1px solid transparent; }
+.bar-in a:hover, .bar-in a:focus-visible { color: var(--ink); border-bottom-color: var(--accent); }
+
+header.mast { padding-block: clamp(36px, 6vw, 72px) clamp(24px, 4vw, 40px); }
+.eyebrow { font-family: var(--mono); font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+h1 { font-family: var(--cond); font-weight: 700; font-size: var(--step-3); line-height: 1.05; letter-spacing: -.015em; text-wrap: balance; margin: 0 0 18px; max-width: 22ch; }
+.front p, .front li { font-size: var(--step--1); color: var(--dim); }
+.front p.note { font-family: var(--mono); letter-spacing: .04em; color: var(--accent); }
+.front ul { margin: 0; }
+
+nav.toc { border-top: 1px solid var(--rule); padding-block: 22px 30px; }
+nav.toc h2 { font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-family: var(--mono); font-weight: 500; margin: 0 0 10px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; columns: 2 18rem; column-gap: 32px; }
+nav.toc li { break-inside: avoid; padding: 3px 0; font-family: var(--cond); }
+nav.toc a { color: var(--ink); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { text-decoration: underline; text-decoration-color: var(--accent); }
+
+section { padding-block: clamp(28px, 4vw, 48px); border-top: 1px solid var(--rule); scroll-margin-top: 48px; }
+h2 { font-family: var(--cond); font-weight: 700; font-size: var(--step-2); line-height: 1.12; text-wrap: balance; margin: 0 0 18px; }
+h3 { font-family: var(--cond); font-weight: 600; font-size: var(--step-1); line-height: 1.25; text-wrap: balance; margin: 30px 0 10px; scroll-margin-top: 48px; }
+p, ul, ol, blockquote { max-width: var(--measure); }
+p { margin: 0 0 1em; }
+ul, ol { margin: 0 0 1em; padding-left: 1.3em; }
+li { margin-bottom: .35em; }
+li > ul, li > ol { margin: .35em 0 .2em; }
+li::marker { color: var(--accent); }
+p.note { font-size: var(--step--1); color: var(--dim); }
+strong { font-weight: 600; }
+a { color: var(--ink); text-underline-offset: 3px; text-decoration-color: var(--accent); }
+code { font-family: var(--mono); font-size: .86em; }
+p code, li code, td code, th code { color: var(--accent); word-break: break-word; }
+blockquote { margin: 0 0 1.2em; padding: 12px 18px; border-left: 3px solid var(--accent); background: var(--tile); font-family: var(--mono); font-size: var(--step--1); line-height: 1.6; }
+blockquote p { margin: 0; }
+
+.code { position: relative; margin: 0 0 1.3em; background: var(--term-bg); border-radius: 4px; overflow-x: auto; max-width: 100%; }
+.code pre { margin: 0; padding: 16px 18px; color: var(--term-ink); font-family: var(--mono); font-size: .8rem; line-height: 1.55; tab-size: 4; }
+.code code { font-size: inherit; color: inherit; }
+.code .lang { position: absolute; top: 6px; right: 10px; font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--term-dim); }
+.code.diagram { background: var(--tile); border: 1px solid var(--rule); }
+.code.diagram pre { color: var(--ink); }
+
+.table { overflow-x: auto; max-width: 100%; margin: 0 0 1.4em; }
+table { border-collapse: collapse; font-size: var(--step--1); line-height: 1.5; min-width: 30rem; }
+th { font-family: var(--cond); font-weight: 600; text-align: left; padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line); vertical-align: bottom; }
+td { padding: 8px 14px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: none; }
+td:first-child { font-weight: 600; font-family: var(--cond); }
+
+figure { margin: 0 0 1.4em; }
+figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); }
+figcaption { margin-top: 8px; font-size: var(--step--1); color: var(--dim); max-width: var(--measure); }
+
+footer { border-top: 1px solid var(--rule); padding-block: 24px 48px; font-size: var(--step--1); color: var(--dim); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="bar"><div class="bar-in"><strong><a href="index.html">orrery</a> · lab report</strong><a href="#abstract">Abstract</a><a href="#si">I</a><a href="#sii">II</a><a href="#siii">III</a><a href="#siv">IV</a><a href="#sv">V</a><a href="#svi">VI</a><a href="#svii">VII</a><a href="#sviii">VIII</a><a href="#six">IX</a><a href="#sx">X</a><a href="#references">References</a></div></div>
+<div class="wrap">
+  <header class="mast">
+    <p class="eyebrow">orrery · the fleet · machines</p>
+    <h1>Two Copal Machines Join the Fleet: Keys, Setup, Errands and Updates by Themselves</h1>
+    <div class="front"><p class="note">Lab Report — IEEE Format · 29 October 2026</p><p>Copyright (c) 2026 Paul Richeson. MIT licensed, as orrery.</p><p>Companions: <code>docs/fleet-train.md</code> (the machines' bullets); <code>tools/machines.py</code>; <code>tools/copal-node.sh</code>, <code>fleet-update.sh</code>, <code>fleet-auto-update.sh</code>, <code>fleet-pull.sh</code>; <code>src/machines.rs</code>, <code>src/media.rs</code>. Commits <code>4daa764</code>, <code>acbfc5e</code>.</p></div>
+  </header>
+  <nav class="toc" aria-label="Contents"><h2>Contents</h2><ol><li><a href="#abstract">Abstract</a></li><li><a href="#si">I. Objective</a></li><li><a href="#sii">II. Materials</a></li><li><a href="#siii">III. The key, through the one machine that was let in</a></li><li><a href="#siv">IV. Making a Copal machine a node</a></li><li><a href="#sv">V. The power-off command, which only one machine had</a></li><li><a href="#svi">VI. Errands: update the packages, pull the projects</a></li><li><a href="#svii">VII. Up to date by itself, daily and at boot</a></li><li><a href="#sviii">VIII. Media: the steps where there was a dead end</a></li><li><a href="#six">IX. Results</a></li><li><a href="#sx">X. Discussion</a></li><li><a href="#references">References</a></li></ol></nav>
+  <main>
+  <section id="abstract"><h2>Abstract</h2><p>Two machines with Copal's full install were added to the fleet:</p><ul><li><strong>xinanjiang</strong> (192.168.8.217): an i5-7200U laptop, 4 threads, 7 GB;</li><li><strong>jaguaribe</strong> (192.168.8.245): two Xeon X5670s, 24 threads, 47 GB.</li></ul><p>Copal is locked down to SSH keys, and only saskatchewan's key was on them. Paul's own key reached them through saskatchewan, with no private key needing to move. Both joined the queue as CPU lanes. jaguaribe now reads 961 seeds an hour, about 18% more for the whole fleet.</p><p>Joining exposed three faults in orrery:</p><ol><li><strong>Every setup recipe was Ubuntu's.</strong> A Copal machine had no button but power-off, and Join sent it to a recipe marked "not for it".</li><li><strong>The queue knew one machine's power-off command, whitewolf's.</strong> Join had copied each command once. A rule applied after joining was never seen, so a fleet shutdown would have left five machines running.</li><li><strong>The Media pane stopped at "the card ledger cannot be read"</strong> when <code>answers.txt</code> described a standalone machine, with no way forward.</li></ol><p>Each is fixed. There is a Copal setup recipe, two errands on every machine (update the packages, pull every project), and a recipe that keeps a machine up to date by itself, daily and at boot. The probe now keeps the power-off command current, and the Media pane walks through the steps. All eight Linux machines are now set to update daily and have a working power-off command.</p></section><section id="si"><h2>I. Objective</h2><ol><li>Let Paul's Mac log into the two new machines.</li><li>Make them fleet nodes and join them to the queue.</li><li>Give a Copal machine the same setup buttons an Ubuntu machine has, and make every button in the Machines view lead somewhere.</li><li>Add errands for every machine: update the packages, pull the projects.</li><li>Keep every machine up to date by itself, daily and after a boot.</li><li>Turn the Media pane's dead end into steps a person can follow.</li></ol></section><section id="sii"><h2>II. Materials</h2><div class="table"><table><thead><tr><th>Item</th><th>Detail</th></tr></thead><tbody><tr><td>New machines</td><td>xinanjiang, i5-7200U, 4 threads, 7 GB; jaguaribe, 2 × Xeon X5670, 24 threads, 47 GB, 438 GB disk; both Alpine 3.24 (Copal's full install), Rust 1.96.1, git, tmux, doas</td></tr><tr><td>The fleet</td><td>saskatchewan, columbia, nasser (Copal); boburner, calber, whitewolf (Ubuntu 24.04, NVIDIA, CUDA 12.9, driver 580); the Mac (the coordinator)</td></tr><tr><td>Test beds</td><td>colima on the Mac: <code>alpine:3.22</code> with OpenRC, <code>ubuntu:24.04</code> with systemd</td></tr><tr><td>The app</td><td>orrery's Machines view (<code>machines.rs</code>) and Media pane (<code>media.rs</code>); frames rendered with <code>--frame</code></td></tr></tbody></table></div></section><section id="siii"><h2>III. The key, through the one machine that was let in</h2><p>The new machines trusted saskatchewan's key only. The method used sends the Mac's <strong>public</strong> key along that trusted path:</p><div class="code" class="diagram"><pre><code>ssh user@192.168.8.235 &quot;ssh user@192.168.8.217 &#x27;cat &gt;&gt; ~/.ssh/authorized_keys&#x27;&quot; &lt; ~/.ssh/id_ed25519.pub</code></pre></div><p>The Mac pipes its public key to saskatchewan. Saskatchewan logs into the new machine with its own key and appends what it was given. After that the Mac logs in directly.</p><p>Three attempts failed before this one, each on how a command was typed, not on the lockdown:</p><ul><li>the loop was run on saskatchewan, so it tried to log into itself;</li><li>a pasted line broke after <code>cat &gt;&gt;</code>, so the remote shell received an unfinished command;</li><li>the two addresses were swapped, so the outer hop went to the machine that did not yet know the key.</li></ul><p>One attempt did succeed unintentionally: the Mac's private key was copied to saskatchewan as <code>~/.ssh/id_mac</code>. That copy is not needed, and it should be removed (<code>ssh user@192.168.8.235 &#x27;rm ~/.ssh/id_mac&#x27;</code>).</p><p><strong>The lesson for the instructions:</strong> commands pasted from a wrapped message pick up line breaks. The working forms were one line, and short: <code>ssh -t user@192.168.8.$h doas sh orrery-recipes/fleet-auto-update.sh</code>.</p></section><section id="siv"><h2>IV. Making a Copal machine a node</h2><p><strong>What a node needs.</strong> Rust, git, tmux, the treadcore checkout, <code>~/fleet</code> and the power-off rule. Copal's full install has all of these but the checkout, <code>~/fleet</code> and the rule. For this first pair the checkout was cloned by hand, and the two joined at once.</p><p><strong>The recipe</strong> <code>copal-node.sh</code> (<strong>Make it a fleet node (Copal)</strong>) does the same on any Copal machine. Each step is checked first, so running it again is safe:</p><ol><li>it installs the build tools missing from Alpine's own repositories;</li><li>as the user, it clones treadcore over HTTPS and makes <code>~/fleet</code>;</li><li>it adds the power-off rule.</li></ol><p>It changes nothing else: no service, firewall or SSH setting, so Copal's lockdown stays as it is. On both new machines it reported "the build tools are there", found the checkout, and wrote the rule.</p><p><strong>Join's advice</strong> now names the recipe that fits the machine's system: <code>copal-node</code> on Alpine, <code>fleet-node</code> on Ubuntu.</p></section><section id="sv"><h2>V. The power-off command, which only one machine had</h2><p>A fleet shutdown (<code>shutdown-now</code>) powers each machine off by the command in that machine's <code>config.json</code> entry. It leaves a machine without one running, and says so.</p><p>Join copied the command into that entry at the moment of joining, from the probe's reading. A rule applied after joining was never copied. When every machine was probed on 29 October, the queue held a command for whitewolf alone. Saskatchewan, boburner, columbia, calber and nasser all had working rules, and the queue would have left every one of them running.</p><p><strong>The fix</strong> (<code>sync_poweroff</code>): every probe writes the command the machine's rule allows into its entry, and removes it if the rule is gone. After one probe of all machines, every machine but the Mac has its command.</p></section><section id="svi"><h2>VI. Errands: update the packages, pull the projects</h2><div class="table"><table><thead><tr><th>Button</th><th>Script</th><th>Root</th><th>What it does</th></tr></thead><tbody><tr><td>Update the system's packages, <strong>Run…</strong></td><td><code>fleet-update.sh</code></td><td>yes, typed in the machine's Sessions tile</td><td><code>apk update</code> and <code>apk upgrade</code>, or <code>apt-get update</code> and <code>upgrade</code></td></tr><tr><td><strong>Pull projects</strong></td><td><code>fleet-pull.sh</code>, fed over ssh on stdin</td><td>no</td><td>every git checkout in the home, fast-forward only</td></tr></tbody></table></div><p><strong>An errand is not a state.</strong> It has no "applied", only a last run, so the recipe's state reads "ready to run" and its button says <strong>Run…</strong>, not <strong>Apply…</strong>.</p><p><strong>Pull never merges, rebases, stashes or resets.</strong> A checkout with changes of its own, no upstream, or a branch that has diverged is left as it is, and its line says so. The script is sent on stdin, so nothing is left on the machine. Its lines go into the machine's log under "Done here". jaguaribe's first pull: <code>code/treadcore: up to date (37b6b65)</code>.</p><p><strong>Neither restarts anything.</strong> A new kernel waits for the next boot, and the output says so.</p></section><section id="svii"><h2>VII. Up to date by itself, daily and at boot</h2><p><code>fleet-auto-update.sh</code> (<strong>Update daily and at boot</strong>) is run once as root. It installs <code>fleet-update.sh --auto</code> at <code>/usr/local/sbin</code> and schedules it:</p><div class="table"><table><thead><tr><th>System</th><th>Daily</th><th>After a boot</th></tr></thead><tbody><tr><td>Alpine (Copal)</td><td>busybox crond's <code>/etc/periodic/daily</code>, at 2:00; the root crontab is given Alpine's daily line if it lacks one</td><td>OpenRC's <code>local</code> service, <code>/etc/local.d/fleet-update.start</code>, after 2 minutes, in the background</td></tr><tr><td>Ubuntu</td><td>a systemd timer at 3:00, spread over an hour</td><td>the same timer, 5 minutes after the boot; a day missed while off is made up (<code>Persistent</code>)</td></tr></tbody></table></div><p><strong>The automatic runs hold back the NVIDIA driver and CUDA on Ubuntu.</strong> A driver upgraded under a running machine leaves its library out of step with the module loaded. Every CUDA program then fails until the boot, with "Driver/library version mismatch". Crucible's lanes would stop overnight for an update no one chose that day. The packages are held for the run and released after it. A package held before the run stays held. A by-hand Run upgrades everything.</p><p><strong>Each run leaves one line</strong> in <code>/var/log/fleet-update.log</code>. The probe shows it as <strong>updated</strong>, and the daily job as <strong>daily update</strong>. <code>--undo</code> takes it all away.</p><h3 id="tests">Tests</h3><p>In containers on the Mac, before any machine ran it:</p><div class="table"><table><thead><tr><th>Test</th><th>Alpine 3.22</th><th>Ubuntu 24.04</th></tr></thead><tbody><tr><td>install</td><td>the files written, <code>local</code> in the default runlevel</td><td>the units pass <code>systemd-analyze verify</code></td></tr><tr><td>an automatic run, a by-hand run</td><td>both up to date, both lines logged</td><td>up to date, logged</td></tr><tr><td>install again</td><td>the same files, no change</td><td>—</td></tr><tr><td>a root crontab with no daily line</td><td>Alpine's line added, once</td><td>—</td></tr><tr><td><code>--undo</code></td><td>every file gone, the log kept</td><td>—</td></tr><tr><td>the NVIDIA hold</td><td>—</td><td>a stand-in <code>nvidia-dummy-580</code> held during the run and released; a <code>libc6</code> held before stayed held</td></tr></tbody></table></div><p><strong>The first test caught a fault.</strong> Busybox's <code>install</code> does not create a missing directory, and <code>/usr/local/sbin</code> did not exist. That turned out to be true on Copal too (saskatchewan and jaguaribe have none). Without the test the recipe would have failed on every Copal machine. It now makes the directory.</p><p><strong>On the machines:</strong> all five Copal machines reported the daily job and the boot run, and all three Ubuntu machines enabled their timers. The Ubuntu timers fired at once, since each machine had been up longer than five minutes. Each reported "apt up to date", with the NVIDIA packages held back (65 on boburner, 49 on calber and whitewolf) and released. calber's card still reports driver 580.178.04. The Copal machines' first run is at 2:00.</p></section><section id="sviii"><h2>VIII. Media: the steps where there was a dead end</h2><p><code>answers.txt</code> in <code>~/code/copal-alpine-linux</code> had <code>COPAL_FLEET</code> empty: it described one standalone machine. The pane read that as "the card ledger cannot be read" and stopped.</p><p>It now shows the five steps, the one to take now lit:</p><ol><li>the checkout (done);</li><li><strong><code>make answers</code></strong>, the interview naming the fleet;</li><li>the image (<code>make img-BOARD</code>);</li><li>writing card 1 (<code>make sd-BOARD</code>, <code>ERASE</code> typed twice);</li><li>the next card (<code>make answers-node N=2</code>).</li></ol><p><strong>Start the interview</strong> runs <code>make answers</code> in the pane's own terminal, the one <code>ERASE</code> already reaches. So the questions are answered by the operator, typed there, and nothing is answered on their behalf. <strong>Show what is on file</strong> runs <code>make answers-show</code> first, so a standalone answers file is seen before the interview replaces it. Once a fleet is named, the card table and its existing buttons take steps 3 to 5.</p><p>Rendered with <code>--frame</code>, the first version cut off three lines at the right edge (the fault <code>docs/</code> calls the drawing traps), and they were shortened. The interview itself has not yet been run through to the end: its answers are the operator's to type.</p></section><section id="six"><h2>IX. Results</h2><div class="table"><table><thead><tr><th>Machine</th><th>Daily and at boot</th><th>Power-off in the queue</th><th>Recipes left</th></tr></thead><tbody><tr><td>saskatchewan</td><td>yes</td><td><code>doas -n /sbin/poweroff</code></td><td>none</td></tr><tr><td>columbia</td><td>yes</td><td><code>doas -n /sbin/poweroff</code></td><td>none</td></tr><tr><td>nasser</td><td>yes</td><td><code>doas -n /sbin/poweroff</code></td><td>none</td></tr><tr><td>xinanjiang</td><td>yes</td><td><code>doas -n /sbin/poweroff</code></td><td>none</td></tr><tr><td>jaguaribe</td><td>yes</td><td><code>doas -n /sbin/poweroff</code></td><td>none</td></tr><tr><td>boburner</td><td>yes</td><td><code>sudo -n /usr/bin/systemctl poweroff</code></td><td>none</td></tr><tr><td>calber</td><td>yes</td><td><code>sudo -n /usr/bin/systemctl poweroff</code></td><td>none</td></tr><tr><td>whitewolf</td><td>yes</td><td><code>sudo -n /usr/bin/systemctl poweroff</code></td><td>none</td></tr></tbody></table></div><div class="table"><table><thead><tr><th>Measure</th><th>Value</th></tr></thead><tbody><tr><td>Lanes in the queue</td><td>12, all running (9 CPU, 3 CUDA)</td></tr><tr><td>jaguaribe's census rate</td><td>961 seeds an hour (saskatchewan 2,158), about 18% of the fleet's before it</td></tr><tr><td>xinanjiang</td><td>built treadcore in 98 s; no census finished yet</td></tr><tr><td>orrery's tests</td><td>352 pass</td></tr></tbody></table></div></section><section id="sx"><h2>X. Discussion</h2><p><strong>A button that is absent is only honest if its absence has a way forward.</strong> The Machines view draws no button for a recipe that does not fit, and that is right: a greyed button is a promise it cannot keep. But a Copal machine then had nothing to press, and Join's own error sent the operator to a recipe the view had just said was "not for it". The fault was not the absent button. It was that no recipe fitted. Every system the fleet runs now has one.</p><p><strong>A copy taken once is a copy that goes stale.</strong> Join copied the power-off command as a convenience, and nothing ever looked at it again. The cost stayed invisible until a shutdown would have left five machines on. The probe already read the truth every time it ran. The fix was to keep the copy in step with it, not to read it more carefully once.</p><p><strong>An automatic update is a change no one chose that day.</strong> So the automatic runs do less than a person pressing Run. They never restart anything, and they leave alone the one package set whose upgrade breaks a running GPU. The by-hand run does everything, because a person running it is there to restart.</p><p><strong>Still open:</strong></p><ul><li><strong>Kernel modules on Alpine.</strong> An Alpine kernel upgrade replaces the running kernel's modules. Until the boot, a module not already loaded (a USB device plugged in later) cannot load. The log says a boot is due. The fleet does not yet act on that line.</li><li><strong>Probe on a schedule.</strong> The Machines view shows the last update only as of its last probe, and nothing probes on a schedule yet.</li><li><strong>The copied private key</strong> <code>~/.ssh/id_mac</code> on saskatchewan should be removed.</li></ul></section><section id="references"><h2>References</h2><p>[1] Alpine Linux wiki, "Alpine Linux package management" (<code>apk update</code>, <code>apk upgrade</code>) and "cron" (busybox crond, <code>/etc/periodic</code>).</p><p>[2] OpenRC, "local" service: <code>/etc/local.d/*.start</code> at boot.</p><p>[3] systemd, <code>systemd.timer(5)</code>: <code>OnCalendar</code>, <code>OnBootSec</code>, <code>RandomizedDelaySec</code>, <code>Persistent</code>.</p><p>[4] Debian, <code>apt-mark(8)</code>: <code>hold</code>, <code>unhold</code>, <code>showhold</code>.</p><p>[5] NVIDIA, "Driver/library version mismatch": the NVML error after a driver upgrade without a reboot.</p><p>[6] orrery <code>docs/fleet-train.md</code>, the machines' bullets: Copal nodes, errands, daily updates, the power-off command.</p></section>
+  </main>
+  <footer>
+    <p>Paul Richeson, 28 October 2026. MIT licensed, as orrery. The Markdown original and the example's source are in orrery: <code>docs/appkit-gui-lab-report.md</code> and <code>docs/appkit-example/</code>.</p>
+  </footer>
+</div>

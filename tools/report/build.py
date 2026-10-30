@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""build.py REPORT.md OUT.html -- the AppKit lab report as a page.
+"""build.py REPORT.md OUT.html [SHORT [EYEBROW]] -- a lab report as a page.
 
-A converter for the Markdown the report uses (headings, paragraphs, nested
+all.sh builds every one, each with its eyebrow (the small line over the
+title).
+
+SHORT is the browser tab's title, a few words (the report's own title up
+to its colon by default). The page links back to docs/index.html, where
+every report is listed. A converter for the Markdown the reports use (headings, paragraphs, nested
 lists, tables, fenced code, block quotes, images, inline code, bold, italic,
 links), in the user guide's palette and type. Images are embedded.
 """
@@ -90,7 +95,9 @@ def blocks(ls):
                     out.append('<h3 id="%s">%s</h3>' % (sid, inline(text)))
             i += 1
             continue
-        m = re.match(r"^!\[([^\]]*)\]\(([^)]+)\)$", s)
+        # One image or several on a line, side by side in one figure.
+        pics = re.findall(r"!\[([^\]]*)\]\(([^)]+)\)", s)
+        m = pics and re.fullmatch(r"(\s*!\[[^\]]*\]\([^)]+\))+\s*", s)
         if m:
             cap = ""
             j = i + 1
@@ -105,7 +112,7 @@ def blocks(ls):
                 i = j
             else:
                 i += 1
-            out.append("<figure>%s%s</figure>" % (image(m.group(1), m.group(2)), cap))
+            out.append("<figure>%s%s</figure>" % ("".join(image(alt, p) for alt, p in pics), cap))
             continue
         if s.startswith("|"):
             rows = []
@@ -168,6 +175,13 @@ def blocks(ls):
         while i < len(ls) and ls[i].strip() and not re.match(r"^(#{1,3}\s|```|\||>|!\[)", ls[i].strip()) and not ITEM.match(ls[i]):
             p.append(ls[i].strip())
             i += 1
+        if not p:
+            # A line some block's pattern starts and no block took (a
+            # heading past ###, an image line that is not one): a paragraph
+            # of its own, rather than the loop standing on it for good.
+            sys.stderr.write("build.py: line taken as text: %s\n" % ls[i].strip()[:70])
+            p.append(ls[i].strip())
+            i += 1
         text = " ".join(p)
         if text.startswith("*") and text.endswith("*") and text.count("*") == 2:
             out.append('<p class="note">%s</p>' % inline(text.strip("*")))
@@ -187,7 +201,9 @@ nav = "".join('<a href="#%s">%s</a>' % (sid, html.escape(re.sub(r"^([IVX]+)\.\s.
 toc_list = "".join('<li><a href="#%s">%s</a></li>' % (sid, inline(t)) for sid, t in toc)
 
 page = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "page.html")).read()
-page = page.replace("{{TITLE}}", inline(title)).replace("{{FRONT}}", front).replace("{{NAV}}", nav)
+short = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else re.sub(r"`", "", title.split(":")[0]).strip()
+eyebrow = sys.argv[4] if len(sys.argv) > 4 else "orrery · lab report"
+page = page.replace("{{SHORT}}", html.escape(short)).replace("{{EYEBROW}}", html.escape(eyebrow)).replace("{{TITLE}}", inline(title)).replace("{{FRONT}}", front).replace("{{NAV}}", nav)
 page = page.replace("{{TOC}}", toc_list).replace("{{MAIN}}", main)
 open(OUT, "w").write(page)
 print("wrote", OUT, len(page), "bytes;", len(toc), "sections")
