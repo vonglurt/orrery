@@ -2836,7 +2836,12 @@ class Plan:
     LADDER_SLOTS = 8
 
     def crucible_dir(self, *a):
-        return os.path.join(self.q, "crucible", *a)
+        return os.path.join(self.q, self.crucible_home(), *a)
+
+    def crucible_home(self):
+        """Hybrid islands apart from plain: their nets differ in size, so neither's
+        state, ladder or champions load in the other, and the plain ones stay as they were."""
+        return "crucible-hybrid" if (self.cfg.get("crucible") or {}).get("hybrid") else "crucible"
 
     def ladder_rungs(self, ms):
         """At most LADDER_SLOTS milestones, oldest first: the newest half,
@@ -2989,7 +2994,8 @@ class Plan:
             while len(isl["queued"]) < opt["ahead"]:
                 jid = "x-%s-%04d" % (name, isl["next"])
                 isl["next"] += 1
-                home = "%s/crucible" % self.home
+                home = "%s/%s" % (self.home, self.crucible_home())
+                flag = "HYBRID=1 " if self.crucible_home() != "crucible" else ""
                 send = [{"src": os.path.join(src, f), "dst": "~/%s/%s" % (home, f)} for f in ("src/crucible.cu", "Makefile")]
                 # Read when the keeper dispatches it: the other islands'
                 # newest champions, and the ladder as it is then.
@@ -3004,7 +3010,7 @@ class Plan:
                 seed = 1000 + 97 * (sum(map(ord, name)) % 1000)
                 cmd = (
                     "set -e; H=~/%s; O=~/%s/out/%s; mkdir -p $O $H/in\n"
-                    "cd $H && make -s NVCC=${NVCC:-/usr/local/cuda/bin/nvcc} >/dev/null 2>&1 || make NVCC=${NVCC:-/usr/local/cuda/bin/nvcc}\n"
+                    "cd $H && make -s FLAGS_NOW NVCC=${NVCC:-/usr/local/cuda/bin/nvcc} >/dev/null 2>&1 || make FLAGS_NOW NVCC=${NVCC:-/usr/local/cuda/bin/nvcc}\n"
                     "L=''; [ -f $H/island.state ] && L=\"--load $H/island.state\"\n"
                     "I='%s'\n"
                     # The milestones by name, oldest first, from their slots.
@@ -3013,6 +3019,7 @@ class Plan:
                     "./crucible --pop %d --eps %d --gens %d --yard %d --seed %d --lad %s --draw %s $L ${I:+--import $I} ${R:+--ladder $R} "
                     "--save $H/island.state --export $O/champ.bin --out $O/gens.tsv --exam $O/exam.tsv 2>&1 | tee $O/console.txt | grep '^#'\n"
                 ) % (home, self.home, jid, ",".join(imports), opt["pop"], opt["eps"], opt["gens"], opt["yard"], seed, opt["lad"], opt["draw"])
+                cmd = cmd.replace("FLAGS_NOW ", flag)
                 job = {"id": jid, "kind": "crucible", "title": "crucible island %s, segment %d" % (name, isl["next"] - 1),
                        "needs": "host:" + name, "cmd": cmd, "send": send, "fetch": "%s/out/%s" % (self.home, jid), "timeout_s": 4 * 3600}
                 if isl["queued"]:
