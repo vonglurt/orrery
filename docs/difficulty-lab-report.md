@@ -341,6 +341,18 @@ at the same ease. It does not change which ease is best.
   prints the table again. Run it after a few promotions. If the gain a day
   peaks at another ease, change `EASE_MAX` and `PROMOTE_EVERY` together.
 
+## VIII. Addendum, the same evening
+
+With the brain's tests set right and w1266 promoted (`e669921`), Paul set
+the aim at one promotion every 2.5 hours. That is the pace of ease 2 under
+the measured trials, so `PROMOTE_EVERY` is 150 and `EASE_MAX` is 2.0. The
+cost is in Section V: there, about one promotion in five may be truly
+worse, against one in fourteen at 1.5. The anchor reads are what stand
+against that. In a new generation, only what was found carries over: the
+search moves to the new commit at once, and the older finds are read again
+on it. Builds of commits main has already moved past are no longer built
+(a busy calber had three queued).
+
 ## References
 
 [1] Fishtest, "Stockfish testing framework: SPRT and the pentanomial

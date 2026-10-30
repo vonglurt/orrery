@@ -299,10 +299,10 @@ passed one read and were lost. A trial no better reaches z 3 one time in
 candidate still has its families and the tests to pass before it promotes.
 
 **A difficulty, like a block's.** Every bar is lowered by one *ease*, in
-errors, so that a promotion comes about every 4 hours (plan.json
-`weights.promote_every_min`, 240). If no promotion comes in that time, the
-ease rises by 1 for each further 4 hours, up to its floor of 1.5
-(held-out z 1.5). A promotion that comes early raises the bars again, by
+errors, so that a promotion comes about every 2.5 hours (plan.json
+`weights.promote_every_min`, 150). If no promotion comes in that time, the
+ease rises by 1 for each further 2.5 hours, up to its floor of 2
+(held-out z 1.0). A promotion that comes early raises the bars again, by
 half a step for each halving of its time. `tools/plans/difficulty-sim.py`
 reads what each ease buys, using the planner's own stages and bars. Here
 it is with the trials as the fleet's record allows: a bulk truly
@@ -319,7 +319,11 @@ and the fleet reads 5,250 seeds an hour.
 | 4 | 36 min | −0.09 | 72% | −3.7 |
 
 A promotion every 20 minutes is past what the trials hold: there the
-brain gets worse every day. The floor is 1.5 because it stays near the
+brain gets worse every day. Since the evening of 29 October the aim is
+2.5 hours, at Paul's word, once the brain's tests were set right and
+w1266 promoted. That is the pace of ease 2, so the floor is 2, and the
+anchor reads are what stand against the one in five truly worse there.
+The floor was 1.5 before, because it stays near the
 best gain under every spread the data leaves open (0.24 with or without
 the finds, or 0.30), and lets one promotion in ten or fewer be truly
 worse. The first floor, 2, came from a spread of 0.30 alone; under the

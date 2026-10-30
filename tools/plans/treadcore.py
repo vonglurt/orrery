@@ -298,6 +298,18 @@ class Plan:
     def prepare_jobs(self):
         sha, short = self.sha(), self.short()
         jobs = []
+        # A build still queued for a commit main has moved past is not
+        # built: the newest carries everything the older did, and a
+        # machine busy for hours would build each in turn (29 October:
+        # calber held three, behind a school run). Moved to stopped/ as the
+        # keeper claims a job, by a rename, so one it has begun is left.
+        for f in glob.glob(os.path.join(self.q, "queue", "*.json")):
+            j = load(f, {})
+            if j.get("kind") == "prepare" and j.get("id", "").startswith("prep-") and not j["id"].endswith("-" + short):
+                try:
+                    os.rename(f, os.path.join(self.q, "stopped", os.path.basename(f)))
+                except OSError:
+                    pass
         known = self.ids("queue", "running", "done", "failed", "stopped")
         for h in self.hosts:
             jid = self.prep_id(h["name"])
@@ -681,6 +693,11 @@ class Plan:
     # data leaves open (0.24 with or without the finds, 0.30), and keeps the
     # truly worse to one in ten or fewer; 2, first chosen from a spread of
     # 0.30 alone, let one in five through under the measured one.
+    # Paul, the same evening, the brain's tests set right and w1266
+    # promoted: "lets try for a promotion every 2.5 hours." The pace of
+    # ease 2 under the measured trials, so its floor: one promotion in
+    # five may be truly worse there (one in fourteen at 1.5), and the
+    # anchor reads are what stand against it.
     # Like a block's difficulty: no promotion in its time and the ease
     # rises a step each PROMOTE_EVERY more; a promotion sooner than its
     # time lowers it by half a step for each halving (one quick promotion
@@ -688,8 +705,8 @@ class Plan:
     # (anchor_trial). PROMOTE_EVERY is the floor's own pace, so the ease
     # rests below the floor rather than pinned to it; a faster fleet
     # promotes sooner at the same ease.
-    PROMOTE_EVERY = 240
-    EASE_MAX = 1.5
+    PROMOTE_EVERY = 150
+    EASE_MAX = 2.0
     EASE_STEP = 1.0
     HARDEN = 0.5
 
