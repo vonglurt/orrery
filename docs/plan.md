@@ -478,3 +478,43 @@ Worth writing down, so it can be checked rather than defended:
   for nothing. It is here because `answers.txt`, the CA, the token ledger and
   the card reader are all there — but that is an inference from the repository,
   not something anyone said.
+
+---
+
+## Backlog after 29 October
+
+All of the phases above are done. The work since has been the fleet, the
+brain's search and the machines, and it stopped here for a restart of the
+Mac. Next, in order:
+
+1. **Storage** (`docs/storage-lab-report.md` §VII):
+   - run the staged NFS share of boburner's `/Hexamir`, and its mount on
+     whitewolf; measure it with fio, with and without `nconnect`;
+   - cable jaguaribe's 10 Gb ConnectX (eth2);
+   - mount and look at the idle btrfs sets on calber and whitewolf;
+   - add three NVMe and deploy Ceph with cephadm on the Ubuntu nodes, the
+     Copal machines as clients; Ceph buttons in the Storage view after
+     that;
+   - the Asustor mirror (rsync from a ZFS snapshot), and Samba on boburner
+     for the Mac.
+2. **Brains** (`docs/brains.md` §7):
+   - a promoted model should play in the game and the families, not only
+     the census;
+   - training runs should start from the best model slot (the league's
+     loop);
+   - sense ablation on the Net page;
+   - `think_every` and `think_order`;
+   - a learned target pick;
+   - the crucible bridge.
+3. **Media:** the `make answers` interview, run through the wizard to the
+   end.
+4. **Storage view:**
+   - a root survey for filesystems on Copal disks;
+   - Samba and CephFS rows in the patch bay;
+   - mount health.
+5. **Machines:** probe on a schedule, and act on "a newer kernel waits for
+   the next boot".
+6. **The keeper:** a restarted keeper should take back the jobs already
+   running, so long jobs no longer hold it on old code.
+7. **A flaky test:** `sftp::tests::a_directory_lists_with_sizes_and_kinds_and_no_dot_entries`
+   uses a fixed temp directory.
