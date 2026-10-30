@@ -107,11 +107,12 @@ that runs `copal-prep.sh` on a real terminal so that its two typed `ERASE`
 confirmations happen where they always did. Nothing is answered on the
 operator's behalf and there is no `--yes`.
 
-`Cmd-3` is **Machines**: a fresh install to a fleet node. After the stick,
-Ubuntu 24.04 with OpenSSH and `ssh-copy-id`, a machine is added by its
-address; orrery reads it (system, CPU, GPU, driver, CUDA, Rust, the fleet's
-tools) and shows each of its setup recipes (`tools/fleet-node.sh`,
-`cuda-node.sh`, `fleet-login.sh`, `fleet-poweroff-setup.sh`) as applied or
+`Cmd-3` is **Machines**: a fresh install to a fleet node. After the stick
+(Copal, or Ubuntu 24.04 with OpenSSH) and `ssh-copy-id`, a machine is added
+by its address; orrery reads it (system, CPU, GPU, driver, CUDA, Rust, the fleet's
+tools) and shows each of its setup recipes (`tools/fleet-node.sh` or, on
+Copal, `copal-node.sh`, `cuda-node.sh`, `fleet-login.sh`,
+`fleet-poweroff-setup.sh`, and the errand `fleet-update.sh`) as applied or
 not, read from what each leaves behind. **Apply** is hard to press: a
 screen with the machine, what the recipe does, its files and their sha256
 and the exact command, and its button lit only when the machine's name is

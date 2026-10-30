@@ -59,6 +59,11 @@ pub struct Model {
     pub why: String,
 }
 
+/// Where the head's buttons begin: the machine's name and address stop there.
+fn px_head(right: i32, joined: bool) -> i32 {
+    right - if joined { 90 + 6 + 120 } else { 196 + 6 + 120 }
+}
+
 fn s(v: &json::Value, k: &str) -> String {
     v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
 }
@@ -101,6 +106,10 @@ impl Model {
                             format!("staged {}: {}", s(l, "staged"), s(l, "command"))
                         } else if l.get("joined").is_some() {
                             "joined the fleet".to_string()
+                        } else if let Some(p) = l.get("pulled").and_then(|p| p.as_array()) {
+                            // fleet-pull.sh's lines, the ones that moved or stayed.
+                            let each: Vec<&str> = p.iter().filter_map(|x| x.as_str()).collect();
+                            format!("pulled: {}", if each.is_empty() { "no checkouts".to_string() } else { each.join("; ") })
                         } else {
                             String::new()
                         };
@@ -121,6 +130,8 @@ pub enum Ask {
     /// Copy the recipe's files, then type its command in the machine's tile.
     Apply { recipe: String, machine: String, target: String, command: String },
     Join(String),
+    /// Every git checkout in its home, fast-forward only (no root).
+    Pull(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -221,7 +232,7 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
             st.add.clear();
         }
         y += lh + 6;
-        ui.label_in(body.x, y, lw, "Before: install Ubuntu 24.04 with OpenSSH (Media), then ssh-copy-id USER@ADDRESS", &F8X13, t.dim);
+        ui.label_in(body.x, y, lw, "Before: Copal (Media) or Ubuntu 24.04 with OpenSSH, your key on it; then Add, Apply copal-node or fleet-node, Probe, Join", &F8X13, t.dim);
     }
 
     // ---- the chosen machine ---------------------------------------------------------
@@ -230,9 +241,16 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
     let rw = body.right() - rx;
     let mut y = body.y;
     let head = if x.target == "-" { format!("{}  this Mac ({}), the coordinator: it runs the keeper and pushes", x.name, x.fact("hostname")) } else { format!("{}  {}", x.name, x.target) };
-    ui.label_in(rx, y, rw - 210, &head, &F8X13, t.ink);
+    ui.label_in(rx, y, if st.operator { px_head(body.right(), x.joined) - rx - 8 } else { rw }, &head, &F8X13, t.ink);
     if st.operator && st.confirm.is_none() && ui.button(rect(body.right() - 90, y - 4, 90, 22), "Probe", true) {
         st.ask = Some(Ask::Probe(x.name.clone()));
+    }
+    // Every git checkout in its home, fast-forward only, as the user: no
+    // root, so no confirmation (fleet-pull.sh; Paul, 29 October: "a git
+    // pull of all the projects"). Left of Join when Join is drawn.
+    let px = px_head(body.right(), x.joined);
+    if st.operator && x.target != "-" && st.confirm.is_none() && ui.button(rect(px, y - 4, 120, 22), "Pull projects", true) {
+        st.ask = Some(Ask::Pull(x.name.clone()));
     }
     if st.operator && !x.joined && st.confirm.is_none() && ui.button(rect(body.right() - 196, y - 4, 100, 22), "Join...", true) {
         st.confirm = Some((Confirm::Join, x.name.clone()));
@@ -264,7 +282,7 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
         y += lh - 2;
     }
     y += 10;
-    ui.label(rx, y, "Recipes (orrery's setup scripts; each needs root, each is safe to run again)", &F8X13, t.ink);
+    ui.label_in(rx, y, rw, "Recipes (each needs root; each is safe to run again)", &F8X13, t.ink);
     y += lh;
     for r in &x.recipes {
         let c = match r.state.as_str() {
@@ -276,7 +294,10 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State) -> Option<nav::View> {
         let stx = if r.why.is_empty() { r.state.clone() } else { format!("{}: {}", r.state, r.why) };
         ui.label_in(rx + 290, y, rw - 290 - 110, &stx, &F8X13, c);
         let can = st.operator && r.state != "not for it";
-        if can && st.confirm.is_none() && ui.button(rect(body.right() - 100, y - 3, 100, lh - 2), "Apply...", true) {
+        // An errand (the packages' update) is run, not applied: it has no
+        // state to reach, only a time it was last done.
+        let verb = if r.state == "ready to run" { "Run..." } else { "Apply..." };
+        if can && st.confirm.is_none() && ui.button(rect(body.right() - 100, y - 3, 100, lh - 2), verb, true) {
             st.confirm = Some((Confirm::Apply(r.id.clone()), x.name.clone()));
             st.typed.clear();
         }

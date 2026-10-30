@@ -496,6 +496,24 @@ Opening it again shows where the queue is.
   with the two lines for the coordinator: the host's entry for
   `config.json`, and its line for `~/.copal/fleets/FLEET/nodes` (orrery's
   Sessions).
+- **To make a Copal (Alpine) machine a node,** `tools/copal-node.sh` does
+  it (`doas sh copal-node.sh`, the recipe **Make it a fleet node
+  (Copal)**). It installs the build tools Alpine's repositories have that
+  are missing, clones the treadcore checkout and makes `~/fleet` as the
+  user, and adds the power-off rule. It changes nothing else, and Copal's
+  lockdown is left as it is.
+- **Errands, on any machine.** **Update the system's packages**
+  (`fleet-update.sh`, root) runs `apk update` and `apk upgrade`, or
+  apt's, and never restarts: a new kernel waits for the next boot.
+  **Pull projects** (`fleet-pull.sh`, no root, `machines.py QUEUE pull
+  NAME|all`) fast-forwards every git checkout in the user's home. One with
+  changes of its own, no upstream, or a branch gone its own way is left as
+  it is, and each checkout gets a line saying what happened to it.
+- **The power-off command follows the machine.** Each probe writes the
+  command a machine's rule allows into its `config.json` entry. Join had
+  copied it once, so a rule applied after joining was never seen, and
+  shutdown-now left the machine running. On 29 October that was every
+  machine but whitewolf.
 - **To add one,** add it. Its lane starts, and builds the commit first. A
   host with `"caps": []` takes no work, but its record is still gathered.
 - **To power off at a shutdown,** a host needs `poweroff`, a command it may

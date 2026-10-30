@@ -16,6 +16,8 @@ that make it a node. orrery's Machines view reads and drives it.
                             machine; print the command to type (as JSON)
     join NAME [--yes]       add it to the queue's config.json and the fleet's
                             nodes list (orrery's Sessions)
+    pull NAME|all           every git checkout in the machine's home pulled,
+                            fast-forward only, as the user (fleet-pull.sh)
 
 THE RECIPES ARE ORRERY'S OWN SCRIPTS (tools/), and nothing else: each needs
 root, and root is never run from here. `stage` copies; the command is typed
@@ -67,6 +69,19 @@ RECIPES = [
      "files": ["fleet-login.sh", "topnotch.sh"], "run": "bash fleet-login.sh --role {role}",
      "does": ["/usr/local/bin/topnotch and the login message 01-copal-fleet: CPU, memory, disk, the GPU now, SSH work",
               "Ubuntu's advertising in the login message turned off (fleet-login.sh --undo puts it back)"]},
+    {"id": "copal-node", "title": "Make it a fleet node (Copal)",
+     "os": ["alpine"],
+     "files": ["copal-node.sh", "fleet-poweroff-setup.sh"], "run": "sh copal-node.sh",
+     "does": ["the build tools from Alpine's repositories, those missing (build-base, git, curl, tmux, rust, cargo)",
+              "~/code/treadcore over HTTPS, and ~/fleet, as the user",
+              "the power-off rule (doas: poweroff, nothing else)",
+              "nothing else: Copal's lockdown, services and SSH are left as they are"]},
+    # Not a state but an errand: never "applied", always there to run.
+    {"id": "update", "title": "Update the system's packages",
+     "os": ["ubuntu", "alpine"], "errand": True,
+     "files": ["fleet-update.sh"], "run": "sh fleet-update.sh",
+     "does": ["apk update and apk upgrade (Alpine), or apt-get update and upgrade (Ubuntu)",
+              "a new kernel waits for the next boot: nothing is restarted"]},
     {"id": "poweroff", "title": "Let the fleet power it off",
      "os": ["ubuntu", "alpine"],
      "files": ["fleet-poweroff-setup.sh"], "run": "sh fleet-poweroff-setup.sh",
@@ -186,6 +201,23 @@ class Machines:
         m["facts"] = facts
         m["probed"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         m.pop("probe_error", None)
+        self.sync_poweroff(name, facts.get("poweroff", ""))
+
+    def sync_poweroff(self, name, cmd):
+        """A machine in the queue powers off by the command its rule now
+        allows: join copied it once, so a rule applied after joining (or
+        taken away) left shutdown-now with the wrong one, and the machine
+        was left running (29 October: saskatchewan, xinanjiang, jaguaribe)."""
+        path = os.path.join(self.q, "config.json")
+        cfg = load(path, {})
+        for h in cfg.get("hosts", []):
+            if h["name"] == name and not h.get("lane_of") and h.get("poweroff", "") != cmd:
+                if cmd:
+                    h["poweroff"] = cmd
+                else:
+                    h.pop("poweroff", None)
+                save(path, cfg)
+                self.cfg = cfg
 
     # ---- recipes ------------------------------------------------------------------
     @staticmethod
@@ -217,6 +249,7 @@ class Machines:
         have = {
             "fleet-login": bool(f.get("topnotch")),
             "poweroff": bool(f.get("poweroff")),
+            "copal-node": bool(f.get("cargo") and f.get("treadcore") and f.get("tmux") and f.get("poweroff")),
             "cuda-node": bool(f.get("nvidia_smi") and f.get("cuda") and f.get("tmux") and f.get("copal_tm")),
         }
         have["fleet-node"] = bool(f.get("cargo") and f.get("treadcore") and f.get("tmux") and f.get("copal_tm")
@@ -228,7 +261,8 @@ class Machines:
         out = []
         for r in RECIPES:
             ok, why = self.applies(r, f)
-            state = "applied" if ok and self.applied(r["id"], f) else "not applied" if ok else "not for it"
+            state = ("ready to run" if ok and r.get("errand") else "applied" if ok and self.applied(r["id"], f)
+                     else "not applied" if ok else "not for it")
             # Everything the confirmation shows, so it needs no second call.
             out.append({"id": r["id"], "title": r["title"], "state": state, "why": why, "root": True,
                         "command": self.command(r, name), "does": r["does"],
@@ -296,7 +330,8 @@ class Machines:
         if self.joined(name):
             raise SystemExit("%s is in the queue already" % name)
         if not (f.get("cargo") and f.get("treadcore")):
-            raise SystemExit("%s has no Rust or no treadcore checkout yet: apply fleet-node first, then probe" % name)
+            raise SystemExit("%s has no Rust or no treadcore checkout yet: apply %s first, then probe"
+                             % (name, "copal-node" if f.get("os_id") == "alpine" else "fleet-node"))
         caps = ["cpu", "gpu"] if f.get("nvidia_smi") and f.get("cuda") else ["cpu"]
         host = {"name": name, "target": m["target"], "caps": caps, "nice": 10}
         # The command exactly as the machine's rule allows it.
@@ -313,6 +348,27 @@ class Machines:
         m.setdefault("log", []).append({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "joined": host})
         self.keep()
         return host
+
+    def pull(self, name):
+        """(answered, a line a checkout): fleet-pull.sh run over ssh as the
+        user, fed on its stdin, so nothing is left on the machine."""
+        target = self.reg[name]["target"] if name in self.reg else next(
+            (h["target"] for h in self.cfg.get("hosts", []) if h["name"] == name), None)
+        if not target:
+            raise SystemExit("no machine %s" % name)
+        body = open(os.path.join(TOOLS, "fleet-pull.sh"), "rb").read()
+        argv = ["sh", "-s"] if target == "-" else SSH + [target, "sh -s"]
+        try:
+            r = subprocess.run(argv, input=body, capture_output=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            return False, ["no answer in ten minutes"]
+        out = r.stdout.decode(errors="replace").splitlines()
+        if r.returncode != 0 and not out:
+            return False, [(r.stderr.decode(errors="replace").strip().splitlines() or ["ssh failed"])[-1]]
+        m = self.reg.setdefault(name, {"target": target})
+        m.setdefault("log", []).append({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "pulled": out[-12:]})
+        self.keep()
+        return True, out
 
     # ---- crucible's lanes ------------------------------------------------------------
     # Paul, 28 October: "i want to see a button to add more gpu CUDA to the
@@ -403,6 +459,16 @@ def main(argv):
         print(json.dumps(ms.stage(argv[3], argv[4])))
     elif cmd == "join":
         print(json.dumps(ms.join(argv[3])))
+    elif cmd == "pull":
+        names = [h["name"] for h in ms.cfg.get("hosts", []) if not h.get("lane_of")] if len(argv) < 4 or argv[3] == "all" else [argv[3]]
+        bad = 0
+        for n in names:
+            ok, lines = ms.pull(n)
+            bad += not ok
+            for l in lines:
+                print("%s: %s" % (n, l))
+        print("pulled on %d machine(s)%s" % (len(names) - bad, ", %d did not answer" % bad if bad else ""))
+        sys.exit(1 if bad and len(names) == 1 else 0)
     elif cmd == "cuda-lanes":
         how = argv[3] if len(argv) > 3 else "list"
         if how == "list":

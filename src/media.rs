@@ -621,8 +621,6 @@ const FOOT_H: i32 = 88;
 
 /// Draw the pane. Returns a view to move to, if the operator asked.
 pub fn draw(ui: &mut Ui, m: &mut Media) -> Option<nav::View> {
-    let w = ui.c.w as i32;
-    let t = ui.t;
     let right = if m.fleet.is_empty() { String::new() } else { format!("{}  {} cards", m.fleet, m.size) };
     let (rest, go, _) = nav::header(ui, nav::View::Media, true, &right, None);
 
@@ -633,8 +631,7 @@ pub fn draw(ui: &mut Ui, m: &mut Media) -> Option<nav::View> {
     }
 
     if !m.error.is_empty() {
-        ui.label_in(PAD * 2, rest.y + 40, w - PAD * 4, "the card ledger cannot be read", &F10X20, t.alarm);
-        ui.label_in(PAD * 2, rest.y + 66, w - PAD * 4, &m.error, &F8X13, t.dim);
+        draw_wizard(ui, m, rest);
         return go;
     }
 
@@ -643,6 +640,69 @@ pub fn draw(ui: &mut Ui, m: &mut Media) -> Option<nav::View> {
     draw_foot(ui, m, foot);
     keys(ui, m);
     go
+}
+
+/// THE STEPS, WHERE THERE WAS A DEAD END. With no fleet named the pane said
+/// "the card ledger cannot be read" and stopped (Paul, 29 October: "help me
+/// run the commands that step a user through this, even if it runs make
+/// answers"). Now it says which step the checkout is at and runs it, in the
+/// same terminal pane every job uses, so the interview's questions are
+/// answered by the operator, typed here, as `ERASE` is. Once `make answers`
+/// has named a fleet the table takes over, and its buttons are steps 2 to 4.
+fn draw_wizard(ui: &mut Ui, m: &mut Media, rest: Rect) {
+    let t = ui.t;
+    let x = rest.x + PAD * 2;
+    let w = rest.w - PAD * 4;
+    let mut y = rest.y + 24;
+    ui.label_in(x, y, w, "Make a fleet's cards, a step at a time", &F10X20, t.ink);
+    y += 28;
+    ui.label_in(x, y, w, &m.error, &F8X13, t.warn);
+    y += 24;
+    let checkout = !m.root.as_os_str().is_empty();
+    let board = m.board_name().to_string();
+    // (what, the command, done yet, whether it is the step to take now)
+    let steps: [(&str, String, bool); 5] = [
+        ("Get the copal checkout, in ~/code", "git clone".into(), checkout),
+        ("Name the fleet: the interview (name, cards, user, key)", "make answers".into(), false),
+        ("Build the image for the board", format!("make img-{}", board), false),
+        ("Write card 1: pick the card, type ERASE twice when asked", format!("make sd-{}", board), false),
+        ("The next card: Prepare card N, then build and write again", "make answers-node N=2".into(), false),
+    ];
+    let now = if checkout { 1 } else { 0 };
+    for (i, (what, cmd, done)) in steps.iter().enumerate() {
+        let c = if *done { t.up } else if i == now { t.accent } else { t.dim };
+        let mark = if *done { "done" } else if i == now { "now" } else { "then" };
+        ui.label(x, y, &format!("{}.", i + 1), &F8X13, c);
+        ui.label(x + 24, y, mark, &F8X13, c);
+        ui.label_in(x + 70, y, w - 70 - 220, what, &F8X13, if i == now { t.ink } else { t.dim });
+        ui.label_in(x + w - 210, y, 210, cmd, &F8X13, c);
+        y += 22;
+    }
+    y += 12;
+    if !checkout {
+        ui.label_in(x, y, w, "Clone copal-alpine-linux into ~/code, then open this pane again.", &F8X13, t.dim);
+        return;
+    }
+    // A standalone machine's answers are replaced by the interview: shown
+    // first, so nothing on file is lost without being seen.
+    let standalone = std::fs::metadata(m.root.join("answers.txt")).map(|f| f.len() > 0).unwrap_or(false);
+    if standalone {
+        ui.label_in(x, y, w, "answers.txt is one standalone machine's: the interview replaces it.", &F8X13, t.dim);
+        y += 20;
+    }
+    let mut start: Option<(String, Vec<String>)> = None;
+    if ui.button(rect(x, y, 170, 22), "Start the interview", true) {
+        start = Some(("make answers -- name the fleet".into(), vec!["make".into(), "answers".into()]));
+    }
+    if standalone && ui.button(rect(x + 180, y, 190, 22), "Show what is on file", true) {
+        start = Some(("make answers-show".into(), vec!["make".into(), "answers-show".into()]));
+    }
+    y += 34;
+    ui.label_in(x, y, w, "The interview runs here: type its answers. When it ends, close the pane.", &F8X13, t.dim);
+    ui.label_in(x, y + 18, w, "The cards appear then; Build image, Write card and Prepare card are steps 3 to 5.", &F8X13, t.dim);
+    if let Some((title, argv)) = start {
+        m.start(title, argv);
+    }
 }
 
 fn draw_table(ui: &mut Ui, m: &mut Media, at: Rect) {

@@ -1205,6 +1205,7 @@ fn gui_loop<S: surface::Surface>(
                             machines::Ask::Probe(n) => (format!("{} probe {}", mcmd, q(n)), format!("probing {}", n)),
                             machines::Ask::Add(n, t) => (format!("{} add {} {}", mcmd, q(n), q(t)), format!("adding {}", n)),
                             machines::Ask::Join(n) => (format!("{} join {}", mcmd, q(n)), format!("joining {}", n)),
+                            machines::Ask::Pull(n) => (format!("{} pull {}", mcmd, q(n)), format!("pulling {}'s projects", n)),
                             machines::Ask::Apply { recipe, machine, .. } => {
                                 (format!("{} stage {} {}", mcmd, q(recipe), q(machine)), format!("copying {} to {}", recipe, machine))
                             }
@@ -1214,17 +1215,24 @@ fn gui_loop<S: surface::Surface>(
                         *said.lock().unwrap_or_else(|e| e.into_inner()) = format!("{}...", doing);
                         thread::spawn(move || {
                             let out = std::process::Command::new("sh").arg("-c").arg(&cmd).output();
-                            let (ok, line) = match out {
+                            let (ok, line, all) = match out {
                                 Ok(o) => (
                                     o.status.success(),
                                     String::from_utf8_lossy(if o.status.success() { &o.stdout } else { &o.stderr }).lines().last().unwrap_or("").to_string(),
+                                    String::from_utf8_lossy(&o.stdout).into_owned(),
                                 ),
-                                Err(e) => (false, e.to_string()),
+                                Err(e) => (false, e.to_string(), String::new()),
                             };
                             let msg = match (&ask, ok) {
                                 (machines::Ask::Apply { recipe, machine, target, command }, true) => {
                                     *hand.lock().unwrap_or_else(|e| e.into_inner()) = Some((machine.clone(), target.clone(), command.clone()));
                                     format!("{}: files copied and checked; its command is typed in {}'s Sessions tile", recipe, machine)
+                                }
+                                // A line a checkout, the machine's name taken off.
+                                (machines::Ask::Pull(n), true) => {
+                                    let pre = format!("{}: ", n);
+                                    let each: Vec<&str> = all.lines().filter_map(|l| l.strip_prefix(pre.as_str())).collect();
+                                    format!("{}: {}", n, if each.is_empty() { line.clone() } else { each.join("; ") })
                                 }
                                 (_, true) => format!("{}: done", doing),
                                 (_, false) => format!("{}: {}", doing, line),
