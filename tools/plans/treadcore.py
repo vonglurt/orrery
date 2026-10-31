@@ -2014,8 +2014,8 @@ class Plan:
     # a census at exactly 0.00). A run takes up where the last left off. What it ends with
     # goes in a slot, and the fleet reads the slot as it reads any version: 55 seeds, the
     # read on, two held-out reads. A step's own number is far too noisy to judge it by.
-    PATCH_INPUTS = 149  # senses 143, waves 3, the rules' answer 3
-    PATCH_STEP = 3 * (149 + 3) + 3
+    PATCH_INPUTS = 153  # senses 143, waves 3, the rules' answer 3, the best base 4
+    PATCH_STEP = 3 * (PATCH_INPUTS + 3) + 3
 
     @staticmethod
     def patch_write(path, theta, depth):
