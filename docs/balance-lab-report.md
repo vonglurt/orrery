@@ -168,6 +168,19 @@ We chose 12 s, because at 8 s strike drones took up much of the slack. Against t
 - **Workers not seen.** Base workers compile, but we have not seen them on screen.
 - **Thin sources.** Several game rules come from wikis and forums, and we did not verify them in play.
 
+**Both plans on.** The operator then made `advance_plan` forward and `mine_plan` raid the defaults, ahead of a census, and we measured the same 8 seeds again.
+
+**Table VI. With both plans on, against the 12 s reload alone.**
+
+| Measure | 12 s, plans off | 12 s, plans on |
+|---|---:|---:|
+| Shots per tank-minute | 2.74 | 1.88 |
+| Strike drone hits | 100 | 170 |
+| Tanks destroyed | 41 | 47 |
+| Hit rate | 0.30 | 0.31 |
+
+Shots fell again, but strike hits rose by 70%. Strikes are now about 70% as common as shells, so drones may be the next thing a player notices.
+
 ## VII. Conclusion
 
 The depot change alone did not clearly reduce shots. A 12 s mortar reload halves them, at the cost of more strikes and more tanks destroyed. Drones are now the next thing to watch, so a census of game 4 should read shots, strike hits and kills together, and a person should play it before we call it balanced.
