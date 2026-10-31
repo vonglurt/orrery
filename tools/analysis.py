@@ -266,6 +266,18 @@ def dial_history():
             "cells": [[round(math.log2(s.get(k, first[k]) / first[k]), 3) if s.get(k, first[k]) > 0 else 0 for s in steps] for k in keys[:36]]}
 
 
+def number_limits():
+    """RANGES at HEAD: the decrees, min = max, and how many numbers have a limit at all."""
+    decrees, limited = [], 0
+    for line in git("show", "HEAD:source/treadcore-brain/RANGES").splitlines():
+        f = line.split("#")[0].split()
+        if len(f) == 3:
+            limited += 1
+            if f[1] == f[2]:
+                decrees.append("%s = %s" % (f[0], f[1]))
+    return {"decrees": decrees, "limited": limited}
+
+
 def fleet_counts(q):
     tools = os.path.dirname(os.path.abspath(__file__))
     import collections
@@ -300,6 +312,7 @@ def main(q):
             out["net"] = net_analysis(p)
     try:
         out["fleet"] = fleet_counts(q)
+        out["limits"] = number_limits()
     except Exception as e:
         out["fleet"] = {"error": str(e)[:200]}
     out["seconds"] = round(time.time() - t0, 1)

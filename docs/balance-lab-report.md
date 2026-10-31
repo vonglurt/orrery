@@ -141,9 +141,28 @@ Ammunition is a weak lever here because tanks start with 24 shells, and a mortar
 
 Walls may also need more. If mortars dominate, a castle's protection against drones matters less than whether anything protects against shells. Red Alert's answer is that nothing does, and the counter is to go out and kill the artillery. That suits a game about leaving the base.
 
+## VI. Update: The Mortar, Ranges and the Advance
+
+The operator chose a longer mortar reload. Table V compares reloads on the same 8 seeds and map. Hit rate is shells that hit a target, over all shots.
+
+**Table V. Mortar reload, means over 8 seeds.**
+
+| Measure | Old game | 4 s, game 3 | 8 s | 12 s |
+|---|---:|---:|---:|---:|
+| Shots per tank-minute | 5.53 | 4.72 | 3.65 | 2.74 |
+| Strike drone hits | 63 | 95 | 143 | 100 |
+| Tanks destroyed | 29 | 35 | 50 | 41 |
+| Hit rate | 0.27 | 0.26 | 0.29 | 0.30 |
+
+We chose 12 s, because at 8 s strike drones took up much of the slack. Against the old game, 12 s halves the shots (-2.79, paired standard error 0.31). It also raises strike hits (+37.5, standard error 8.6) and tanks destroyed (+12.4, standard error 2.8). So the air is calmer but the game is more lethal, and whether that is fun needs a person to play it. The mortar and direct shot share one gun, so a lob also delays the direct shot. A reload is only a cap, and we picked among the values by this one map and these two figures, without a census.
+
+**Ranges.** The operator replaced a fixed list of locked values with one general rule: every number may have a minimum and maximum, and nothing moves it outside them. Some limits are constraints of the simulator, and some are a person's ruling. A decree is simply min = max. The brain holds to the ranges whatever it is given, and the search no longer proposes what would be clamped. Today's one decree is `castle_inside` = 2.
+
+**The advance.** New rewards pay for each tile gained on a base not of one's side (0.25), far more with a chain on something (1.0 on top), for building near the line (0.5), and for each stage done within 90 s of a capture (3.0): a call for help, a chain, wood cut, road built. The tile count is a ratchet on the seat's best distance to each base, so driving back and forth earns nothing past the first gain. A tank can still farm it by dying and pushing toward a different base. The behaviour itself, `advance_plan`, stays off until a census reads it, and the scenario `a-tank-takes-a-pillbox-and-advances` shows all four stages in one run, on one seed.
+
 ## VI. Limits
 
-- **No census.** The fleet began reading game 3 only today. No reward weight, wall share or crowding figure has been tested.
+- **No census.** The fleet began reading game 4 only today. No reward weight, wall share or crowding figure has been tested.
 - **One map, eight seeds, bots only.** No person has played this version, so we have no evidence yet on whether it is fun.
 - **All changes measured together.** Table IV cannot say which change did what.
 - **Workers not seen.** Base workers compile, but we have not seen them on screen.
@@ -151,8 +170,7 @@ Walls may also need more. If mortars dominate, a castle's protection against dro
 
 ## VII. Conclusion
 
-The depot change delivered the supply cut the operator asked for, but it did not clearly reduce shots, and drone hits rose. The shots are almost all mortars, so
-the next lever should be the mortar's price, not more ammunition cuts. To decide, we will count shots by source and run a census of a slower mortar, confirming it only if shots fall by more than two standard errors, with hits per shot rising, and with no family falling under its floor.
+The depot change alone did not clearly reduce shots. A 12 s mortar reload halves them, at the cost of more strikes and more tanks destroyed. Drones are now the next thing to watch, so a census of game 4 should read shots, strike hits and kills together, and a person should play it before we call it balanced.
 
 ## Acknowledgment
 

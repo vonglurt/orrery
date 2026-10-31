@@ -564,6 +564,11 @@ fn draw_fleet(ui: &mut Ui, at: Rect, a: &Value) {
         let r = rect(at.x + i as i32 * (lw + gap), y2, lw, bh);
         box_(ui, r, ti, a1.clone(), b1.clone(), i < 3);
     }
+    if let Some(l) = a.get("limits") {
+        let decrees: Vec<String> = arr(l, "decrees").iter().filter_map(|d| d.as_str().map(String::from)).collect();
+        let line = format!("By decree, part of the game: {}. {} numbers have a range.", if decrees.is_empty() { "none".to_string() } else { decrees.join(", ") }, n(l, "limited"));
+        ui.label_in(at.x, y2 - lh - 2, at.w, &line, &F8X13, t.warn);
+    }
     ui.label_in(at.x, y2 + bh + 8, at.w, &format!("Counted at {} from {} reads in the ledger.", s(a, "at"), n(a, "reads")), &F10X20, t.dim);
 }
 

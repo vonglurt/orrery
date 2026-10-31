@@ -163,6 +163,7 @@ class Plan:
         self.q = os.path.abspath(qdir)
         self.name = os.path.basename(self.q.rstrip("/"))
         self.cfg = load(os.path.join(self.q, "plan.json"), {})
+        self._ranges = None
         self.qcfg = load(os.path.join(self.q, "config.json"), {})
         # treadcore's machines; a GPU machine's crucible lane (caps
         # ["cuda"], named NAME-cuda) is the same machine again, and builds
@@ -364,6 +365,7 @@ class Plan:
     # ---- the weights -----------------------------------------------------------------
     def census_cmd(self, trial_text, seeds, seed0, out_id):
         w = self.cfg["weights"]
+        trial_text = self.ranged(trial_text)
         b = base64.b64encode(trial_text.encode()).decode()
         return (
             "set -e; [ -f ~/.cargo/env ] && . ~/.cargo/env; export PATH=$HOME/.cargo/bin:$PATH\n"
@@ -399,6 +401,38 @@ class Plan:
         with open(out, "w") as f:
             subprocess.run([sys.executable, "-I", os.path.join(self.tc, "scripts", "ledger.py"), root], stdout=f, check=True)
         return out
+
+    def ranges(self):
+        """{name: (min, max)} from the brain's RANGES: past these a number means nothing, or a
+        person has ruled it, min = max, a decree. The brain holds to them whatever it is given;
+        here the search stops asking for what it could not get."""
+        if self._ranges is None:
+            r = run(["git", "-C", self.tc, "show", "%s:source/treadcore-brain/RANGES" % self.sha()])
+            self._ranges = {}
+            for line in (r.stdout if r.returncode == 0 else "").splitlines():
+                f = line.split("#")[0].split()
+                if len(f) == 3:
+                    self._ranges[f[0]] = (float(f[1]), float(f[2]))
+        return self._ranges
+
+    def decreed(self):
+        return {k for k, (lo, hi) in self.ranges().items() if lo == hi}
+
+    def ranged(self, text):
+        """A trial's text with each number held to its range."""
+        out = []
+        for line in text.splitlines():
+            k, eq, v = line.partition("=")
+            r = self.ranges().get(k.strip())
+            try:
+                if eq and r and not line.lstrip().startswith("#"):
+                    n = float(v.split("#")[0])
+                    if not r[0] <= n <= r[1]:
+                        line = "%s = %g" % (k.strip(), min(r[1], max(r[0], n)))
+            except ValueError:
+                pass
+            out.append(line)
+        return "\n".join(out) + "\n"
 
     def game_at(self, commit):
         """The game's rules at a commit, source/treadcore-sim/GAME_VERSION, bumped by hand when
@@ -542,7 +576,7 @@ class Plan:
             # Four times what is wanted: the trials already read are dropped
             # below, and the rest must still fill the generation.
             r = run([sys.executable, "-I", os.path.join(self.tc, "scripts", "suggest.py"), self.ledger(), defaults, out,
-                     "--n", str(max(12, 4 * want)), "--seed", str(g), "--bound", str(s["bound"])])
+                     "--n", str(max(12, 4 * want)), "--seed", str(g), "--bound", str(s["bound"]), "--also-skip", ",".join(sorted(self.decreed()))])
             if r.returncode != 0:
                 raise SystemExit("suggest.py: " + r.stderr[-400:])
             self.state["gen"] += 1
@@ -560,7 +594,7 @@ class Plan:
             for f in ab + wide + fit:
                 if len(picked) >= want:
                     break
-                text = open(f).read()
+                text = self.ranged(open(f).read())
                 key = self.trial_key(text)
                 # suggest.py's reads again are the sequential read's to make
                 # (read_on_jobs, pooled with the first): not new trials.
@@ -681,7 +715,10 @@ class Plan:
         out as ab-NAME-VERSION.weights; s's count of them kept for health."""
         caps, choices = self.versions()
         want = []
+        fixed = self.decreed()
         for name, on in sorted(caps.items()):
+            if name in fixed:
+                continue
             want.append(("ab-%s-%s" % (name, "off" if on else "on"),
                          "# A/B: %s %s, the rest as the defaults\ncaps = baseline, %s%s\n" % (name, "off" if on else "on", "-" if on else "", name)))
         slots = {r["slot"]: r for r in self.models()}
@@ -693,8 +730,9 @@ class Plan:
                           key="dead:%s" % self.trial_key(v["text"]))
         patches = os.path.join(self.q, "patches")
         for name, (dflt, vs) in sorted(choices.items()):
+            lo, hi = self.ranges().get(name, (0, len(vs)))
             for i, v in enumerate(vs):
-                if i == int(round(dflt)):
+                if i == int(round(dflt)) or not lo <= i <= hi:
                     continue
                 # A slot with no patch in it stops a census: asked for only when trained.
                 if name == "patch":
