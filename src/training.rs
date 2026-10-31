@@ -100,6 +100,8 @@ pub struct Net {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct State {
     pub zoom: Option<usize>,
+    /// The Algorhythm page's tab and views.
+    pub analysis: crate::analysis::State,
     pub operator: bool,
     pub ctl: Option<String>,
     /// What the last control said, shown until the next.
@@ -291,6 +293,8 @@ pub struct Model {
     pub best: String,
     pub net: Option<Net>,
     pub algo: Option<Algo>,
+    /// tools/analysis.py's document.
+    pub analysis: Option<json::Value>,
     pub quality: Option<Quality>,
     pub queue: Option<Queue>,
 }
@@ -555,6 +559,7 @@ impl Model {
                     .unwrap_or_default(),
             });
         }
+        m.analysis = v.get("analysis").cloned();
         if let Some(x) = v.get("algorhythm").filter(|x| x.get("dials").is_some()) {
             let num = |v: &json::Value, k: &str| v.get(k).and_then(|n| n.as_num()).unwrap_or(0.0);
             m.algo = Some(Algo {
@@ -799,7 +804,12 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State, view: nav::View) -> Option<n
                     st.zoom = Some(i);
                 }
             }
-            8 => draw_algorhythm(ui, page, m),
+            8 => {
+                let rest = crate::analysis::tabs(ui, page, &mut st.analysis);
+                if !crate::analysis::draw(ui, rest, m.analysis.as_ref(), &mut st.analysis) {
+                    draw_algorhythm(ui, rest, m);
+                }
+            }
             _ => draw_fleet_rows(ui, page, m),
         }
         return go;

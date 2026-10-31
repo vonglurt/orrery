@@ -19,4 +19,5 @@ fleet-commanders|Fleet Commanders|orrery · the fleet · commanders
 fleet-orchestration|Commanding the Fleet|orrery · the fleet · orchestration
 brain-versions|Many Versions of One Brain|orrery · the brain · whole-number choices
 algorhythm|Algorhythm|orrery · the brain · hybrid programming
+analysis|Reading a Growing Brain|orrery · the brain · analysis
 LIST

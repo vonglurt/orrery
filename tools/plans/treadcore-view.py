@@ -318,6 +318,24 @@ def algorhythm():
     return {"switches": switches, "dials": dials, "caps": [{"name": n, "on": o == "true"} for n, o in caps], "patches": patches}
 
 
+def analysis():
+    """analysis.py's document, and a fresh one begun in the background when it is old: it
+    takes a minute, and this runs every few seconds."""
+    if not QDIR:
+        return None
+    f = os.path.join(QDIR, "plan", "analysis.json")
+    age = time.time() - os.path.getmtime(f) if os.path.exists(f) else 1e9
+    lock = f + ".lock"
+    if age > 600 and not (os.path.exists(lock) and time.time() - os.path.getmtime(lock) < 300):
+        open(lock, "w").close()
+        tool = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "analysis.py")
+        subprocess.Popen([sys.executable, "-I", tool, QDIR], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        return json.loads(read(f))
+    except ValueError:
+        return None
+
+
 def quality():
     q = read(os.path.join(FT, "best.json"))
     if q:
@@ -341,5 +359,5 @@ if __name__ == "__main__":
     run = newest_run()
     qd = queue()
     doc = {"fleet": FLEET, "queue": qd, "project": "treadcore", "at": time.strftime("%H:%M:%S"),
-           "machines": machines(run, qd), "run": run, "loop": loop(), "net": net(), "algorhythm": algorhythm(), "quality": quality()}
+           "machines": machines(run, qd), "run": run, "loop": loop(), "net": net(), "algorhythm": algorhythm(), "analysis": analysis(), "quality": quality()}
     print(json.dumps(doc))

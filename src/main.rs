@@ -65,6 +65,7 @@ mod seat;
 mod sessions;
 #[allow(dead_code)]
 mod sftp;
+mod analysis;
 mod orchestrate;
 mod storage;
 #[allow(dead_code)]
@@ -737,6 +738,11 @@ fn write_frame(
                     operator: std::env::var("ORRERY_FRAME_OPERATOR").is_ok(),
                     // ORRERY_FRAME_PAGE=N draws the queue's page N (0 Fleet, 1 Runs, 2 Found, 3 Net, 4 Flags, 5 Candidates,
                     // 6 Keeper, 7 Commits).
+                    analysis: analysis::State {
+                        tab: std::env::var("ORRERY_FRAME_TAB").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+                        hybrid: true,
+                        ..Default::default()
+                    },
                     page: std::env::var("ORRERY_FRAME_PAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
                     ..training::State::default()
                 };
