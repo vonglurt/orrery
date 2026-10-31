@@ -1,0 +1,138 @@
+<meta charset="utf-8">
+<title>Too Many Shots</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+/* Layout: a lab report on orrery's paper -- a sticky bar of section
+   numerals, a masthead, then numbered sections at a reading measure, with
+   code and diagrams set dark like a terminal. Palette: orrery's draw.rs
+   LIGHT and DARK, as the user guide. */
+:root {
+  --base: #fce2ab; --panel: #f7d79a; --tile: #fff2d4; --ink: #121212;
+  --dim: #6b5836; --line: #c4a870; --accent: #87704f; --up: #4a7c4e;
+  --term-bg: #1c1a16; --term-ink: #f0e3c4; --term-dim: #8a7d63;
+  --rule: color-mix(in srgb, var(--line) 70%, transparent);
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --cond: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --measure: 68ch;
+  --step--1: clamp(.78rem, .76rem + .1vw, .84rem);
+  --step-0: clamp(1rem, .97rem + .16vw, 1.08rem);
+  --step-1: clamp(1.18rem, 1.12rem + .3vw, 1.36rem);
+  --step-2: clamp(1.45rem, 1.32rem + .6vw, 1.9rem);
+  --step-3: clamp(1.9rem, 1.6rem + 1.3vw, 2.8rem);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+    --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+    --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+    --rule: color-mix(in srgb, var(--line) 100%, transparent);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --base: #181818; --panel: #121212; --tile: #1f1f1f; --ink: #d0daed;
+  --dim: #a08a66; --line: #3a3a3a; --accent: #fccf8a; --up: #8fbf7a;
+  --term-bg: #0e0e0e; --term-ink: #d0daed; --term-dim: #7c705c;
+  --rule: color-mix(in srgb, var(--line) 100%, transparent);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--base); color: var(--ink);
+  font-family: var(--serif); font-size: var(--step-0); line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--base); }
+.wrap { max-width: 980px; margin: 0 auto; }
+
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
+  background: color-mix(in srgb, var(--base) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+  margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+  padding-inline: max(16px, env(safe-area-inset-left, 0px));
+}
+.bar-in {
+  max-width: 980px; margin: 0 auto; padding-block: 9px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  font-family: var(--cond); font-size: var(--step--1);
+}
+.bar-in strong { letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin-right: auto; }
+.bar-in a { color: var(--dim); text-decoration: none; border-bottom: 1px solid transparent; }
+.bar-in a:hover, .bar-in a:focus-visible { color: var(--ink); border-bottom-color: var(--accent); }
+
+header.mast { padding-block: clamp(36px, 6vw, 72px) clamp(24px, 4vw, 40px); }
+.eyebrow { font-family: var(--mono); font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+h1 { font-family: var(--cond); font-weight: 700; font-size: var(--step-3); line-height: 1.05; letter-spacing: -.015em; text-wrap: balance; margin: 0 0 18px; max-width: 22ch; }
+.front p, .front li { font-size: var(--step--1); color: var(--dim); }
+.front p.note { font-family: var(--mono); letter-spacing: .04em; color: var(--accent); }
+.front ul { margin: 0; }
+
+nav.toc { border-top: 1px solid var(--rule); padding-block: 22px 30px; }
+nav.toc h2 { font-size: var(--step--1); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-family: var(--mono); font-weight: 500; margin: 0 0 10px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; columns: 2 18rem; column-gap: 32px; }
+nav.toc li { break-inside: avoid; padding: 3px 0; font-family: var(--cond); }
+nav.toc a { color: var(--ink); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { text-decoration: underline; text-decoration-color: var(--accent); }
+
+section { padding-block: clamp(28px, 4vw, 48px); border-top: 1px solid var(--rule); scroll-margin-top: 48px; }
+h2 { font-family: var(--cond); font-weight: 700; font-size: var(--step-2); line-height: 1.12; text-wrap: balance; margin: 0 0 18px; }
+h3 { font-family: var(--cond); font-weight: 600; font-size: var(--step-1); line-height: 1.25; text-wrap: balance; margin: 30px 0 10px; scroll-margin-top: 48px; }
+p, ul, ol, blockquote { max-width: var(--measure); }
+p { margin: 0 0 1em; }
+ul, ol { margin: 0 0 1em; padding-left: 1.3em; }
+li { margin-bottom: .35em; }
+li > ul, li > ol { margin: .35em 0 .2em; }
+li::marker { color: var(--accent); }
+p.note { font-size: var(--step--1); color: var(--dim); }
+strong { font-weight: 600; }
+a { color: var(--ink); text-underline-offset: 3px; text-decoration-color: var(--accent); }
+code { font-family: var(--mono); font-size: .86em; }
+p code, li code, td code, th code { color: var(--accent); word-break: break-word; }
+blockquote { margin: 0 0 1.2em; padding: 12px 18px; border-left: 3px solid var(--accent); background: var(--tile); font-family: var(--mono); font-size: var(--step--1); line-height: 1.6; }
+blockquote p { margin: 0; }
+
+.code { position: relative; margin: 0 0 1.3em; background: var(--term-bg); border-radius: 4px; overflow-x: auto; max-width: 100%; }
+.code pre { margin: 0; padding: 16px 18px; color: var(--term-ink); font-family: var(--mono); font-size: .8rem; line-height: 1.55; tab-size: 4; }
+.code code { font-size: inherit; color: inherit; }
+.code .lang { position: absolute; top: 6px; right: 10px; font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--term-dim); }
+.code.diagram { background: var(--tile); border: 1px solid var(--rule); }
+.code.diagram pre { color: var(--ink); }
+
+.table { overflow-x: auto; max-width: 100%; margin: 0 0 1.4em; }
+table { border-collapse: collapse; font-size: var(--step--1); line-height: 1.5; min-width: 30rem; }
+th { font-family: var(--cond); font-weight: 600; text-align: left; padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line); vertical-align: bottom; }
+td { padding: 8px 14px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: none; }
+td:first-child { font-weight: 600; font-family: var(--cond); }
+
+figure { margin: 0 0 1.4em; }
+figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); }
+figcaption { margin-top: 8px; font-size: var(--step--1); color: var(--dim); max-width: var(--measure); }
+
+footer { border-top: 1px solid var(--rule); padding-block: 24px 48px; font-size: var(--step--1); color: var(--dim); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="bar"><div class="bar-in"><strong><a href="index.html">orrery</a> · lab report</strong><a href="#abstract">Abstract</a><a href="#si">I</a><a href="#sii">II</a><a href="#siii">III</a><a href="#siv">IV</a><a href="#sv">V</a><a href="#svi">VI</a><a href="#svii">VII</a><a href="#acknowledgment">Acknowledgment</a><a href="#references">References</a></div></div>
+<div class="wrap">
+  <header class="mast">
+    <p class="eyebrow">orrery · the game · balance</p>
+    <h1>Too Many Shots: Ammunition, Walls and Castles as Balance Levers in a Tank Game</h1>
+    <div class="front"><p class="note">Paul Richeson · Lab Report — IEEE Format · 30 October 2026</p><p>Copyright (c) 2026 Paul Richeson. MIT licensed, as orrery.</p><p>Companions: treadcore <code>source/treadcore-sim/src/rules.rs</code>, <code>source/treadcore-brain/src/front.rs</code>, <code>source/treadcore-brain/src/ledger.rs</code>; orrery <code>tools/plans/treadcore.py</code>.</p></div>
+  </header>
+  <nav class="toc" aria-label="Contents"><h2>Contents</h2><ol><li><a href="#abstract">Abstract</a></li><li><a href="#si">I. Introduction</a></li><li><a href="#sii">II. How Other Games Treat Walls and Occlusion</a></li><li><a href="#siii">III. The Changes</a></li><li><a href="#siv">IV. Results</a></li><li><a href="#sv">V. Discussion: Allowing Shooting and Keeping It Fun</a></li><li><a href="#svi">VI. Limits</a></li><li><a href="#svii">VII. Conclusion</a></li><li><a href="#acknowledgment">Acknowledgment</a></li><li><a href="#references">References</a></li></ol></nav>
+  <main>
+  <section id="abstract"><h2>Abstract</h2><p>An operator watching bot matches of a tank game reported too many shots being fired. We changed the game's supply, walls and scoring in response, and measured the result. Depots now make one item a second, shared, in place of an unlimited two shells and two drones a second per tank. Walls gain a second purpose: a tank inside a castle takes half damage from drones. Turrets past two in one castle slow all of that castle's guns, and new rewards pay for whole supply trips, rotating between bases, and standing castles. Over eight seeds of one map, shots fell from 5.53 to 4.72 per tank-minute, a difference of 1.9 standard errors, which is just below our bar. Strike drone hits rose from 63 to 95 a match. We therefore have not solved the reported problem. Nearly all shots are indirect, and our arithmetic suggests pillboxes can now supply more shells than depots. We review how other games use walls and occlusion, and we state what to test next. No census of these changes has finished.</p><p><strong>Index Terms:</strong> game balance, line of sight, real-time strategy, resource economy, reward shaping, simulation.</p></section><section id="si"><h2>I. Introduction</h2><p>A game's balance is partly a question of how much shooting it allows. If shots are free, position and timing stop mattering, and if they are too scarce, a player spends the match driving to supply and not fighting. The operator asked for "a balance play" that still allows shooting and stays fun.</p><p>The operator named six levers: less ammunition; rewards for leaving a base full and returning low; rotation between bases; a sensor for base ammunition, distance and direction; a soft limit on turrets and bases past two per castle; and walls that stop direct shots and reduce drone damage. This report describes each, what it does, and what we measured.</p></section><section id="sii"><h2>II. How Other Games Treat Walls and Occlusion</h2><p>We searched for how comparable games use walls, cover and supply. Sources vary in quality, and several are community wikis or forum posts, so we mark them. We did not play or test these games ourselves.</p><p><strong>Table I. Walls and occlusion in other games.</strong></p><div class="table"><table><thead><tr><th>Game</th><th>Rule</th><th>Lesson</th><th>Source quality</th></tr></thead><tbody><tr><td>Bolo (1987)</td><td>Walls and trees block bullets; a tank enclosed in forest cannot be seen; trees are the builder's money</td><td>The direct ancestor of our rules</td><td>Project documents [1], [2]</td></tr><tr><td>Logo Bolo</td><td>Bases hold limited armour and ammunition that regenerate slowly</td><td>A precedent for a shared depot store</td><td>A re-creation's README [2]</td></tr><tr><td>Red Alert</td><td>Concrete walls block direct fire such as tank cannon; artillery and aircraft are unaffected</td><td>Walls that stop one class of weapon make weapon choice matter</td><td>Search summary of a community wiki [3]</td></tr><tr><td>Red Alert 2</td><td>Some tanks fire over walls</td><td>Exceptions can carry a unit's identity</td><td>As above [3]</td></tr><tr><td>Company of Heroes 2</td><td>Heavy cover reported as -50% damage, by direction; accuracy penalties in cover</td><td>A visible, large, simple bonus</td><td>Forum report and patch note [4]; no official source found</td></tr><tr><td>StarCraft: Brood War</td><td>About a 53% hit chance from low ground or under trees; sources disagree on the exact figure</td><td>Occlusion as a chance, not a wall</td><td>Community wikis [5], [6]</td></tr><tr><td>Age of Empires II</td><td>Palisades slow enemies and give early warning</td><td>Walls buy time and warning, not only protection</td><td>Community wiki [7]</td></tr></tbody></table></div><p>Three patterns recur. Walls differ by weapon class, so a wall alone is not a complete answer. Cover works best when it is easy to see. And walls often buy time as much as they reduce damage. For supply, a Cornell lecture frames resources as sources and sinks and warns that underpriced actions get overused [8], which matches what we see. Deus Ex: Human Revolution shows the risk on the other side: cutting ammunition drew complaints of scarcity [9].</p><p>For rewards, Ng, Harada and Russell show that shaping of the form γΦ(s′) − Φ(s) leaves optimal policies unchanged, and they discuss agents looping to collect a bonus [10]. Our new rewards are not of that form. They change what the search prefers, on purpose, and so they can be farmed.</p></section><section id="siii"><h2>III. The Changes</h2><p><strong>Table II. What changed (game version 3).</strong></p><div class="table"><table><thead><tr><th>Lever</th><th>Before</th><th>Now</th></tr></thead><tbody><tr><td>Depot supply</td><td>2 shells/s and 2 drones/s for each tank, unlimited</td><td>1 item/s in all, round 6 kinds; store of 20 each, shared; starts empty</td></tr><tr><td>Pillboxes</td><td>Hold 8, regrow 1 per 10 s</td><td>Unchanged, at the operator's choice</td></tr><tr><td>Trees</td><td>Never regrew</td><td>Regrow after 2 minutes</td></tr><tr><td>Tank in a castle</td><td>No protection from drones</td><td>Half drone damage, with 8 walls within 6 tiles</td></tr><tr><td>Turrets past 2 within 12 tiles</td><td>Full rate</td><td>Each extra adds half a reload to all</td></tr><tr><td><code>castle_inside</code> default</td><td>6.53</td><td>2</td></tr></tbody></table></div><p><strong>Walls.</strong> A wall already blocked flat shots and pillbox fire through line of sight. We left indirect shells unchanged, following Red Alert's distinction, so walls do not make a castle immune. The 50% share is our starting figure, taken from the reported Company of Heroes 2 value, and no test has tuned it.</p><p><strong>The soft limit.</strong> We read "castles of turrets and bases more than 2" as discouraging more than two guns in one castle. Nothing refuses a build. Depots are fixed by the map and are not limited in play. Held score no longer counts guns past two in a group. Depot holdings still count in full, so the limit on bases is weaker than the limit on turrets.</p><p><strong>Rewards.</strong> Each is added to a seat's score, and so shapes what the fleet's search selects.</p><p><strong>Table III. New rewards.</strong></p><div class="table"><table><thead><tr><th>Reward</th><th>Paid for</th><th>Weight</th><th>Guard against farming</th></tr></thead><tbody><tr><td>Full sortie</td><td>Leaving a base at 90% shells or more</td><td>0.5</td><td>Needs a shot fired since the last sortie</td></tr><tr><td>Low return</td><td>Reaching a base at 25% shells or less</td><td>0.5</td><td>Needs shells to be spent</td></tr><tr><td>Rotation</td><td>Reaching a base other than the last</td><td>0.75</td><td>That base must hold at least 5 shells</td></tr><tr><td>Castle</td><td>Each castle standing, over match length</td><td>3.0</td><td>Needs a gun among 8 walls; extra guns add nothing</td></tr><tr><td>Enemy base entry</td><td>Each visit</td><td>0.5</td><td>Once a visit; no guard against repeat visits</td></tr><tr><td>Raid</td><td>Mine laid past the battle line, then home alive</td><td>1.5</td><td>Needs the return</td></tr><tr><td>Mine hit</td><td>Hostile tank caught</td><td>1.0</td><td>None needed</td></tr></tbody></table></div><p>These weights are starting guesses. A tank could still earn the low return by firing wildly, because the reward does not ask whether its shots hit. The existing direct-hit reward does not cover mortars, which are nearly all the shots.</p><p><strong>The sensor.</strong> Four new inputs give the best base's shells, distance and bearing, where "best" means most shells for the road. The transform now takes 153 inputs. The trained nets keep their 143, because every net on file was made for that shape, so they do not see this sensor. The rule brain uses it too: <code>home_pick</code> sends a tank to the best base in place of the nearest, and it is on by default.</p><p><strong>Battle lines and mines.</strong> A line is where the nearest ground of ours is as far as the nearest of theirs. The choice <code>mine_plan</code> selects mines on the approach, across the line, or a raid into an enemy base that lays one and runs. It stays off until a census reads it.</p></section><section id="siv"><h2>IV. Results</h2><p>We counted events over eight 8-minute matches of 16 tanks on one map (<code>naval</code>), on the same seeds, before the ammunition change (commit e34d762) and with every change above.</p><p><strong>Table IV. Shooting per match (means over 8 seeds).</strong></p><div class="table"><table><thead><tr><th>Measure</th><th>Old game</th><th>Game 3</th><th>Change</th></tr></thead><tbody><tr><td>Shots per tank-minute</td><td>5.53</td><td>4.72</td><td>-15%</td></tr><tr><td>Direct shots</td><td>7.6</td><td>4.8</td><td>-37%</td></tr><tr><td>Indirect shots</td><td>700</td><td>600</td><td>-14%</td></tr><tr><td>Shells that hit something</td><td>190</td><td>158</td><td>-17%</td></tr><tr><td>Strike drone hits</td><td>63</td><td>95</td><td>+52%</td></tr><tr><td>Tanks destroyed</td><td>29</td><td>35</td><td>+22%</td></tr></tbody></table></div><p>The drop in shots is -0.80 per tank-minute, with a paired standard error of 0.42 (1.9 standard errors), just under the project's bar of two, so we read it as likely but not established. The rise in strike hits is 32 with a standard error of 13 (2.5 standard errors), past the bar. The rise in tanks destroyed is 1.7 standard errors. (The commit message of 71f3578 gives 4.85 and 56, from arithmetic done by hand; the figures here are computed from the raw counts.) A match is chaotic: one test's result swung from 0 to 8 seats answering a ping as the tree regrowth moved between 100 s and 180 s. Eight seeds of one map can only give a rough figure.</p><p>Three things stand out:</p><ol><li><strong>Almost every shot is a mortar.</strong> About 99% of shots are indirect. Walls stop direct fire, so walls do almost nothing about what the operator sees.</li><li><strong>Drones rose.</strong> Strike hits increased by about half. We have not established why. Shots and strikes may be substitutes, and the kill count rose too, so the game may have grown more lethal, not less.</li><li><strong>Pillboxes may now be the larger source of shells.</strong> With 20 pillboxes owned, regrowth could supply up to 2 shells a second across the map. Ten depots at one item a second, round six kinds, would make about 1.7. We did not count which source actually fed the shots, and refineries also supply shells.</li></ol></section><section id="sv"><h2>V. Discussion: Allowing Shooting and Keeping It Fun</h2><p>The aim is not fewer shots for its own sake. A shot is fun when it was a choice, when it can hit, and when missing costs something. At 5 shots a tank-minute, each tank fires once in about 12 seconds, and 16 tanks together fire over a shot a second. With about one shell in four hitting, the air is full of misses.</p><p>Ammunition is a weak lever here because tanks start with 24 shells, and a mortar shot is cheap. Cutting supply further risks the Deus Ex result, in which players simply feel starved. Three options address the shot itself, and we would test them in this order:</p><ol><li><strong>Price the mortar.</strong> A longer reload or two shells a shot targets the 99% directly and leaves direct fire free.</li><li><strong>Reward hits, not firing.</strong> Extend the hit reward to indirect shells, and pay a small cost for a miss. The low-return reward then cannot be earned by firing wildly.</li><li><strong>Count pillbox shells.</strong> Measure each source's share before cutting anything. The operator kept pillboxes as they are, so this needs their decision.</li></ol><p>Walls may also need more. If mortars dominate, a castle's protection against drones matters less than whether anything protects against shells. Red Alert's answer is that nothing does, and the counter is to go out and kill the artillery. That suits a game about leaving the base.</p></section><section id="svi"><h2>VI. Limits</h2><ul><li><strong>No census.</strong> The fleet began reading game 3 only today. No reward weight, wall share or crowding figure has been tested.</li><li><strong>One map, eight seeds, bots only.</strong> No person has played this version, so we have no evidence yet on whether it is fun.</li><li><strong>All changes measured together.</strong> Table IV cannot say which change did what.</li><li><strong>Workers not seen.</strong> Base workers compile, but we have not seen them on screen.</li><li><strong>Thin sources.</strong> Several game rules come from wikis and forums, and we did not verify them in play.</li></ul></section><section id="svii"><h2>VII. Conclusion</h2><p>The depot change delivered the supply cut the operator asked for, but it did not clearly reduce shots, and drone hits rose. The shots are almost all mortars, so the next lever should be the mortar's price, not more ammunition cuts. To decide, we will count shots by source and run a census of a slower mortar, confirming it only if shots fall by more than two standard errors, with hits per shot rising, and with no family falling under its floor.</p></section><section id="acknowledgment"><h2>Acknowledgment</h2><p>Paul Richeson set the direction and chose the rules. Claude (Anthropic) wrote the code, ran the measurements and drafted this report.</p></section><section id="references"><h2>References</h2><p>[1] "Bolo FAQ and MacBolo instructions," archived documentation. https://websites.umich.edu/~archive/mac/game/war/bolo/misc/recgamesbolofaq1.9.txt</p><p>[2] B. Kurtovic, "Logo Bolo: a re-envisioning of the classic tank game by Stuart Cheshire in NetLogo." https://git.benkurtovic.com/ben/lobo</p><p>[3] Command &amp; Conquer Wiki, "Wall." https://cnc.fandom.com/wiki/Wall_(Tiberium_Alliances)</p><p>[4] Company of Heroes 2 community pages and forums. https://www.coh2.org/guides/5732/company-of-heroes-2-basic-concepts-and-glossary</p><p>[5] Liquipedia, "Terrain Features," StarCraft. https://liquipedia.net/starcraft/Terrain_Features</p><p>[6] StarCraft AI Wiki, "Chance to Hit." https://www.starcraftai.com/wiki/Chance_to_Hit</p><p>[7] Liquipedia, "Palisade Wall," Age of Empires. https://liquipedia.net/ageofempires/Palisade_Wall</p><p>[8] Cornell University CS 3152, "Balance," lecture slides, 2013. https://cs.cornell.edu/courses/cs3152/2013sp/lectures/07-Balance.pdf</p><p>[9] Game Informer, "Why is ammo so scarce in Deus Ex: Human Revolution," 2011. https://www.gameinformer.com/b/news/archive/2011/08/17/why-is-ammo-so-scarce-in-deus-ex-human-revolution.aspx</p><p>[10] A. Y. Ng, D. Harada and S. Russell, "Policy invariance under reward transformations: Theory and application to reward shaping," in <em>Proc. Int. Conf. Machine Learning</em>, 1999. https://mlanthology.org/icml/1999/ng1999icml-policy/</p></section>
+  </main>
+  <footer>
+    <p>Paul Richeson, 28 October 2026. MIT licensed, as orrery. The Markdown original and the example's source are in orrery: <code>docs/appkit-gui-lab-report.md</code> and <code>docs/appkit-example/</code>.</p>
+  </footer>
+</div>
