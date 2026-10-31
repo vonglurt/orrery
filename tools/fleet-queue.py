@@ -25,6 +25,10 @@ a keeper that keeps it all running, and two ways to stop.
     tools/fleet-queue.py DIR runs            the runs asked for, and where each is
     tools/fleet-queue.py DIR cancel RID      a run takes no more jobs; its queued
                                              jobs leave the queue
+    tools/fleet-queue.py DIR stop-job ID     one job, and nothing else: queued, it leaves
+                                             the queue; running, it is stopped on its
+                                             machine at the keeper's next beat, and its
+                                             lane goes on to the next job
     tools/fleet-queue.py DIR approve RID     a prepared promotion becomes main
     tools/fleet-queue.py DIR push-check      can this machine push the project's branch?
     tools/fleet-queue.py DIR flags [--all] [--brief]
@@ -102,7 +106,7 @@ def now():
 class Queue:
     def __init__(self, d):
         self.d = os.path.abspath(d)
-        for sub in ("queue", "running", "done", "failed", "stopped", "logs", "results", "lanes"):
+        for sub in ("queue", "running", "done", "failed", "stopped", "logs", "results", "lanes", "stop-job"):
             os.makedirs(os.path.join(self.d, sub), exist_ok=True)
         self.lock = threading.Lock()
         self.restarting = False
@@ -261,6 +265,11 @@ def run_job(q, host, job, log):
             return 124
         finally:
             q.procs.pop(jid, None)
+
+
+def stop_asked(q, jid):
+    """`stop-job ID` asked for this one."""
+    return os.path.exists(q.p("stop-job", jid))
 
 
 def stop_remote(host, jid):
@@ -526,7 +535,9 @@ def work(q, host, j, say):
         say("running", j)
         q.event("started", job=j["id"], host=name, kind=j.get("kind"))
         t0 = now()
-        rc = run_job(q, host, j, log) if send(q, host, j, log) else 1
+        rc = 1
+        if send(q, host, j, log) and not stop_asked(q, j["id"]):
+            rc = run_job(q, host, j, log)
         ok = rc == 0
         if ok and j.get("deliver"):
             say("delivering", j)
@@ -534,7 +545,7 @@ def work(q, host, j, say):
         if ok and j.get("fetch"):
             say("fetching", j)
             ok = fetch(q, host, j, log)
-        if q.flag("STOP_NOW") and not ok:
+        if (q.flag("STOP_NOW") or stop_asked(q, j["id"])) and not ok:
             dest = "stopped"
         elif q.restarting and not ok:
             # The keeper restarts for new code: what it cut short runs again.
@@ -559,6 +570,10 @@ def work(q, host, j, say):
             json.dump(j2, f, indent=1)
         os.rename(j["_file"], q.p(dest, os.path.basename(j["_file"])))
         q.event(dest, job=j["id"], host=name, kind=j.get("kind"), seconds=j2["seconds"])
+        try:
+            os.remove(q.p("stop-job", j["id"]))
+        except OSError:
+            pass
         # The breaker: failures in a row, any host, any kind.
         with q.lock:
             q.streak = q.streak + 1 if dest == "failed" else 0
@@ -719,6 +734,14 @@ def keeper(q):
                     t = threading.Thread(target=lane, args=(q, h, alive), daemon=True)
                     t.start()
                     threads[h["name"]] = t
+            # One job stopped (`stop-job`): its lane sees why, files it under stopped/ and goes
+            # on. A job not started yet is its lane's to skip, and one past its command finishes.
+            for jid in os.listdir(q.p("stop-job")):
+                if jid in q.procs:
+                    p, host = q.procs[jid]
+                    q.event("stopping job", job=jid, host=host["name"])
+                    stop_remote(host, jid)
+                    p.terminate()
             if q.flag("STOP_NOW"):
                 q.event("stopping now")
                 alive.clear()
@@ -1178,6 +1201,21 @@ def main(argv):
         open(q.p("STOP_NOW"), "w").close()
         q.event("stop now")
         print("stopping now: running jobs are stopped, results collected, the keeper ends")
+    elif cmd == "stop-job":
+        if len(argv) < 3:
+            sys.exit("stop-job ID")
+        jid = argv[2]
+        waiting = [j for j in q.jobs_in("queue") if j["id"] == jid]
+        if waiting:
+            os.rename(waiting[0]["_file"], q.p("stopped", os.path.basename(waiting[0]["_file"])))
+            q.event("job stopped", job=jid, was="queued")
+            print("%s left the queue" % jid)
+        elif any(j["id"] == jid for j in q.jobs_in("running")):
+            open(q.p("stop-job", jid), "w").close()
+            q.event("stop job", job=jid)
+            print("%s stops at the keeper's next beat; its lane goes on to the next job" % jid)
+        else:
+            sys.exit("%s is neither queued nor running" % jid)
     elif cmd == "shutdown-now":
         open(q.p("STOP_ADDING"), "w").close()
         open(q.p("SHUTDOWN"), "w").close()
