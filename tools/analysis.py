@@ -62,6 +62,8 @@ def reads():
     place = {c: i for i, c in enumerate(order)}  # 0 is newest
     today = weights_at("HEAD")
     rows = []
+    game = git("show", "HEAD:source/treadcore-sim/GAME_VERSION").strip()
+    games = {}
     try:
         lines = open(os.path.join(TC, "build/ledger/fleet.tsv")).read().splitlines()
     except OSError:
@@ -77,6 +79,11 @@ def reads():
         except (KeyError, ValueError):
             continue
         if se <= 0 or int(r.get("seeds") or 0) < 12:
+            continue
+        # A read of an older game says nothing of this one's ground.
+        if c not in games:
+            games[c] = git("show", c + ":source/treadcore-sim/GAME_VERSION").strip()
+        if games[c] != game:
             continue
         base = weights_at(c)
         if not base:

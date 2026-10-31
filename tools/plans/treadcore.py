@@ -400,6 +400,13 @@ class Plan:
             subprocess.run([sys.executable, "-I", os.path.join(self.tc, "scripts", "ledger.py"), root], stdout=f, check=True)
         return out
 
+    def game_at(self, commit):
+        """The game's rules at a commit, source/treadcore-sim/GAME_VERSION, bumped by hand when
+        they change: the dials can stand still while the game moves under them (Paul's depots,
+        30 October), and a read of the old game is no evidence about the new one."""
+        r = run(["git", "-C", self.tc, "show", "%s:source/treadcore-sim/GAME_VERSION" % commit])
+        return r.stdout.strip() if r.returncode == 0 else ""
+
     def same_defaults(self, commit):
         """A row's commit read with today's defaults: every weight both
         commits have at the same default (a weight added since, at a default
@@ -412,7 +419,7 @@ class Plan:
         if key not in memo:
             a, b = self.defaults_at(commit), self.defaults_at(self.sha())
             common = set(a) & set(b)
-            memo[key] = bool(common) and all(a[k] == b[k] for k in common)
+            memo[key] = bool(common) and all(a[k] == b[k] for k in common) and self.game_at(commit) == self.game_at(self.sha())
         return memo[key]
 
     def ledger(self):
