@@ -90,7 +90,7 @@ pub const MENU: &[(&str, &str, &str, Cmd)] = &[
     // ---- the fleet's queue
     ("Fleet", "Sync Now", "", Cmd::Queue("sync")),
     ("Fleet", "Do It Now: Sync, Promote, Push...", "", Cmd::ArmNow),
-    ("Fleet", "Start the Queue", "", Cmd::Queue("ensure")),
+    ("Fleet", "Resume the Queue", "", Cmd::Queue("resume")),
     ("Fleet", "Stop Adding", "", Cmd::Queue("stop-adding")),
     ("Fleet", "Resume Adding", "", Cmd::Queue("resume-adding")),
     ("Fleet", "-", "", Cmd::Separator),

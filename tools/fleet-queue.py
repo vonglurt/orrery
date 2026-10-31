@@ -9,6 +9,20 @@ a keeper that keeps it all running, and two ways to stop.
                                              then the results are collected and
                                              the keeper ends
     tools/fleet-queue.py DIR resume-adding
+    tools/fleet-queue.py DIR resume          THE QUEUE GOES AGAIN, whatever stopped it: adding is
+                                             on, a shutdown's and a stop's switches are off, and
+                                             the keeper starts unless it is running
+    tools/fleet-queue.py DIR machine NAME pause|stop|resume|remove|add
+                                             one machine, all its lanes. pause: the job in hand
+                                             finishes, nothing new starts. stop: the job in hand
+                                             goes back on the queue now, nothing new starts.
+                                             resume: it takes work again. remove: it leaves the
+                                             queue after the job in hand, kept on the bench.
+                                             add: from the bench, or from machines.json
+    tools/fleet-queue.py DIR assign NAME PROJECT on|off
+                                             one machine takes that project's jobs, or does not
+    tools/fleet-queue.py DIR project NAME pause|stop|resume
+                                             one project, every machine: pause and stop as above
     tools/fleet-queue.py DIR stop-now        stop every running job now, collect
                                              the results there are, end
     tools/fleet-queue.py DIR shutdown-now    SHUT THE FLEET DOWN: add nothing,
@@ -106,7 +120,7 @@ def now():
 class Queue:
     def __init__(self, d):
         self.d = os.path.abspath(d)
-        for sub in ("queue", "running", "done", "failed", "stopped", "logs", "results", "lanes", "stop-job"):
+        for sub in ("queue", "running", "done", "failed", "stopped", "logs", "results", "lanes", "stop-job", "send-back"):
             os.makedirs(os.path.join(self.d, sub), exist_ok=True)
         self.lock = threading.Lock()
         self.restarting = False
@@ -272,6 +286,11 @@ def stop_asked(q, jid):
     return os.path.exists(q.p("stop-job", jid))
 
 
+def sent_back(q, jid):
+    """A machine or a project was stopped: this job runs again, somewhere, later."""
+    return os.path.exists(q.p("send-back", jid))
+
+
 def stop_remote(host, jid):
     script = "f=~/.fleet-queue/%s.pid; [ -f $f ] && kill -TERM -$(cat $f) 2>/dev/null; sleep 2; [ -f $f ] && kill -KILL -$(cat $f) 2>/dev/null; rm -f $f; true" % jid
     try:
@@ -346,7 +365,30 @@ def deliver(q, host, job, log):
 
 # ---- a lane -------------------------------------------------------------------
 
+def projects_of(cfg):
+    """The projects sharing the queue, in order: {name: {"caps": the lane's capability
+    it runs on, "kinds": its jobs' kinds}}. The one without kinds takes every other
+    kind. The queue still knows nothing of what a job is for: only whose it is."""
+    return cfg.get("projects") or {"jobs": {"caps": "cpu"}}
+
+
+def project_of(cfg, job):
+    ps = projects_of(cfg)
+    for name, p in ps.items():
+        if job.get("kind") in p.get("kinds", ()):
+            return name
+    return next((n for n, p in ps.items() if not p.get("kinds")), next(iter(ps)))
+
+
+def working(cfg, h):
+    """A lane's record as it stands now: what it refuses, by machine and by project.
+    The record a lane was started with goes stale; this is read at each pick."""
+    return dict(h, _cfg=cfg, _refuse=set(h.get("off", ())) | set(cfg.get("paused_projects", ())))
+
+
 def fits(host, job):
+    if host.get("_refuse") and project_of(host["_cfg"], job) in host["_refuse"]:
+        return False
     need = job.get("needs", "cpu")
     if need.startswith("host:"):
         return need[5:] == host["name"]
@@ -385,6 +427,7 @@ def starved(q, cfg, idle_s=None):
     out = []
     for h in cfg["hosts"]:
         l = lane_file(q, h["name"])
+        h = working(cfg, h)
         if l.get("state") == "idle" and now() - l.get("since", now()) >= idle_s and not any(ready(h, j, done) for j in jobs):
             out.append(h["name"])
     return out
@@ -424,23 +467,34 @@ def lane(q, host, alive):
             return
         # A host taken out of config.json leaves: its lane ends after the job
         # in hand, so a host can be removed while the queue runs.
-        if name not in [h["name"] for h in q.config()["hosts"]]:
+        cfg = q.config()
+        me = next((h for h in cfg["hosts"] if h["name"] == name), None)
+        if me is None:
             q.event("lane left", host=name, why="not in config.json")
             say("removed")
             return
+        host = working(cfg, me)
+        # PAUSED COMES BEFORE REACHABLE. A machine a person has set aside is not a
+        # machine that is down: it raises no flag, and it may well be off.
+        if me.get("paused"):
+            say("paused")
+            time.sleep(3)
+            continue
         # A host that cannot be reached waits, probed each minute, and takes
         # nothing: a machine that is down must not fail the queue's jobs.
         if not reachable(host):
             q.event("host unreachable", host=name)
             q.notice("host", "%s cannot be reached: its lane waits" % name, key="host:%s:%s" % (name, time.strftime("%Y-%m-%d %H")))
             say("unreachable")
-            while (alive.is_set() and not q.flag("STOP_NOW") and not reachable(host)
-                   and name in [h["name"] for h in q.config()["hosts"]]):
+            def waiting():
+                r = next((h for h in q.config()["hosts"] if h["name"] == name), None)
+                return r is not None and not r.get("paused")
+            while alive.is_set() and not q.flag("STOP_NOW") and waiting() and not reachable(host):
                 for _ in range(20):
-                    if not alive.is_set() or q.flag("STOP_NOW"):
+                    if not alive.is_set() or q.flag("STOP_NOW") or not waiting():
                         break
                     time.sleep(3)
-            if name in [h["name"] for h in q.config()["hosts"]]:
+            if waiting():
                 q.event("host back", host=name)
             continue
         done, failed = q.ids_in("done"), q.ids_in("failed") | q.ids_in("stopped")
@@ -536,7 +590,7 @@ def work(q, host, j, say):
         q.event("started", job=j["id"], host=name, kind=j.get("kind"))
         t0 = now()
         rc = 1
-        if send(q, host, j, log) and not stop_asked(q, j["id"]):
+        if send(q, host, j, log) and not stop_asked(q, j["id"]) and not sent_back(q, j["id"]):
             rc = run_job(q, host, j, log)
         ok = rc == 0
         if ok and j.get("deliver"):
@@ -545,8 +599,22 @@ def work(q, host, j, say):
         if ok and j.get("fetch"):
             say("fetching", j)
             ok = fetch(q, host, j, log)
+        back = sent_back(q, j["id"])
+        if back:
+            try:
+                os.remove(q.p("send-back", j["id"]))
+            except OSError:
+                pass
         if (q.flag("STOP_NOW") or stop_asked(q, j["id"])) and not ok:
             dest = "stopped"
+        elif back and not ok:
+            # Not the job's fault, and not the end of it: stopped/ would read as
+            # a failure to whatever waits on it (a crucible island counts three).
+            with open(log, "a") as out:
+                out.write("stopped by a person setting this machine or project aside: the job goes back on the queue\n")
+            os.rename(j["_file"], q.p("queue", os.path.basename(j["_file"])))
+            q.event("requeued", job=j["id"], host=name, why="sent back")
+            return
         elif q.restarting and not ok:
             # The keeper restarts for new code: what it cut short runs again.
             with open(log, "a") as out:
@@ -596,6 +664,9 @@ def keeper(q):
     for j in q.jobs_in("running"):
         os.rename(j["_file"], q.p("queue", os.path.basename(j["_file"])))
         q.event("requeued", job=j["id"], why="the keeper before this one died while it ran")
+    # Nothing is running now, so nothing is left to send back.
+    for jid in os.listdir(q.p("send-back")):
+        os.remove(q.p("send-back", jid))
     q.event("keeper started", pid=os.getpid())
     # A Mac running the keeper stays awake exactly while it runs: caffeinate
     # waits on the keeper's pid and ends with it (config "keep_awake": false
@@ -742,6 +813,12 @@ def keeper(q):
                     q.event("stopping job", job=jid, host=host["name"])
                     stop_remote(host, jid)
                     p.terminate()
+            for jid in os.listdir(q.p("send-back")):
+                if jid in q.procs:
+                    p, host = q.procs[jid]
+                    q.event("sending job back", job=jid, host=host["name"])
+                    stop_remote(host, jid)
+                    p.terminate()
             if q.flag("STOP_NOW"):
                 q.event("stopping now")
                 alive.clear()
@@ -786,7 +863,7 @@ def keeper(q):
                     restart("new code on disk (%s, was %s)" % (code_seen[0], life["code"]))
             queued = len(q.jobs_in("queue"))
             running = len(q.jobs_in("running"))
-            hungry = starved(q, cfg) if planner and not q.flag("STOP_ADDING") else []
+            hungry = starved(q, q.config()) if planner and not q.flag("STOP_ADDING") else []
             life["starved"] = hungry
             if q.flag("STOP_ADDING"):
                 if queued == 0 and running == 0:
@@ -890,7 +967,7 @@ def health(q):
     running = [(n, l) for n, l in lanes.items() if l.get("job")]
     oldest = max(running, key=lambda r: now() - r[1].get("since", now()), default=None)
     if not pid:
-        check("bad", "keeper", "no keeper is running: nothing starts (Start the queue)")
+        check("bad", "keeper", "no keeper is running: nothing starts (Resume the queue)")
         return out
     check("ok", "keeper", "pid %d since %s" % (pid, (info.get("started") or "?")[11:16]))
     beat = stamp_age(info.get("beat"))
@@ -952,6 +1029,11 @@ def health(q):
         check("bad", "machines", "cannot be reached, its lane waiting: %s" % ", ".join(down))
     else:
         check("ok", "machines", "every machine answers")
+    aside = sorted({h.get("lane_of", h["name"]) for h in cfg["hosts"] if h.get("paused")})
+    if aside:
+        check("ok", "paused", "set aside by a person, until Resume: %s" % ", ".join(aside))
+    if cfg.get("paused_projects"):
+        check("ok", "paused", "projects paused on every machine: %s" % ", ".join(cfg["paused_projects"]))
     hungry = starved(q, cfg)
     if hungry:
         check("warn", "lanes", "idle with nothing they can start: %s (the keeper asks the planner for them each %s)"
@@ -1043,6 +1125,47 @@ def restart_cost(q):
     return {"jobs": len(rows), "oldest": ("%s's %s, %s in" % (rows[0][2], rows[0][1], took(rows[0][0]))) if rows else ""}
 
 
+def roster(q, cfg, pid):
+    """A row a machine, whatever its lanes: in the queue, on the bench (it was removed),
+    or only registered (machines.json). What the buttons act on, and absent nothing:
+    a machine must be findable to be added."""
+    try:
+        reg = json.load(open(q.p("machines.json")))
+    except (OSError, ValueError):
+        reg = {}
+    ps = projects_of(cfg)
+    rows, seen = [], set()
+    for h in cfg["hosts"] + cfg.get("bench", []) + [{"name": n, "target": m.get("target", "")} for n, m in reg.items()]:
+        name = h.get("lane_of", h["name"])
+        if name in seen or (h.get("name", "").endswith("-cuda") and "lane_of" not in h):
+            continue
+        seen.add(name)
+        ls = [x for x in cfg["hosts"] if name in (x["name"], x.get("lane_of"))]
+        jobs = []
+        for x in ls:
+            l = lane_file(q, x["name"])
+            if pid and l.get("job"):
+                jobs.append({"lane": x["name"], "job": l["job"], "kind": l.get("kind"), "title": l.get("title"),
+                             "state": l.get("state"), "age_s": int(now() - l.get("since", now()))})
+        states = [lane_file(q, x["name"]).get("state") for x in ls]
+        paused = bool(ls) and all(x.get("paused") for x in ls)
+        word = ("not in the queue" if not ls else
+                "stopping" if paused and jobs else
+                "paused" if paused else
+                "no keeper" if not pid else
+                "running" if jobs else
+                "cannot be reached" if "unreachable" in states else
+                "idle")
+        on = {}
+        for p, d in ps.items():
+            able = [x for x in ls if d.get("caps", "cpu") in x.get("caps", ["cpu"])]
+            on[p] = None if not able else not all(p in x.get("off", ()) for x in able)
+        benched = any(name in (b["name"], b.get("lane_of")) for b in cfg.get("bench", []))
+        rows.append({"name": name, "target": h.get("target", ""), "state": word, "joined": bool(ls), "bench": benched,
+                     "paused": paused, "jobs": jobs, "on": on})
+    return rows
+
+
 def status(q):
     cfg = q.config()
     lanes = []
@@ -1098,7 +1221,9 @@ def status(q):
             "recent": [{"id": j["id"], "kind": j.get("kind"), "title": j.get("title"), "host": j.get("host"),
                         "seconds": j.get("seconds"), "ok": j["_file"].startswith(q.p("done"))} for j in recent],
             "upcoming": [{"id": j["id"], "kind": j.get("kind"), "title": j.get("title"), "needs": j.get("needs")} for j in upcoming],
-            "events": events, "health": health(q), "restart": restart_cost(q)}
+            "events": events, "health": health(q), "restart": restart_cost(q),
+            "roster": roster(q, cfg, pid),
+            "projects": [{"name": n, "paused": n in cfg.get("paused_projects", ())} for n in projects_of(cfg)]}
 
 
 def ensure(q):
@@ -1152,6 +1277,124 @@ def restart_keeper(q):
     print("restarted: %d running jobs went back on the queue" % cost["jobs"])
 
 
+def save_config(q, cfg):
+    """By a rename: every lane reads this file at every pick."""
+    tmp = q.p(".config.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=1)
+    os.replace(tmp, q.p("config.json"))
+
+
+def send_back(q, cfg, which):
+    """The running jobs `which` picks go back on the queue at the keeper's next beat."""
+    if not keeper_alive(q):
+        return 0
+    n = 0
+    for j in q.jobs_in("running"):
+        if which(j, os.path.basename(os.path.dirname(j["_file"]))):
+            open(q.p("send-back", j["id"]), "w").close()
+            n += 1
+    return n
+
+
+def resume(q):
+    for f in ("STOP_ADDING",) + (() if keeper_alive(q) else ("STOP_NOW", "SHUTDOWN")):
+        try:
+            os.remove(q.p(f))
+        except OSError:
+            pass
+    q.event("resume")
+    ensure(q)
+
+
+def machine(q, name, how):
+    cfg = q.config()
+    mine = lambda h: name in (h["name"], h.get("lane_of"))
+    ls = [h for h in cfg["hosts"] if mine(h)]
+    if how == "add":
+        if ls:
+            sys.exit("%s is already in the queue" % name)
+        ls = [h for h in cfg.get("bench", []) if mine(h)]
+        if ls:
+            cfg["bench"] = [h for h in cfg["bench"] if not mine(h)]
+        else:
+            try:
+                m = json.load(open(q.p("machines.json")))[name]
+            except (OSError, ValueError, KeyError):
+                sys.exit("%s is on neither the bench nor machines.json: add it on the Machines screen first" % name)
+            facts = m.get("facts", {})
+            h = {"name": name, "target": m["target"], "caps": ["cpu", "gpu"] if facts.get("gpu") else ["cpu"], "nice": 10}
+            if facts.get("poweroff"):
+                h["poweroff"] = facts["poweroff"]
+            ls = [h]
+        for h in ls:
+            h.pop("paused", None)
+        cfg["hosts"] += ls
+        save_config(q, cfg)
+        q.event("machine added", host=name)
+        print("%s is in the queue; its lane starts at the keeper's next beat" % name)
+        return
+    if not ls:
+        sys.exit("%s is not in the queue" % name)
+    if how == "remove":
+        cfg["hosts"] = [h for h in cfg["hosts"] if not mine(h)]
+        cfg["bench"] = [h for h in cfg.get("bench", []) if not mine(h)] + ls
+        save_config(q, cfg)
+        q.event("machine removed", host=name)
+        print("%s leaves the queue after the job in hand; Add brings it back" % name)
+        return
+    for h in ls:
+        if how == "resume":
+            h.pop("paused", None)
+        elif how in ("pause", "stop"):
+            h["paused"] = True
+        else:
+            sys.exit("machine NAME pause|stop|resume|remove|add")
+    save_config(q, cfg)
+    q.event("machine " + how, host=name)
+    if how == "resume":
+        print("%s takes work again" % name)
+    elif how == "stop":
+        names = {h["name"] for h in ls}
+        n = send_back(q, cfg, lambda j, lane: lane in names)
+        print("%s stopped: %d running jobs go back on the queue" % (name, n))
+    else:
+        print("%s paused: the job in hand finishes, nothing new starts" % name)
+
+
+def assign(q, name, project, how):
+    cfg = q.config()
+    if project not in projects_of(cfg) or how not in ("on", "off"):
+        sys.exit("assign NAME PROJECT on|off; the projects are %s" % ", ".join(projects_of(cfg)))
+    ls = [h for h in cfg["hosts"] if name in (h["name"], h.get("lane_of"))]
+    if not ls:
+        sys.exit("%s is not in the queue" % name)
+    for h in ls:
+        off = [p for p in h.get("off", []) if p != project] + ([project] if how == "off" else [])
+        if off:
+            h["off"] = off
+        else:
+            h.pop("off", None)
+    save_config(q, cfg)
+    q.event("assigned", host=name, project=project, to=how)
+    print("%s %s %s: the job in hand finishes either way" % (name, "takes" if how == "on" else "no longer takes", project))
+
+
+def project(q, name, how):
+    cfg = q.config()
+    if name not in projects_of(cfg) or how not in ("pause", "stop", "resume"):
+        sys.exit("project NAME pause|stop|resume; the projects are %s" % ", ".join(projects_of(cfg)))
+    paused = [p for p in cfg.get("paused_projects", []) if p != name] + ([] if how == "resume" else [name])
+    cfg["paused_projects"] = paused
+    save_config(q, cfg)
+    q.event("project " + how, project=name)
+    if how == "stop":
+        n = send_back(q, cfg, lambda j, lane: project_of(cfg, j) == name)
+        print("%s stopped everywhere: %d running jobs go back on the queue" % (name, n))
+    else:
+        print("%s %s" % (name, "takes work again" if how == "resume" else "paused: what runs finishes, nothing new starts"))
+
+
 def main(argv):
     if len(argv) < 2:
         sys.exit(__doc__)
@@ -1169,6 +1412,20 @@ def main(argv):
         keeper(q)
     elif cmd == "ensure":
         ensure(q)
+    elif cmd == "resume":
+        resume(q)
+    elif cmd == "machine":
+        if len(argv) < 4:
+            sys.exit("machine NAME pause|stop|resume|remove|add")
+        machine(q, argv[2], argv[3])
+    elif cmd == "assign":
+        if len(argv) < 5:
+            sys.exit("assign NAME PROJECT on|off")
+        assign(q, argv[2], argv[3], argv[4])
+    elif cmd == "project":
+        if len(argv) < 4:
+            sys.exit("project NAME pause|stop|resume")
+        project(q, argv[2], argv[3])
     elif cmd == "plan-now":
         # The keeper plans when runs/ changes: every keeper, this one and
         # those from before the button.

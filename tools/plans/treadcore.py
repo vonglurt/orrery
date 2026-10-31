@@ -169,8 +169,18 @@ class Plan:
         # ["cuda"], named NAME-cuda) is the same machine again, and builds
         # nothing of treadcore's.
         every = self.qcfg.get("hosts", [])
-        self.hosts = [h for h in every if "cpu" in h.get("caps", ["cpu"])]
-        self.cuda = [h for h in every if "cuda" in h.get("caps", [])]
+        # A machine a person set aside (paused, or the project off for it, on
+        # the Machines page) is planned for like one that is not there: no build
+        # waits for it and no promotion counts it. Its ledger still counts:
+        # self.ledgers is every machine that has one, or a removal would shrink
+        # fleet.tsv.
+        self.ledgers = [h for h in every + self.qcfg.get("bench", []) if "cpu" in h.get("caps", ["cpu"])]
+        stopped = set(self.qcfg.get("paused_projects", []))
+        self.paused_projects = stopped
+        self.hosts = [h for h in every if "cpu" in h.get("caps", ["cpu"]) and not h.get("paused")
+                      and "treadcore" not in stopped | set(h.get("off", []))]
+        self.cuda = [h for h in every if "cuda" in h.get("caps", []) and not h.get("paused")
+                     and "crucible" not in stopped | set(h.get("off", []))]
         self.tc = os.path.expanduser(self.cfg.get("project", "~/code/treadcore"))
         self.pd = os.path.join(self.q, "plan")
         os.makedirs(self.pd, exist_ok=True)
@@ -1425,10 +1435,11 @@ class Plan:
         os.makedirs(out, exist_ok=True)
         aliases = self.qcfg.get("aliases", {})
         tables, lines = [], []
-        for h in self.hosts:
+        active = {h["name"] for h in self.hosts}
+        for h in self.ledgers:
             name, target = h["name"], h["target"]
             p = os.path.join(out, "%s.tsv" % name)
-            if only and name != only:
+            if (only and name != only) or (not only and name not in active):
                 if os.path.exists(p):
                     tables.append(p)
                 continue
@@ -3107,6 +3118,12 @@ class Plan:
         save(os.path.join(self.pd, "crucible.json"), out)
 
     def plan(self, n):
+        # treadcore paused: no promotion, no build, no search; crucible goes on.
+        if "treadcore" in self.paused_projects:
+            jobs = self.crucible_jobs()
+            self.keep()
+            print(json.dumps(jobs))
+            return
         self.raise_found()
         # The local line: to main when auto mode is on and the credentials
         # allow (Paul Accepts); else its flag stays up.

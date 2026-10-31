@@ -1280,6 +1280,21 @@ fn gui_loop<S: surface::Surface>(
                     if let Some(v) = projects::draw(&mut u, &training::Model::parse(&text, &jobs_source), &mut crucible, &mut projects_state) {
                         action = Some(lab::Action::Go(v));
                     }
+                    // A project's or a machine's button: the same command, and
+                    // the same answer on the page, as the Queue's buttons.
+                    if let Some(verb) = projects_state.ctl.take() {
+                        let cmd = format!("{} {}", queue_ctl, verb);
+                        let said = Arc::clone(&projects_said);
+                        *said.lock().unwrap_or_else(|e| e.into_inner()) = format!("{}...", verb);
+                        thread::spawn(move || {
+                            let out = std::process::Command::new("sh").arg("-c").arg(&cmd).output();
+                            let line = match out {
+                                Ok(o) => String::from_utf8_lossy(if o.stdout.is_empty() { &o.stderr } else { &o.stdout }).lines().last().unwrap_or("").to_string(),
+                                Err(e) => e.to_string(),
+                            };
+                            *said.lock().unwrap_or_else(|e| e.into_inner()) = line;
+                        });
+                    }
                     // The lanes change in config.json; the keeper starts or
                     // ends them on its next look.
                     if let Some(verb) = projects_state.ask.take() {

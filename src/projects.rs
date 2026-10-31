@@ -95,6 +95,11 @@ pub struct State {
     pub armed: Option<&'static str>,
     /// `machines.py cuda-lanes ...`, taken and run by main.rs.
     pub ask: Option<String>,
+    /// A fleet-queue.py command, taken and run by main.rs: a project or a
+    /// machine's buttons.
+    pub ctl: Option<String>,
+    /// A machine's Stop now, pressed once.
+    pub armed_machine: Option<String>,
     pub said: String,
 }
 
@@ -150,7 +155,11 @@ pub fn draw(ui: &mut Ui, m: &Model, c: &mut Crucible, st: &mut State) -> Option<
     draw_crucible(ui, rect(body.x + half + 10, y, body.w - half - 10, card_h), m, c);
     y += card_h + 14;
 
-    let y = draw_matrix(ui, rect(body.x, y, body.w, body.bottom() - y), m, c);
+    let y = match m.queue.as_ref().filter(|q| !q.roster.is_empty()) {
+        Some(q) => draw_project_buttons(ui, rect(body.x, y, body.w, body.bottom() - y), q, st),
+        None => y,
+    };
+    let y = draw_matrix(ui, rect(body.x, y, body.w, body.bottom() - y), m, c, st);
     if m.queue.as_ref().map(|q| !q.islands.is_empty()).unwrap_or(false) {
         draw_ladder(ui, rect(body.x, y + 10, body.w, body.bottom() - y - 10), m);
     }
@@ -265,9 +274,13 @@ fn draw_treadcore(ui: &mut Ui, at: Rect, m: &Model) {
     }
     let found = q.progress.iter().filter(|p| p.1 == "candidate").count();
     let current = q.current.iter().filter(|c| c.1).count();
-    let state = format!("in queue {}: {}", q.name, if q.adding { "adding work" } else { "not adding" });
-    let y = card(ui, at, "treadcore", (Light::Full, t.up, &state));
-    let cpus = m.machines.len();
+    let paused = q.projects.iter().any(|(n, p)| n == "treadcore" && *p);
+    let state = format!("in queue {}: {}", q.name, if !q.keeper_up() { "no keeper: nothing runs" } else if paused { "paused" } else if q.adding { "adding work" } else { "not adding" });
+    let lamp = if q.keeper_up() && !paused { (Light::Full, t.up, &state[..]) } else { (Light::Hollow, t.warn, &state[..]) };
+    let y = card(ui, at, "treadcore", lamp);
+    // What the buttons left on it, not what is on the network.
+    let on: Vec<&str> = q.roster.iter().filter(|r| r.joined && !r.paused && r.on.iter().any(|(p, v)| p == "treadcore" && *v == Some(true))).map(|r| r.name.as_str()).collect();
+    let cpus = if q.roster.is_empty() { format!("runs on all {} machines (every one has CPUs)", m.machines.len()) } else { format!("set to run on {}: {}", on.len(), on.join(", ")) };
     lines(
         ui,
         at,
@@ -277,7 +290,7 @@ fn draw_treadcore(ui: &mut Ui, at: Rect, m: &Model) {
             (format!("{} queued, {} running, {} done, {} failed", tot[0], tot[1], tot[2], tot[3]), t.ink),
             (format!("auto mode {}, rotation {}", if q.auto { "on" } else { "off" }, if q.rotation { "on" } else { "off" }), t.ink),
             (format!("{} candidates, {} on today's defaults", found, current), if found > 0 { t.up } else { t.ink }),
-            (format!("runs on all {} machines (every one has CPUs)", cpus), t.dim),
+            (cpus, t.dim),
         ],
     );
 }
@@ -330,8 +343,115 @@ fn short_gpu(name: &str) -> String {
 }
 
 /// A row per machine: what it has, and each project's work on it.
-fn draw_matrix(ui: &mut Ui, at: Rect, m: &Model, c: &Crucible) -> i32 {
+/// Each project's own buttons, on every machine at once: the band over the
+/// matrix. Pause lets what runs finish; Stop now sends it back, and asks twice.
+fn draw_project_buttons(ui: &mut Ui, at: Rect, q: &crate::training::Queue, st: &mut State) -> i32 {
     let t = ui.t;
+    if !st.operator {
+        return at.y;
+    }
+    let mut x = at.x;
+    for (name, paused) in &q.projects {
+        ui.label(x, at.y + 5, name, &F8X13, if *paused { t.warn } else { t.ink });
+        x += F8X13.measure("treadcore ") as i32 + 6;
+        let (word, how) = if *paused { ("Resume", "resume") } else { ("Pause", "pause") };
+        if ui.button(rect(x, at.y, 70, 22), word, true) {
+            st.ctl = Some(format!("project {} {}", name, how));
+        }
+        x += 76;
+        let running = q.roster.iter().any(|r| !r.jobs.is_empty());
+        if running {
+            let key = format!("project:{}", name);
+            let armed = st.armed_machine.as_deref() == Some(key.as_str());
+            let w = if armed { 150 } else { 80 };
+            if ui.button(rect(x, at.y, w, 22), if armed { "Press: jobs go back" } else { "Stop now" }, true) {
+                if armed {
+                    st.ctl = Some(format!("project {} stop", name));
+                    st.armed_machine = None;
+                } else {
+                    st.armed_machine = Some(key);
+                }
+            }
+            x += w + 6;
+        }
+        x += 24;
+    }
+    at.y + 30
+}
+
+/// Which machine runs which, and, for an operator, the switch: a press in a
+/// project's column takes that machine off that project or puts it on.
+fn draw_roster_matrix(ui: &mut Ui, at: Rect, m: &Model, q: &crate::training::Queue, st: &mut State) -> i32 {
+    use crate::training::{display, machine_buttons, roster_lamp, Roster};
+    let t = ui.t;
+    let lh = F8X13.height as i32;
+    let row_h = lh + 16;
+    let x_name = at.x + 22;
+    let x_hw = at.x + 136;
+    let side = if st.operator { 320 } else { 0 };
+    let x_tc = at.x + 300;
+    let x_cr = x_tc + (at.w - 300 - side) / 2;
+    ui.label(at.x, at.y, "Which machine runs which", &F8X13, t.accent);
+    let hy = at.y + lh + 6;
+    for (x, s) in [(x_name, "machine"), (x_hw, "CPU, GPU"), (x_tc, "treadcore"), (x_cr, "crucible")] {
+        ui.label(x, hy, s, &F8X13, t.dim);
+    }
+    let mut y = hy + lh + 6;
+    let mut rows: Vec<&Roster> = q.roster.iter().filter(|r| r.joined).collect();
+    rows.extend(q.roster.iter().filter(|r| !r.joined));
+    for r in rows {
+        if y + row_h > at.bottom() {
+            break;
+        }
+        let row = rect(at.x, y - 3, at.w, row_h);
+        ui.panel(row, t.tile);
+        ui.outline(row, t.line);
+        let ty = row.y + (row_h - lh) / 2;
+        let (c, lamp) = roster_lamp(ui, r);
+        ui.light(at.x + 10, ty + lh / 2, 4, lamp, c);
+        ui.label_in(x_name, ty, x_hw - x_name - 6, &display(&r.name), &F8X13, if r.joined { t.ink } else { t.dim });
+        let mc = m.machines.iter().find(|x| x.name == r.name || (x.name == "this Mac" && r.name == "mac"));
+        let hw = mc.map(|x| format!("{} cores{}", x.cores, x.gpu.as_ref().map(|g| format!(", {}", short_gpu(&g.name))).unwrap_or_default())).unwrap_or_default();
+        ui.label_in(x_hw, ty, x_tc - x_hw - 6, &hw, &F8X13, t.dim);
+        let lane_w = [x_cr - x_tc - 8, at.right() - side - x_cr - 8];
+        for (i, (project, x)) in [("treadcore", x_tc), ("crucible", x_cr)].iter().enumerate() {
+            let on = r.on.iter().find(|(p, _)| p == project).and_then(|(_, v)| *v);
+            match on {
+                Some(v) if r.joined => {
+                    let job = r.jobs.iter().find(|(k, _, _)| (*project == "crucible") == (k == "crucible"));
+                    let word = if v { "On" } else { "Off" };
+                    if st.operator && ui.button(rect(*x, row.y + 3, 44, row_h - 6), word, true) {
+                        st.ctl = Some(format!("assign {} {} {}", r.name, project, if v { "off" } else { "on" }));
+                    }
+                    let tx = *x + if st.operator { 50 } else { 0 };
+                    let (what, col) = match job {
+                        Some((k, title, _)) => (format!("{}: {}", k, title), t.up),
+                        None if !st.operator => (word.to_string(), t.dim),
+                        None => (String::new(), t.dim),
+                    };
+                    ui.label_in(tx, ty, lane_w[i] - (tx - *x), &what, &F8X13, col);
+                }
+                _ => {
+                    ui.label(*x, ty, "-", &F8X13, t.line);
+                }
+            }
+        }
+        if st.operator {
+            let (_, ask) = machine_buttons(ui, row.right() - 6, row.y + (row_h - 22) / 2, r, &mut st.armed_machine);
+            if ask.is_some() {
+                st.ctl = ask;
+            }
+        }
+        y += row_h + 4;
+    }
+    y
+}
+
+fn draw_matrix(ui: &mut Ui, at: Rect, m: &Model, c: &Crucible, st: &mut State) -> i32 {
+    let t = ui.t;
+    if let Some(q) = m.queue.as_ref().filter(|q| !q.roster.is_empty()) {
+        return draw_roster_matrix(ui, at, m, q, st);
+    }
     let lh = F8X13.height as i32;
     let x_name = at.x + 10;
     let x_cpu = at.x + 150;
@@ -403,6 +523,20 @@ mod tests {
         assert_eq!(r.gens, 11);
         assert_eq!(r.yard, Some((10, 0.01)));
         assert!((r.msteps - 266.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_card_never_says_a_shut_down_queue_is_adding_work_or_lists_a_paused_machine() {
+        let doc = r#"{"queue":{"name":"grove","state":"shut down","adding":true,"counts":{},"lanes":[],
+            "projects":[{"name":"treadcore","paused":false}],
+            "roster":[{"name":"a","state":"no keeper","joined":true,"paused":false,"jobs":[],"on":{"treadcore":true}},
+                      {"name":"b","state":"paused","joined":true,"paused":true,"jobs":[],"on":{"treadcore":true}}]}}"#;
+        let m = Model::parse(doc, "");
+        let q = m.queue.as_ref().unwrap();
+        assert!(!q.keeper_up());
+        assert_eq!(q.roster.len(), 2);
+        assert_eq!(q.roster[0].on, vec![("treadcore".to_string(), Some(true))]);
+        assert!(q.roster[1].paused);
     }
 
     #[test]

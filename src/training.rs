@@ -126,6 +126,9 @@ pub struct State {
     pub open: Option<String>,
     /// The Commits page's first row.
     pub commit_off: usize,
+    /// A machine's Stop now pressed once: the next press does it (it throws
+    /// away the job in hand's progress).
+    pub armed: Option<String>,
 }
 
 /// One crucible island: a GPU lane's population, trained a segment at a time.
@@ -167,6 +170,25 @@ pub struct QLane {
     pub kind: String,
     pub title: String,
     pub age_s: Option<i64>,
+}
+
+/// One machine as the queue's buttons see it: in the queue, on the bench, or
+/// only registered. A machine that is not working is still a row, or it could
+/// not be added.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Roster {
+    pub name: String,
+    pub target: String,
+    /// running, idle, paused, stopping, cannot be reached, no keeper, not in the queue.
+    pub state: String,
+    pub joined: bool,
+    pub bench: bool,
+    pub paused: bool,
+    /// What it has in hand: (kind, title, seconds), a line a lane.
+    pub jobs: Vec<(String, String, i64)>,
+    /// A project, and whether it takes that project's jobs; None when it has
+    /// no lane that could (crucible on a machine with no card).
+    pub on: Vec<(String, Option<bool>)>,
 }
 
 /// The fleet-queue (orrery's tools/fleet-queue.py) as its status said.
@@ -225,6 +247,19 @@ pub struct Queue {
     /// Paul Accepts is a push, so a template must have it to land on main
     /// (without it a promotion self-modifies onto the local line).
     pub push: Option<(bool, String, String)>,
+    pub roster: Vec<Roster>,
+    /// The projects sharing the queue: (name, paused on every machine).
+    pub projects: Vec<(String, bool)>,
+}
+
+impl Queue {
+    /// IS A KEEPER RUNNING? "shut down" is the state of a queue with none. The
+    /// band once asked only whether the state read "stopped": a shut-down queue
+    /// was drawn as running, offering Stop and no Start, and on 31 October the
+    /// fleet could not be resumed from the screen at all.
+    pub fn keeper_up(&self) -> bool {
+        self.state != "stopped" && self.state != "shut down"
+    }
 }
 
 /// One commit on the line the fleet builds: what it changed of the brain's
@@ -506,6 +541,8 @@ impl Model {
                     .unwrap_or_default(),
                 health: arr(q, "health").iter().map(|c| (s(c, "level"), s(c, "name"), s(c, "text"))).collect(),
                 restart: q.get("restart").map(|r| (n(r, "jobs") as i64, s(r, "oldest"))).unwrap_or_default(),
+                roster: arr(q, "roster").iter().map(parse_roster).collect(),
+                projects: arr(q, "projects").iter().map(|p| (s(p, "name"), p.get("paused").and_then(|b| b.as_bool()).unwrap_or(false))).collect(),
                 commits: q
                     .get("commits")
                     .map(|c| arr(c, "commits"))
@@ -810,7 +847,7 @@ pub fn draw(ui: &mut Ui, m: &Model, st: &mut State, view: nav::View) -> Option<n
                     draw_algorhythm(ui, rest, m);
                 }
             }
-            _ => draw_fleet_rows(ui, page, m),
+            _ => draw_fleet_rows(ui, page, m, st),
         }
         return go;
     } else {
@@ -879,11 +916,17 @@ fn results_headline(q: &Queue) -> String {
 /// The Fleet page: a row a machine, two lines each. CPU is the machine's
 /// load against its cores (amber past 90%), GPU the card's use; then what
 /// it is running for the queue.
-fn draw_fleet_rows(ui: &mut Ui, at: Rect, m: &Model) {
+fn draw_fleet_rows(ui: &mut Ui, at: Rect, m: &Model, st: &mut State) {
     let t = ui.t;
     let lh = F8X13.height as i32;
     let row_h = lh * 2 + 10;
     let mut y = at.y;
+    // With a roster the page is the buttons; without one (a queue from before
+    // it, or no queue) it is what it was, a page to read.
+    if let Some(q) = m.queue.as_ref().filter(|q| !q.roster.is_empty()) {
+        draw_roster(ui, at, q, m, st);
+        return;
+    }
     let qlanes = m.queue.as_ref().map(|q| &q.lanes[..]).unwrap_or(&[]);
     let name_w = F8X13.measure("saskatchewan  ") as i32;
     let cpu_label_w = F8X13.measure("CPU ") as i32;
@@ -939,6 +982,133 @@ fn draw_fleet_rows(ui: &mut Ui, at: Rect, m: &Model) {
     if y + lh < at.bottom() {
         ui.label_in(at.x, y + 4, at.w, "CPU: the load average against the machine's cores (amber past 90%).  GPU: the card's use.  Green light: running a job.", &F8X13, t.dim);
     }
+}
+
+/// One machine's buttons, right to left from `right`; returns the x they
+/// start at. ABSENT RATHER THAN GREYED: a paused machine offers Resume and no
+/// Pause. Stop now asks twice, and only when there is a job for it to cost.
+pub fn machine_buttons(ui: &mut Ui, right: i32, y: i32, r: &Roster, armed: &mut Option<String>) -> (i32, Option<String>) {
+    let (h, gap) = (22, 6);
+    let mut x = right;
+    let mut ask = None;
+    let mut button = |ui: &mut Ui, w: i32, label: &str| -> bool {
+        x -= w;
+        let hit = ui.button(rect(x, y, w, h), label, true);
+        x -= gap;
+        hit
+    };
+    if !r.joined {
+        if button(ui, 70, "Add") {
+            ask = Some(format!("machine {} add", r.name));
+        }
+    } else {
+        if button(ui, 70, "Remove") {
+            ask = Some(format!("machine {} remove", r.name));
+        }
+        if !r.jobs.is_empty() {
+            let is_armed = armed.as_deref() == Some(r.name.as_str());
+            if button(ui, if is_armed { 130 } else { 80 }, if is_armed { "Press: job goes back" } else { "Stop now" }) {
+                if is_armed {
+                    ask = Some(format!("machine {} stop", r.name));
+                    *armed = None;
+                } else {
+                    *armed = Some(r.name.clone());
+                }
+            }
+        }
+        if r.paused {
+            if button(ui, 70, "Resume") {
+                ask = Some(format!("machine {} resume", r.name));
+            }
+        } else if button(ui, 70, "Pause") {
+            ask = Some(format!("machine {} pause", r.name));
+        }
+    }
+    (x, ask)
+}
+
+/// The colour a machine's state word is drawn in, and its lamp.
+pub fn roster_lamp(ui: &Ui, r: &Roster) -> (Rgb, Light) {
+    let t = ui.t;
+    match r.state.as_str() {
+        "running" => (t.up, Light::Full),
+        "stopping" => (t.warn, Light::Half),
+        "paused" => (t.warn, Light::Hollow),
+        "cannot be reached" => (t.alarm, Light::Hollow),
+        _ => (t.dim, Light::Hollow),
+    }
+}
+
+/// What a machine is doing, in a sentence that can be acted on.
+pub fn roster_line(r: &Roster) -> String {
+    let doing = r.jobs.iter().map(|(k, title, age)| format!("{}: {}, for {}", k, title, ago(*age))).collect::<Vec<_>>().join("; ");
+    match r.state.as_str() {
+        "running" => doing,
+        "stopping" => format!("Paused, finishing: {}", doing),
+        "paused" => "Paused: takes nothing until Resume".to_string(),
+        "idle" => "Idle: nothing queued it can start".to_string(),
+        "cannot be reached" => "Cannot be reached: its lane waits, and takes work when it answers".to_string(),
+        "no keeper" => "Ready: waits for Resume the queue".to_string(),
+        _ if r.bench => "Removed: Add brings it back with its old settings".to_string(),
+        _ => "Not in the queue: Add gives it a lane".to_string(),
+    }
+}
+
+/// The Fleet page with its buttons: a row a machine, working or not, and what
+/// each may do from here. Machines first, as they read in the queue; those not
+/// in it under them, so that a machine set aside is one press from back.
+fn draw_roster(ui: &mut Ui, at: Rect, q: &Queue, m: &Model, st: &mut State) {
+    let t = ui.t;
+    let lh = F8X13.height as i32;
+    let row_h = lh * 2 + 12;
+    let mut y = at.y;
+    let name_w = F8X13.measure("saskatchewan  ") as i32;
+    let mut rows: Vec<&Roster> = q.roster.iter().filter(|r| r.joined).collect();
+    rows.extend(q.roster.iter().filter(|r| !r.joined));
+    for r in rows {
+        if y + row_h > at.bottom() {
+            break;
+        }
+        let box_ = rect(at.x, y, at.w, row_h);
+        ui.panel(box_, t.tile);
+        ui.outline(box_, t.line);
+        let (c, lamp) = roster_lamp(ui, r);
+        let y1 = box_.y + 4;
+        ui.light(box_.x + 10, y1 + lh / 2, 4, lamp, c);
+        ui.label(box_.x + 20, y1, &display(&r.name), &F8X13, if r.joined { t.ink } else { t.dim });
+        let mut x = box_.x + 20 + name_w;
+        let bx = if st.operator {
+            let (bx, ask) = machine_buttons(ui, box_.right() - 8, box_.y + (row_h - 22) / 2, r, &mut st.armed);
+            if ask.is_some() {
+                st.ctl = ask;
+            }
+            bx
+        } else {
+            box_.right()
+        };
+        let mc = m.machines.iter().find(|x| x.name == r.name || (x.name == "this Mac" && r.name == "mac"));
+        if let Some(mc) = mc.filter(|x| x.up && r.joined) {
+            let frac = if mc.cores > 0 { mc.load / mc.cores as f64 } else { 0.0 };
+            let w = 110.min(bx - x - 130);
+            if w > 20 {
+                bar(ui, rect(x, y1 + 2, w, 9), frac, if frac > 0.9 { t.warn } else { t.up });
+                ui.label(x + w + 6, y1, &format!("{:.1} of {} cores", mc.load, mc.cores), &F8X13, t.dim);
+            }
+        } else if !r.target.is_empty() && r.target != "-" {
+            ui.label_in(x, y1, bx - x - 8, &r.target, &F8X13, t.dim);
+        }
+        x = box_.x + 20;
+        ui.label_in(x, y1 + lh + 3, bx - x - 8, &roster_line(r), &F8X13, c);
+        y += row_h + 4;
+    }
+    if y + lh < at.bottom() {
+        ui.label_in(at.x, y + 4, at.w, "Pause: the job in hand finishes. Stop now: it goes back on the queue. Remove: out after the job in hand. Projects: chapter 2.", &F8X13, t.dim);
+    }
+}
+
+/// A lane's name as a person says it.
+pub fn display(name: &str) -> String {
+    if name == "mac" { "This Mac".to_string() } else { name.to_string() }
 }
 
 /// The Runs page: a button a kind of run (operator only), what each does,
@@ -1307,7 +1477,7 @@ fn draw_keeper_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
     // The buttons, absent rather than greyed where they cannot apply.
     let bx = at.right() - side + 10;
     let bw = side - 10;
-    let running = q.state != "stopped" && q.state != "shut down";
+    let running = q.keeper_up();
     let mut by = at.y;
     let mut note = |ui: &mut Ui, by: &mut i32, text: &str| {
         for l in wrap(text, bw) {
@@ -1317,8 +1487,8 @@ fn draw_keeper_page(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) {
         *by += 10;
     };
     if !running {
-        if ui.button(rect(bx, by, bw, 26), "Start the queue", true) {
-            st.ctl = Some("ensure".into());
+        if ui.button(rect(bx, by, bw, 26), "Resume the queue", true) {
+            st.ctl = Some("resume".into());
         }
         by += 32;
         note(ui, &mut by, "No keeper runs: nothing is planned or started.");
@@ -1634,7 +1804,7 @@ fn draw_queue(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) -> i32 {
         // Absent rather than greyed when they cannot apply: a running queue
         // offers stop adding; a draining one, resume; both offer stop now.
         let bx = at.right() - 420;
-        let running_keeper = q.state != "stopped";
+        let running_keeper = q.keeper_up();
         let mut x = bx;
         if running_keeper && q.adding && ui.button(rect(x, at.y, 130, 26), "Stop adding", true) {
             st.ctl = Some("stop-adding".into());
@@ -1642,8 +1812,10 @@ fn draw_queue(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) -> i32 {
         if running_keeper && !q.adding && ui.button(rect(x, at.y, 130, 26), "Resume adding", true) {
             st.ctl = Some("resume-adding".into());
         }
-        if !running_keeper && ui.button(rect(x, at.y, 130, 26), "Start the queue", true) {
-            st.ctl = Some("ensure".into());
+        // One press, whatever stopped it. Start alone would meet the drain a
+        // stop leaves set, find the queue "finished", and end again.
+        if !running_keeper && ui.button(rect(x, at.y, 170, 26), "Resume the queue", true) {
+            st.ctl = Some("resume".into());
         }
         x += 140;
         let stop = if st.arm_stop { "Press: collect results and stop now" } else { "Collect results and stop now" };
@@ -1674,6 +1846,23 @@ fn draw_queue(ui: &mut Ui, at: Rect, q: &Queue, st: &mut State) -> i32 {
         }
     }
     ly.max(at.y + if st.operator { 82 } else { 48 })
+}
+
+fn parse_roster(r: &json::Value) -> Roster {
+    let flag = |k: &str| r.get(k).and_then(|b| b.as_bool()).unwrap_or(false);
+    Roster {
+        name: s(r, "name"),
+        target: s(r, "target"),
+        state: s(r, "state"),
+        joined: flag("joined"),
+        bench: flag("bench"),
+        paused: flag("paused"),
+        jobs: arr(r, "jobs").iter().map(|j| (s(j, "kind"), s(j, "title"), j.get("age_s").and_then(|a| a.as_num()).unwrap_or(0.0) as i64)).collect(),
+        on: match r.get("on") {
+            Some(json::Value::Obj(m)) => m.iter().map(|(k, v)| (k.clone(), v.as_bool())).collect(),
+            _ => Vec::new(),
+        },
+    }
 }
 
 fn draw_machines(ui: &mut Ui, at: Rect, m: &Model) {
@@ -2398,6 +2587,28 @@ mod algo_tests {
 
 #[cfg(test)]
 mod tests {
+    fn queue_in(state: &str) -> Queue {
+        Queue { state: state.to_string(), ..Queue::default() }
+    }
+
+    #[test]
+    fn a_shut_down_queue_has_no_keeper_and_so_offers_resume() {
+        assert!(!queue_in("shut down").keeper_up());
+        assert!(!queue_in("stopped").keeper_up());
+        assert!(queue_in("running, adding").keeper_up());
+        assert!(queue_in("draining: adding nothing").keeper_up());
+    }
+
+    #[test]
+    fn a_machine_says_what_can_be_done_about_it() {
+        let r = |state: &str, bench: bool| Roster { state: state.to_string(), bench, ..Roster::default() };
+        assert!(roster_line(&r("paused", false)).contains("Resume"));
+        assert!(roster_line(&r("no keeper", false)).contains("Resume the queue"));
+        assert!(roster_line(&r("not in the queue", true)).contains("Add"));
+        assert!(roster_line(&r("not in the queue", false)).contains("Add"));
+        assert_eq!(display("mac"), "This Mac");
+    }
+
     use super::*;
 
     const DOC: &str = r#"{"fleet":"grove","project":"treadcore",
